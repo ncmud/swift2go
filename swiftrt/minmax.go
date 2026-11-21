@@ -33,3 +33,11 @@ func MinOf[T cmp.Ordered](xs []T, rest []T) T {
 func InstantSub(a, b ContinuousClockInstant) Duration {
 	return Duration(time.Time(a).Sub(time.Time(b)).Nanoseconds())
 }
+
+// SliceInitClosedRange is `Array(lo...hi)`.
+func SliceInitClosedRange[S ~[]int](r ClosedRange[int]) S {
+	if r.Hi < r.Lo {
+		return S{}
+	}
+	return S(rangeInts(r.Lo, r.Hi+1))
+}
