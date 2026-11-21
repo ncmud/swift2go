@@ -782,6 +782,9 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		}
 		return test
 	case "pattern_enum_element":
+		if t, ok := e.optionalCase(p, subj, st); ok {
+			return t
+		}
 		el := e.enumElement(p, st)
 		if el == nil {
 			if t, ok := e.resultCase(p, subj); ok {
@@ -899,6 +902,12 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 			e.patternBind(unwrapPattern(sub), "swiftrt.MustAs["+target+"]("+subj+")")
 		}
 	case "pattern_enum_element":
+		if inner, val, ok := e.optionalUnwrap(p, subj); ok {
+			if inner != nil {
+				e.patternBind(inner, val)
+			}
+			return
+		}
 		el := e.enumElement(p, e.m.typeOf(p.Type()))
 		sub := p.Child("sub_pattern")
 		if el == nil && sub != nil && patternBinds(sub) {
@@ -1168,4 +1177,69 @@ func stripLoads(n ast.Node) ast.Node {
 		n = n.Child("sub_expr")
 	}
 	return n
+}
+
+// optionalCase tests an enum pattern against an Optional subject: `.none`/`nil`, `.some(p)`, or a case of
+// the wrapped enum, which Swift matches through an implicit `.some`.
+func (e *fileEmitter) optionalCase(p ast.Node, subj string, st *types.Type) (string, bool) {
+	t := st
+	if t == nil || t.Kind == types.Unknown {
+		t = e.m.typeOf(p.Type())
+	}
+	if t == nil || t.Kind != types.Optional || len(t.Args) != 1 {
+		return "", false
+	}
+	name := p.Child("element").Child("base_name").Str("name")
+	val := e.optionalValue(subj, t)
+	ptr := subj
+	if strings.HasPrefix(subj, "(*") && strings.HasSuffix(subj, ")") {
+		ptr, val = subj[2:len(subj)-1], subj
+		if name != "none" && name != "some" {
+			return "", false
+		}
+	}
+	switch name {
+	case "none":
+		return ptr + " == nil", true
+	case "some":
+		test := ptr + " != nil"
+		if sub := p.Child("sub_pattern"); sub != nil {
+			if inner := e.patternTest(unwrapSinglePattern(sub), val, t.Args[0]); inner != "true" {
+				test += " && " + inner
+			}
+		}
+		return test, true
+	}
+	if t.Args[0].Kind == types.Optional {
+		return "", false
+	}
+	inner := e.patternTest(p, val, t.Args[0])
+	return subj + " != nil && " + inner, true
+}
+
+// optionalUnwrap binds the payload of a `.some(p)` pattern, or of a wrapped-enum case matched against an
+// Optional subject.
+func (e *fileEmitter) optionalUnwrap(p ast.Node, subj string) (ast.Node, string, bool) {
+	t := e.m.typeOf(p.Type())
+	if t == nil || t.Kind != types.Optional || len(t.Args) != 1 {
+		return nil, "", false
+	}
+	val := e.optionalValue(subj, t)
+	switch p.Child("element").Child("base_name").Str("name") {
+	case "none":
+		return nil, "", true
+	case "some":
+		if sub := p.Child("sub_pattern"); sub != nil && patternBinds(sub) {
+			return unwrapSinglePattern(sub), val, true
+		}
+		return nil, "", true
+	}
+	return nil, "", false
+}
+
+func (e *fileEmitter) optionalValue(subj string, t *types.Type) string {
+	if e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
+		return subj
+	}
+	return "(*" + subj + ")"
 }
