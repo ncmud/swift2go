@@ -2,6 +2,7 @@ package emit
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -42,6 +43,12 @@ func (e *fileEmitter) expr(n ast.Node) string {
 			out = e.wrapSlots(n, out, mark)
 		}
 	}
+	if n != nil && n.Kind() == "call_expr" && !strings.HasPrefix(out, "swiftrt.") && e.returnsGenericOptional(n) {
+		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
+			// A generic `T?` with T a class comes back as **C; Swift's C? is *C.
+			return "swiftrt.Flat(" + out + ")"
+		}
+	}
 	if n == nil || !strings.HasPrefix(out, "swiftrt.") {
 		return out
 	}
@@ -52,7 +59,7 @@ func (e *fileEmitter) expr(n ast.Node) string {
 	}
 	for _, keep := range []string{"swiftrt.Unsupported", "swiftrt.CoalesceRef", "swiftrt.CoalesceOpt", "swiftrt.Flat(", "swiftrt.TryFlat", "swiftrt.Some",
 		"swiftrt.TaskLocalGet", "swiftrt.TaskLocalWithValue", "swiftrt.MapSubscriptDefault", "swiftrt.ForceRef", "swiftrt.Clone", "swiftrt.MustAs",
-		"swiftrt.Dynamic", "swiftrt.Ref", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.Coalesce(",
+		"swiftrt.Dynamic", "swiftrt.Ref(", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.Coalesce(",
 		"swiftrt.OptFlatMap", "swiftrt.RefFlatMap"} {
 		if strings.HasPrefix(out, keep) {
 			return out
@@ -746,6 +753,12 @@ func (e *fileEmitter) subscriptAssign(dest, src ast.Node) (string, bool) {
 	if src.Kind() == "inject_into_optional" {
 		return m + "[" + k + "] = " + e.expr(src.Child("sub_expr")), true
 	}
+	if bt.Kind == types.Dict && len(bt.Args) == 2 {
+		if vt := e.m.GoType(bt.Args[1], e.generics); e.m.isReferenceGo(bt.Args[1], vt) && vt != "any" {
+			// An optional class reference is the pointer itself: nil removes the entry.
+			return "swiftrt.MapSetRef(" + m + ", " + k + ", " + e.expr(src) + ")", true
+		}
+	}
 	return "swiftrt.MapSet(" + m + ", " + k + ", " + e.expr(src) + ")", true
 }
 
@@ -1252,6 +1265,15 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 			}
 		} else {
 			s = e.expr(a.node)
+		}
+		if i < len(params) && !foreign {
+			// A closure for a generic `(…) -> T?` parameter, with T a class, returns the class pointer;
+			// the generic signature wants a pointer to it.
+			if pt := e.m.typeOf(params[i].Str("interface_type")); pt != nil && pt.Kind == types.Func && pt.Result != nil && pt.Result.Kind == types.Optional && len(pt.Result.Args) == 1 && isGenericParam(pt.Result.Args[0]) && len(pt.Args) <= 2 {
+				if at := e.m.typeOf(a.node.Type()); at != nil && at.Kind == types.Func && at.Result != nil && at.Result.Kind == types.Optional && len(at.Result.Args) == 1 && e.m.isReferenceGo(at.Result.Args[0], e.m.GoType(at.Result.Args[0], e.generics)) {
+					s = "swiftrt.LiftOpt" + itoa(len(pt.Args)) + "(" + s + ")"
+				}
+			}
 		}
 		if ft := e.m.typeOf(a.node.Type()); foreign && ft != nil && ft.Kind == types.Func && len(ft.Args) == 1 && ft.Args[0].Kind == types.Tuple && len(ft.Args[0].Args) > 1 {
 			if cl := stripConv(a.node); cl != nil && cl.Kind() == "closure_expr" && len(cl.Child("params").List("params")) == len(ft.Args[0].Args) {
@@ -2434,4 +2456,25 @@ func (e *fileEmitter) intTypeArg(t *types.Type) string {
 		return "[" + gt + "]"
 	}
 	return ""
+}
+
+var genericParamName = regexp.MustCompile(`^(?:[A-Z]|τ_\d+_\d+)(?:\.|$)`)
+
+// returnsGenericOptional reports whether call's callee is one of ours whose declared result is
+// Optional of a generic parameter.
+func (e *fileEmitter) returnsGenericOptional(call ast.Node) bool {
+	fn := stripConv(call.Child("fn"))
+	if fn.Kind() == "dot_syntax_call_expr" {
+		fn = stripConv(fn.Child("fn"))
+	}
+	info, _ := e.lookup(fn.Child("decl").Str("decl_usr"))
+	if info == nil || info.Node == nil {
+		return false
+	}
+	rt := e.m.typeOf(info.Node.Str("result"))
+	return rt != nil && rt.Kind == types.Optional && len(rt.Args) == 1 && isGenericParam(rt.Args[0])
+}
+
+func isGenericParam(t *types.Type) bool {
+	return t.Kind == types.Generic || t.Kind == types.Named && genericParamName.MatchString(t.Name)
 }
