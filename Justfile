@@ -6,6 +6,16 @@ build:
 test:
     go test ./internal/... ./swiftrt/...
 
+lint:
+    golangci-lint run ./cmd/... ./internal/... ./swiftrt/...
+
+# Format, vet, lint and test, as CI does
+precommit:
+    golangci-lint fmt
+    go vet ./cmd/... ./internal/... ./swiftrt/...
+    golangci-lint run ./cmd/... ./internal/... ./swiftrt/...
+    go test ./internal/... ./swiftrt/...
+
 # Transpile targets in dependency order, e.g. `just transpile TermCore TermCoreTests`
 transpile +targets:
     go run ./cmd/swift2go -pkg {{ncmud}} transpile {{targets}}
