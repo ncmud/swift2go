@@ -1358,10 +1358,21 @@ func (e *fileEmitter) selfTypeArgs(self *DeclInfo) string {
 	return e.m.typeParamUse(e.selfQualified(self))
 }
 
-// selfTypeDecl is "[A any, B any]" for a static member or init of a generic type.
+// selfTypeDecl is "[A any, B any]" for a static member or init of a generic type, leaving out
+// parameters a same-type requirement (`where Target == ObjectInstance`) has pinned.
 func (e *fileEmitter) selfTypeDecl(self *DeclInfo) string {
 	if self == nil || self.Kind == "foreign" {
 		return ""
 	}
-	return e.m.typeParamDecl(e.selfQualified(self))
+	var parts []string
+	for _, p := range e.m.TypeParams(e.selfQualified(self)) {
+		if v, ok := e.generics[p]; ok && v != p {
+			continue
+		}
+		parts = append(parts, p+" any")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
