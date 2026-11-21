@@ -783,7 +783,15 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 		e.opaque[nodeID(b)] = u
 	}
 	rt := e.exprGoType(n)
+	// Statements the body emits (write-back temporaries) belong inside the closure, after the binds.
+	savedB, savedPost := e.b, e.post
+	e.b, e.post = strings.Builder{}, nil
 	body := e.expr(n.Child("sub_expr"))
+	pre.WriteString(e.b.String())
+	for _, p := range e.post {
+		post.WriteString(p + "\n")
+	}
+	e.b, e.post = savedB, savedPost
 	if rt == "" || rt == "*" || rt == "*struct{}" {
 		return "func() { " + strings.ReplaceAll(pre.String(), "return nil", "return") + body + "\n" + post.String() + " }()"
 	}

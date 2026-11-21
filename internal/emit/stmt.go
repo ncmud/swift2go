@@ -83,6 +83,11 @@ func (e *fileEmitter) block(n ast.Node) {
 
 func (e *fileEmitter) stmt(n ast.Node) {
 	switch n.Kind() {
+	case "while_stmt", "repeat_while_stmt", "for_each_stmt", "switch_stmt":
+		e.jumpDepth++
+		defer func() { e.jumpDepth-- }()
+	}
+	switch n.Kind() {
 	case "inject_into_optional":
 		e.stmt(n.Child("sub_expr"))
 	case "brace_stmt":
@@ -125,10 +130,16 @@ func (e *fileEmitter) stmt(n ast.Node) {
 		e.forEach(n)
 	case "switch_stmt":
 		e.switchStmt(n)
-	case "break_stmt":
-		e.w("break\n")
-	case "continue_stmt":
-		e.w("continue\n")
+	case "break_stmt", "continue_stmt":
+		jump := strings.TrimSuffix(n.Kind(), "_stmt")
+		if d := e.doRet; d != nil && e.jumpDepth == d.depth && n.Str("target_label") == "" {
+			// The do body runs in a Go closure: leave it and repeat the jump outside.
+			flag := d.flag + "_" + jump
+			d.jumps[jump] = flag
+			e.w("%s = true\nreturn\n", flag)
+			break
+		}
+		e.w("%s\n", jump)
 	case "fallthrough_stmt":
 		e.w("fallthrough\n")
 	case "defer_stmt":
@@ -1031,9 +1042,13 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 		e.w("var %s %s\n_ = %s\n", ret, e.resultType, ret)
 	}
 	e.w("%s := false\n", done)
+	for _, jump := range []string{"break", "continue"} {
+		e.w("%s_%s := false\n_ = %s_%s\n", done, jump, done, jump)
+	}
 	e.w("if err := swiftrt.Catch(func() ")
 	saveDo := e.doRet
-	e.doRet = &doReturn{val: ret, flag: done}
+	do := &doReturn{val: ret, flag: done, depth: e.jumpDepth, jumps: map[string]string{}}
+	e.doRet = do
 	e.block(n.Child("body"))
 	e.doRet = saveDo
 	e.w("); err != nil {\n")
@@ -1074,11 +1089,20 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 	default:
 		e.w("if %s {\nreturn\n}\n", done)
 	}
+	for _, jump := range []string{"break", "continue"} {
+		if flag, ok := do.jumps[jump]; ok {
+			e.w("if %s {\n%s\n}\n", flag, jump)
+		}
+	}
 	e.w("}\n")
 }
 
 // doReturn redirects `return` inside a do body, which runs in a Go closure, to the enclosing function.
-type doReturn struct{ val, flag string }
+type doReturn struct {
+	val, flag string
+	depth     int               // jumpDepth when the do body began
+	jumps     map[string]string // break/continue flags the body set
+}
 
 // setterCall renders an assignment to a computed or observed property as a call to its SetX.
 func (e *fileEmitter) setterCall(dest ast.Node, value string) (string, bool) {
