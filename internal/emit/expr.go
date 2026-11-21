@@ -1361,6 +1361,18 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "<", "<=", ">", ">=":
+		if less := e.lessFunc(lt); less != "" {
+			a, b := e.expr(l), e.expr(r)
+			switch op {
+			case "<":
+				return less + "(" + a + ", " + b + ")"
+			case ">":
+				return less + "(" + b + ", " + a + ")"
+			case "<=":
+				return "!" + less + "(" + b + ", " + a + ")"
+			}
+			return "!" + less + "(" + a + ", " + b + ")"
+		}
 		if lt.Kind == types.Tuple {
 			return "swiftrt.TupleCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
 		}

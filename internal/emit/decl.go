@@ -994,6 +994,7 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 	saveInit := e.inInit
 	e.inInit = true
 	if b := n.Child("body"); b != nil && !n.Implicit() {
+		e.paramNames = paramNameSet(n)
 		e.stmts(b.List("elements"))
 	} else {
 		for _, p := range n.Child("params").List("params") {
@@ -1100,6 +1101,7 @@ func (e *fileEmitter) foreignCtor(n ast.Node, info, self *DeclInfo) {
 		e.initRet = "&self"
 	}
 	if b := n.Child("body"); b != nil {
+		e.paramNames = paramNameSet(n)
 		e.stmts(b.List("elements"))
 		if !endsWithReturn(b) {
 			e.w("return %s\n", e.initRet)
@@ -1293,4 +1295,12 @@ func (e *fileEmitter) staticForwarders(q, proto string, pm *Module, pfx string) 
 		}
 		e.w("func (self %s) %s(%s) %s { %s%s }\n\n", recv, staticReqName(req), params, res, ret, target)
 	}
+}
+
+func paramNameSet(fn ast.Node) map[string]bool {
+	set := map[string]bool{}
+	for _, p := range fn.Child("params").List("params") {
+		set[goSafe(p.Name())] = true
+	}
+	return set
 }
