@@ -312,6 +312,10 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	case "subscript_expr":
 		return e.subscript(n)
 	case "ternary_expr":
+		if gt := e.exprGoType(n); isVoidGo(gt) {
+			// A Void ternary runs one branch for its effect.
+			return fmt.Sprintf("func() {\nif %s {\n%s\n} else {\n%s\n}\n}()", e.expr(n.Child("cond_expr")), e.expr(n.Child("then_expr")), e.expr(n.Child("else_expr")))
+		}
 		return fmt.Sprintf("func() %s { if %s { return %s }; return %s }()", e.exprGoType(n), e.expr(n.Child("cond_expr")), e.expr(n.Child("then_expr")), e.expr(n.Child("else_expr")))
 	case "inject_into_optional":
 		sub := n.Child("sub_expr")
@@ -2084,6 +2088,10 @@ func (e *fileEmitter) prefix(n ast.Node) string {
 		}
 		return "-" + x
 	case "~":
+		if lit := stripConv(as[0].node); lit.Kind() == "integer_literal_expr" {
+			// A literal operand needs its type: ^1 as an untyped constant is -2.
+			return "^" + e.exprGoType(as[0].node) + "(" + x + ")"
+		}
 		return "^" + x
 	case "..<":
 		return "(swiftrt.PartialRangeUpTo[" + e.m.GoType(e.m.typeOf(as[0].node.Type()), e.generics) + "]{Hi: " + x + "})"
