@@ -214,7 +214,11 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	if info == nil {
 		return
 	}
-	e.w("type %s struct {\n", info.GoName)
+	q := e.m.qualify(info.Owner, n.Name())
+	saveG := e.generics
+	e.generics = e.typeGenerics(q)
+	defer func() { e.generics = saveG }()
+	e.w("type %s%s struct {\n", info.GoName, e.m.typeParamDecl(q))
 	if sup := e.m.Superclass(info.GoName); sup != "" {
 		e.w("\t%s\n", sup)
 	}
@@ -230,20 +234,21 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 			continue
 		}
 		if conformsTo(n, "s:s9OptionSetP") {
-			e.w("\t%s %s\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), nil))
+			e.w("\t%s %s\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics))
 			continue
 		}
-		e.w("\t%s %s `swift:\"%s\"`\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), nil), mem.Name())
+		e.w("\t%s %s `swift:\"%s\"`\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics), mem.Name())
 	}
 	e.w("}\n\n")
+	recvT := info.GoName + e.m.typeParamUse(q)
 	if n.Kind() == "class_decl" {
-		e.w("// SwiftClass marks %s as a reference type.\nfunc (*%s) SwiftClass() {}\n\n", info.GoName, info.GoName)
+		e.w("// SwiftClass marks %s as a reference type.\nfunc (*%s) SwiftClass() {}\n\n", info.GoName, recvT)
 	}
 	if n.Kind() == "class_decl" && e.m.HasSubclass(info.GoName) && e.m.Superclass(info.GoName) == "" {
-		e.w("// SwiftDynamic returns the most-derived object, for downcasts and identity.\nfunc (self *%s) SwiftDynamic() any {\n\tif self != nil && self.SwiftSub != nil {\n\t\treturn self.SwiftSub\n\t}\n\treturn self\n}\n\n", info.GoName)
+		e.w("// SwiftDynamic returns the most-derived object, for downcasts and identity.\nfunc (self *%s) SwiftDynamic() any {\n\tif self != nil && self.SwiftSub != nil {\n\t\treturn self.SwiftSub\n\t}\n\treturn self\n}\n\n", recvT)
 	}
 	for sup := e.m.Superclass(info.GoName); sup != ""; sup = e.m.Superclass(sup) {
-		e.w("// As%s upcasts to the superclass.\nfunc (self *%s) As%s() *%s {\n\tif self == nil {\n\t\treturn nil\n\t}\n\treturn &self.%s\n}\n\n", sup, info.GoName, sup, sup, sup)
+		e.w("// As%s upcasts to the superclass.\nfunc (self *%s) As%s() *%s {\n\tif self == nil {\n\t\treturn nil\n\t}\n\treturn &self.%s\n}\n\n", sup, recvT, sup, sup, sup)
 	}
 	e.members(n, info)
 	e.protocolForwarders(n, info)
@@ -516,7 +521,12 @@ func (e *fileEmitter) extensionDecl(n ast.Node) {
 			self.Kind = "protocol_ext"
 		}
 	}
+	saveG := e.generics
+	if self.Kind != "foreign" && self.Kind != "protocol_ext" {
+		e.generics = e.typeGenerics(q)
+	}
 	e.members(n, self)
+	e.generics = saveG
 	if self.Kind != "foreign" && self.Kind != "protocol_ext" && len(n.Child("inherits").List("conformances")) > 0 {
 		e.protocolForwardersFor(n, q)
 	}
@@ -696,7 +706,7 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 	e.where = shortPath(e.file.Filename) + ":" + info.Owner + "." + n.Name()
 	switch {
 	case self == nil || info.Static && !info.ProtoExt:
-		e.w("func %s%s(%s) %s ", info.GoName, e.typeParamList(), params, res)
+		e.w("func %s%s(%s) %s ", info.GoName, mergeTypeParams(e.selfTypeDecl(self), e.typeParamList()), params, res)
 	case self.Kind == "foreign" || info.FreeSelf():
 		selfT := self.GoName
 		if info.ProtoExt {
@@ -716,7 +726,7 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 		}
 		e.w("func %s%s(self %s%s) %s ", info.GoName, e.typeParamList(), selfT, prefixComma(params), res)
 	default:
-		recv := self.GoName
+		recv := self.GoName + e.selfTypeArgs(self)
 		if info.Mutating || self.Kind == "class_decl" {
 			recv = "*" + recv
 		}
@@ -831,7 +841,7 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	res := e.m.GoType(e.m.typeOf(n.Str("interface_type")), e.generics)
 	switch {
 	case self == nil || info.Static && !info.ProtoExt:
-		e.w("func %s() %s ", info.GoName, res)
+		e.w("func %s%s() %s ", info.GoName, e.selfTypeDecl(self), res)
 	case self.Kind == "foreign" || info.FreeSelf():
 		selfT := self.GoName
 		if info.ProtoExt {
@@ -850,7 +860,7 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		}
 		e.w("func %s%s(self %s) %s ", info.GoName, tps, selfT, res)
 	default:
-		recv := self.GoName
+		recv := self.GoName + e.selfTypeArgs(self)
 		if self.Kind == "class_decl" {
 			recv = "*" + recv
 		}
@@ -891,7 +901,7 @@ func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		}
 		e.w("func %s(self *%s, newValue %s) {\n", name, selfT, vt)
 	default:
-		e.w("func (self *%s) %s(newValue %s) {\n", self.GoName, name, vt)
+		e.w("func (self *%s%s) %s(newValue %s) {\n", self.GoName, e.selfTypeArgs(self), name, vt)
 	}
 	saveR := e.resultType
 	e.resultType = ""
@@ -974,7 +984,11 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 		e.initRet = "&self"
 	}
 	defer func() { e.initRet = saveRet }()
-	e.w("func %s(%s) %s {\n", info.GoName, params, ret)
+	if targs := e.selfTypeArgs(self); targs != "" {
+		ret = strings.Replace(ret, t, t+targs, 1)
+		t += targs
+	}
+	e.w("func %s%s(%s) %s {\n", info.GoName, e.selfTypeDecl(self), params, ret)
 	if self.Kind == "class_decl" {
 		e.w("self := &%s{}\n", t)
 	} else {
@@ -1186,7 +1200,7 @@ func (e *fileEmitter) subscriptDecl(n ast.Node, self *DeclInfo) {
 	if el := n.Str("element"); el != "" {
 		res = e.m.GoType(e.m.typeOf(el), e.generics)
 	}
-	recv := self.GoName
+	recv := self.GoName + e.selfTypeArgs(self)
 	if self.Kind == "class_decl" {
 		recv = "*" + recv
 	}
@@ -1303,4 +1317,42 @@ func paramNameSet(fn ast.Node) map[string]bool {
 		set[goSafe(p.Name())] = true
 	}
 	return set
+}
+
+// typeGenerics maps a generic type's parameters to themselves while its members are emitted.
+func (e *fileEmitter) typeGenerics(q string) map[string]string {
+	g := map[string]string{}
+	for k, v := range e.generics {
+		g[k] = v
+	}
+	for _, p := range e.m.TypeParams(q) {
+		g[p] = p
+	}
+	return g
+}
+
+func (e *fileEmitter) selfQualified(self *DeclInfo) string {
+	if self == nil || self.Node == nil {
+		if self != nil {
+			return self.Owner
+		}
+		return ""
+	}
+	return e.m.qualify(self.Owner, self.Node.Name())
+}
+
+// selfTypeArgs is "[A, B]" for a method receiver on a generic type.
+func (e *fileEmitter) selfTypeArgs(self *DeclInfo) string {
+	if self == nil || self.Kind == "foreign" {
+		return ""
+	}
+	return e.m.typeParamUse(e.selfQualified(self))
+}
+
+// selfTypeDecl is "[A any, B any]" for a static member or init of a generic type.
+func (e *fileEmitter) selfTypeDecl(self *DeclInfo) string {
+	if self == nil || self.Kind == "foreign" {
+		return ""
+	}
+	return e.m.typeParamDecl(e.selfQualified(self))
 }

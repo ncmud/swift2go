@@ -43,30 +43,31 @@ type DeclInfo struct {
 
 // Module is one Swift module being transpiled.
 type Module struct {
-	Name          string
-	Pkg           string
-	RTPath        string // import path of swiftrt
-	Files         []ast.File
-	Test          bool // transpiling a test target into the package under test
-	Target        string
-	dm            *types.Demangler
-	decls         map[string]*DeclInfo
-	typeKinds     map[string]string // qualified Swift type name → decl kind
-	protoReqs     map[string][]ast.Node
-	conformers    map[string][]string // protocol qualified name → conforming local types
-	varInit       map[string]ast.Node // stored var usr → initializer expr
-	Unsupported   map[string]int
-	UnsupportedAt map[string][]string
-	Deps          []*Module
-	ImportPath    string
-	importPkgs    map[string]string
-	typeCache     map[string]*types.Type
-	payloadEnums  map[string]bool
-	lazyInits     map[string]bool // owner|name of stored statics and globals with non-literal initializers
-	lineStarts    map[string][]int
-	mutatingTypes map[string]bool
-	overridden    map[string]bool // USRs of class members some subclass overrides
-	superOf       map[string]string
+	Name           string
+	Pkg            string
+	RTPath         string // import path of swiftrt
+	Files          []ast.File
+	Test           bool // transpiling a test target into the package under test
+	Target         string
+	dm             *types.Demangler
+	decls          map[string]*DeclInfo
+	typeKinds      map[string]string // qualified Swift type name → decl kind
+	protoReqs      map[string][]ast.Node
+	conformers     map[string][]string // protocol qualified name → conforming local types
+	varInit        map[string]ast.Node // stored var usr → initializer expr
+	Unsupported    map[string]int
+	UnsupportedAt  map[string][]string
+	Deps           []*Module
+	ImportPath     string
+	importPkgs     map[string]string
+	typeCache      map[string]*types.Type
+	payloadEnums   map[string]bool
+	typeParamNames map[string][]string // generic struct/class → its Go type parameter names
+	lazyInits      map[string]bool     // owner|name of stored statics and globals with non-literal initializers
+	lineStarts     map[string][]int
+	mutatingTypes  map[string]bool
+	overridden     map[string]bool // USRs of class members some subclass overrides
+	superOf        map[string]string
 }
 
 // IsOptionSet reports whether the qualified Swift type conforms to OptionSet, in this module or a dependency.
@@ -150,7 +151,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
 		protoReqs: map[string][]ast.Node{}, conformers: map[string][]string{},
-		varInit: map[string]ast.Node{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
+		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
 	}
 	var syms []string
 	for _, f := range files {
@@ -207,6 +208,13 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 		case "struct_decl", "class_decl", "enum_decl", "protocol":
 			q := m.qualify(owner, n.Name())
 			m.typeKinds[q] = n.Kind()
+			if n.Kind() == "struct_decl" || n.Kind() == "class_decl" {
+				for _, gp := range n.Child("generic_signature").Strings("generic_params") {
+					if name := m.demangle(gp); name != "" {
+						m.typeParamNames[q] = append(m.typeParamNames[q], name)
+					}
+				}
+			}
 			for _, c := range n.Child("inherits").List("conformances") {
 				if c.Str("protocol") == "s:s9OptionSetP" {
 					m.typeKinds[q+"#OptionSet"] = "yes"
@@ -803,4 +811,47 @@ func (m *Module) isLocalProtocol(q string) bool {
 		}
 	}
 	return false
+}
+
+// TypeParams returns a local generic type's Go type parameter names, looking through dependencies.
+func (m *Module) TypeParams(q string) []string {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if ps := mod.typeParamNames[q]; len(ps) > 0 {
+			return ps
+		}
+	}
+	return nil
+}
+
+// typeParamDecl renders "[A any, B any]" for a generic type, or "".
+func (m *Module) typeParamDecl(q string) string {
+	ps := m.TypeParams(q)
+	if len(ps) == 0 {
+		return ""
+	}
+	parts := make([]string, len(ps))
+	for i, p := range ps {
+		parts[i] = p + " any"
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// typeParamUse renders "[A, B]" for a generic type, or "".
+func (m *Module) typeParamUse(q string) string {
+	ps := m.TypeParams(q)
+	if len(ps) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(ps, ", ") + "]"
+}
+
+// mergeTypeParams joins two "[...]" type parameter lists.
+func mergeTypeParams(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a[:len(a)-1] + ", " + b[1:]
 }
