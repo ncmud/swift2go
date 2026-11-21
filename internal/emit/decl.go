@@ -710,11 +710,13 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			continue
 		}
 		first := e.m.demangle(r.Str("first_type"))
+		concrete := e.m.GoType(e.m.typeOf(r.Str("second_type")), g)
 		tp, ok := g[first]
 		if !ok {
+			// A foreign extension's parameter pinned to a concrete type (`extension Set where Element == Race`).
+			g[first] = concrete
 			continue
 		}
-		concrete := e.m.GoType(e.m.typeOf(r.Str("second_type")), g)
 		for k, v := range g {
 			if v == tp {
 				g[k] = concrete
@@ -1298,8 +1300,15 @@ func (e *fileEmitter) foreignCtor(n ast.Node, info, self *DeclInfo) {
 	saveIO := e.inoutParams
 	e.inoutParams = nil
 	defer func() { e.inoutParams = saveIO }()
+	saveG := e.generics
+	e.generics = e.genericScope(n)
+	defer func() { e.generics = saveG }()
 	params, _ := e.paramList(n)
 	t := self.GoName
+	// A constrained extension (`extension Set where Element == Race`) pins the self type.
+	if st := e.m.GoType(e.m.typeOf(n.Child("implicit_self_decl").Str("interface_type")), e.generics); st != "" && len(e.typeParams) == 0 && !strings.Contains(st, "any") {
+		t = st
+	}
 	failable := n.Bool("failable")
 	ret := t
 	if failable && !strings.HasPrefix(t, "*") {

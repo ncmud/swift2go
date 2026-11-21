@@ -1262,18 +1262,27 @@ func (e *fileEmitter) defaultArg(n ast.Node) string {
 		return e.m.Unsup("foreign-default-arg", e.where, e.exprGoType(n))
 	}
 	params := info.Node.Child("params").List("params")
+	// An empty literal is typed in the callee's generic context; the call site knows the type.
+	emptyAtCallSite := func(ex ast.Node) (string, bool) {
+		if (ex.Kind() == "array_expr" || ex.Kind() == "dictionary_expr") && len(ex.List("elements")) == 0 {
+			if gt := e.exprGoType(n); gt != "" && gt != "any" {
+				return "(" + gt + "{})", true
+			}
+		}
+		return "", false
+	}
 	if idx < len(params) {
 		if ex := params[idx].Child("expression"); ex != nil {
-			// An empty literal is typed in the callee's generic context; the call site knows the type.
-			if (ex.Kind() == "array_expr" || ex.Kind() == "dictionary_expr") && len(ex.List("elements")) == 0 {
-				if gt := e.exprGoType(n); gt != "" && gt != "any" {
-					return "(" + gt + "{})"
-				}
+			if s, ok := emptyAtCallSite(ex); ok {
+				return s
 			}
 			return e.expr(ex)
 		}
 		if info.Kind == "constructor_decl" && info.Node.Implicit() {
 			if init := e.m.varInit[info.Owner+"|"+params[idx].Name()]; init != nil {
+				if s, ok := emptyAtCallSite(init); ok {
+					return s
+				}
 				return e.expr(init)
 			}
 		}
