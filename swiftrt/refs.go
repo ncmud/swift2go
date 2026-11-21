@@ -141,3 +141,10 @@ type WritableKeyPath[Root, Value any] struct {
 	Get func(Root) Value
 	Set func(*Root, Value)
 }
+
+// Foundation `ComparisonResult` cases.
+const (
+	NSComparisonResultOrderedAscending  = -1
+	NSComparisonResultOrderedSame       = 0
+	NSComparisonResultOrderedDescending = 1
+)
