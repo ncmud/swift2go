@@ -202,6 +202,10 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	if strings.HasPrefix(name, "Swift.") {
 		return "any /* " + name + " */"
 	}
+	if rest, ok := strings.CutPrefix(name, "__C."); ok && rest != "" && rest[0] >= 'a' && rest[0] <= 'z' && !strings.Contains(rest, ".") {
+		// C structs (timeval, timespec) are exported Go structs in the runtime.
+		return "swiftrt.C" + capitalize(rest)
+	}
 	for _, pfx := range []string{"Foundation.", "__C.NS", "__C.", "Synchronization.", "Dispatch.", "_Concurrency.", "CryptoKit.", "Crypto.", "Logging.", "YYJSON.", "WSCore.", "WSClient.", "NIOSSL.", "NIOCore.", "NIOPosix."} {
 		if strings.HasPrefix(name, pfx) {
 			return "swiftrt." + strings.ReplaceAll(strings.TrimPrefix(name, pfx), ".", "")
@@ -293,6 +297,9 @@ func (m *Module) Recv(t *types.Type) string {
 	if m.IsOptionSet(t.Name) && !foreignOptionSets[t.Name] {
 		return "OptionSet"
 	}
+	if rest, ok := strings.CutPrefix(t.Name, "__C."); ok && rest != "" && rest[0] >= 'a' && rest[0] <= 'z' && !strings.Contains(rest, ".") {
+		return "C" + capitalize(rest)
+	}
 	parts := strings.Split(t.Name, ".")
 	last := strings.Map(func(r rune) rune {
 		if r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
@@ -338,6 +345,8 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 var foreignTypes = map[string]string{
 	"Swift.AnyObject":                         "any",
 	"Swift.Result":                            "swiftrt.Result[%s]",
+	"Swift.UnsafeMutablePointer":              "*%s",
+	"Swift.UnsafePointer":                     "*%s",
 	"_StringProcessing.Regex":                 "swiftrt.SwiftRegex[%s]",
 	"_StringProcessing.Regex.Match":           "swiftrt.RegexMatch[%s]",
 	"OrderedCollections.OrderedDictionary":    "swiftrt.OrderedDictionary[%s, %t]",
