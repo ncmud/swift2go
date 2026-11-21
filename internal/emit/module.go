@@ -66,6 +66,8 @@ type Module struct {
 	lazyInits      map[string]bool     // owner|name of stored statics and globals with non-literal initializers
 	lineStarts     map[string][]int
 	sources        map[string][]byte
+	localFuncs     map[string]ast.Node // functions declared inside function bodies, by USR
+	objcNames      map[string]string   // Swift names of Objective-C members, by USR
 	mutatingTypes  map[string]bool
 	overridden     map[string]bool // USRs of class members some subclass overrides
 	superOf        map[string]string
@@ -155,7 +157,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
 		protoReqs: map[string][]ast.Node{}, conformers: map[string][]string{},
-		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
+		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, localFuncs: map[string]ast.Node{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
 	}
 	var syms []string
 	for _, f := range files {
@@ -165,6 +167,9 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 					if s := n.Str(k); strings.HasPrefix(s, "$s") || strings.HasPrefix(s, "s:") {
 						syms = append(syms, s)
 					}
+				}
+				if usr := n.Str("decl_usr"); strings.HasPrefix(usr, "c:objc(") && n.Str("base_name") != "" {
+					m.objcNames[usr] = n.Str("base_name")
 				}
 			})
 		}
@@ -186,7 +191,32 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 // SetTarget marks the module as a test target whose code joins package pkg.
 func (m *Module) SetTarget(pkg string) { m.Test = true; m.Pkg = pkg }
 
-func (m *Module) demangle(s string) string { return m.dm.Get(s) }
+func (m *Module) demangle(s string) string {
+	if strings.HasPrefix(s, "c:objc(") {
+		if d := m.objcDemangle(s); d != "" {
+			return d
+		}
+	}
+	return m.dm.Get(s)
+}
+
+// objcMember matches an Objective-C member USR: c:objc(cs)Class(kind)selector.
+var objcMember = regexp.MustCompile(`^c:objc\((?:cs|pl)\)(\w+)\((im|cm|py|cpy)\)`)
+
+// objcDemangle renders an Objective-C member USR as "__C.Class.swiftName", with "static " for class
+// members, using the Swift name the call sites refer to it by.
+func (m *Module) objcDemangle(usr string) string {
+	match := objcMember.FindStringSubmatch(usr)
+	name := m.objcNames[usr]
+	if match == nil || name == "" {
+		return ""
+	}
+	out := "__C." + match[1] + "." + name
+	if match[2] == "cm" || match[2] == "cpy" {
+		out = "static " + out
+	}
+	return out
+}
 
 func (m *Module) typeOf(mangled string) *types.Type {
 	if mangled == "" {

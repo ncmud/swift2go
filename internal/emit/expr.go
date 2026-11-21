@@ -1097,6 +1097,15 @@ func (e *fileEmitter) defaultArg(n ast.Node) string {
 	idx, _ := strconv.Atoi(n.Str("param"))
 	info, _ := e.lookup(owner)
 	if info == nil {
+		key := owner
+		if key == "" {
+			key = "local:" + n.Child("default_args_owner").Str("base_name")
+		}
+		if fn, ok := e.m.localFuncs[key]; ok {
+			info = &DeclInfo{Node: fn, Kind: fn.Kind()}
+		}
+	}
+	if info == nil {
 		return e.m.Unsup("foreign-default-arg", e.where, e.exprGoType(n))
 	}
 	params := info.Node.Child("params").List("params")
@@ -1769,6 +1778,10 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 	case "...":
 		return "(swiftrt.ClosedRange[" + e.m.GoType(lt, e.generics) + "]{Lo: " + e.expr(l) + ", Hi: " + e.expr(r) + "})"
 	case "??":
+		if lt.Kind == types.Optional && len(lt.Args) == 1 && lt.Args[0].Kind == types.Optional {
+			// T?? ?? T? unwraps one level.
+			return "swiftrt.Coalesce(" + e.expr(l) + ", " + e.expr(r) + ")"
+		}
 		if rt := e.m.typeOf(n.Type()); rt != nil && rt.Kind == types.Optional {
 			return "swiftrt.CoalesceOpt(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
@@ -1837,7 +1850,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		if lt.Kind == types.Named && isIntegerName(lt.Name) {
 			fn := map[string]string{"+": "Add", "-": "Sub", "*": "Mul"}[op]
-			return "swiftrt." + fn + "(" + e.expr(l) + ", " + e.expr(r) + ")"
+			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
 		if op == "+" && (lt.Kind == types.Array || e.m.Recv(lt) == "Slice") {
 			return "swiftrt.Concat(" + e.expr(l) + ", " + e.expr(r) + ")"
@@ -1852,7 +1865,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 	case "/", "%":
 		if lt.Kind == types.Named && isIntegerName(lt.Name) {
 			fn := map[string]string{"/": "Div", "%": "Rem"}[op]
-			return "swiftrt." + fn + "(" + e.expr(l) + ", " + e.expr(r) + ")"
+			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "&", "|", "^", "<<", ">>":
@@ -1895,7 +1908,7 @@ func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
 		}
 		if lt.Kind == types.Named && isIntegerName(lt.Name) {
 			if fn, ok := map[string]string{"+": "Add", "-": "Sub", "*": "Mul", "/": "Div", "%": "Rem"}[base]; ok {
-				return "swiftrt." + fn + "(" + cur + ", " + rs + ")"
+				return "swiftrt." + fn + e.intTypeArg(lt) + "(" + cur + ", " + rs + ")"
 			}
 		}
 		if base == "+" && e.m.Recv(lt) == "Slice" {
@@ -2412,4 +2425,13 @@ var intBound = map[string]string{
 	"uint16Max": "uint16(math.MaxUint16)", "uint16Min": "uint16(0)",
 	"uint32Max": "uint32(math.MaxUint32)", "uint32Min": "uint32(0)",
 	"uint64Max": "uint64(math.MaxUint64)", "uint64Min": "uint64(0)",
+}
+
+// intTypeArg is "[T]" for a checked-arithmetic call on a fixed-width integer type other than Int, so
+// untyped literal operands take the operation's type.
+func (e *fileEmitter) intTypeArg(t *types.Type) string {
+	if gt := e.m.GoType(t, e.generics); gt != "int" {
+		return "[" + gt + "]"
+	}
+	return ""
 }
