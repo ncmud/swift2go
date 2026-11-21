@@ -194,7 +194,7 @@ func EncodeValue(v any) any {
 		m.Call([]reflect.Value{reflect.ValueOf(e)})
 		return e.Value
 	}
-	if rv.Kind() != reflect.Pointer && !rv.CanAddr() {
+	if rv.Kind() != reflect.Pointer && rv.CanAddr() == false {
 		p := reflect.New(rv.Type())
 		p.Elem().Set(rv)
 		if m := p.MethodByName("Encode"); m.IsValid() && m.Type().NumIn() == 1 && m.Type().In(0) == reflect.TypeFor[*Encoder]() {
