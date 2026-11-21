@@ -37,12 +37,21 @@ var icuClasses = map[byte]string{
 // (ICU also matches before a final line terminator), and RE2 has no lookaround or backreferences, so such
 // patterns panic.
 func icuRegex(pattern string, caseInsensitive bool) *regexp.Regexp {
+	re, err := icuRegexCompile(pattern, caseInsensitive)
+	if err != nil {
+		panic("swiftrt: regular expression not supported by RE2: " + pattern + ": " + err.Error())
+	}
+	return re
+}
+
+// icuRegexCompile is icuRegex returning RE2's compile error instead of panicking.
+func icuRegexCompile(pattern string, caseInsensitive bool) (*regexp.Regexp, error) {
 	key := pattern
 	if caseInsensitive {
 		key = "(?i)" + pattern
 	}
 	if re, ok := icuRegexCache.Load(key); ok {
-		return re.(*regexp.Regexp)
+		return re.(*regexp.Regexp), nil
 	}
 	var b strings.Builder
 	if caseInsensitive {
@@ -94,10 +103,10 @@ func icuRegex(pattern string, caseInsensitive bool) *regexp.Regexp {
 	}
 	re, err := regexp.Compile(b.String())
 	if err != nil {
-		panic("swiftrt: regular expression not supported by RE2: " + pattern + ": " + err.Error())
+		return nil, err
 	}
 	icuRegexCache.Store(key, re)
-	return re
+	return re, nil
 }
 
 // icuTemplate converts an ICU replacement template ($1, \$) to Go's Expand syntax.
@@ -453,3 +462,6 @@ func NSScannerScanFloat(sc *Scanner) *float32 {
 	f := float32(v)
 	return &f
 }
+
+// StringOptInitString is `Optional<String>(_:)`: the string wrapped as a non-nil optional.
+func StringOptInitString(s string) *string { return &s }

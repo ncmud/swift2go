@@ -212,12 +212,13 @@ func SliceInitValues[S ~[]T, T any](vals []T) S { return S(slices.Clone(vals)) }
 // SliceInitSet is `Array(set)`.
 func SliceInitSet[S ~[]T, T comparable](s map[T]struct{}) S { return S(SetElements(s)) }
 
-// SliceReduceInto is `reduce(into:_:)`; the accumulator is a reference type in the emitted code.
-func SliceReduceInto[T, A any](xs []T, init A, f func(A, T)) A {
+// SliceReduceInto is `reduce(into:_:)`; f receives the inout accumulator as a pointer.
+func SliceReduceInto[T, A any](xs []T, init A, f func(*A, T)) A {
+	acc := init
 	for _, x := range xs {
-		f(init, x)
+		f(&acc, x)
 	}
-	return init
+	return acc
 }
 
 // Zip2SequenceMap is `zip(a, b).map`.
@@ -365,12 +366,6 @@ func PreconditionFailure(msg ...string) { Trap("precondition failure " + Str(msg
 
 // ObjectIdentifierInitAnyObject is Swift `ObjectIdentifier(obj)`: the object's identity.
 func ObjectIdentifierInitAnyObject(v any) any { return Dynamic(v) }
-
-// TaskInitOperation is Swift `Task { ... }`, run on a goroutine.
-func TaskInitOperation(f func()) struct{} {
-	go f()
-	return struct{}{}
-}
 
 // MutexInitState is Synchronization `Mutex(_:)` with a struct state.
 func MutexInitState[T any](v T) *Mutex[T] { return MutexInit(v) }
