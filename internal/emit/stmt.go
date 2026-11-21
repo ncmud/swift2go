@@ -1150,7 +1150,12 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 		}
 		e.w("if !%s && (%s) {\n%s = true\n", matched, strings.Join(tests, " || "), matched)
 		if bind != nil {
-			e.patternBind(bind, "err")
+			src := "err"
+			// A typed throw (`do throws(ArgFailure)`) binds error at the concrete type.
+			if gt := e.m.GoType(e.m.typeOf(bind.Type()), e.generics); bind.Kind() != "pattern_is" && gt != "" && gt != "error" && gt != "any" && !strings.HasPrefix(gt, "any ") {
+				src = "swiftrt.MustAs[" + gt + "](err)"
+			}
+			e.patternBind(bind, src)
 		} else {
 			e.w("error := err\n_ = error\n")
 		}

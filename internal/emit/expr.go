@@ -1520,8 +1520,11 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 			}
 		}
 	}
-	if recv == "TaskLocal" {
+	if recv == "TaskLocal" || recv == "Mutex" {
 		if t := e.m.typeOf(n.Type()); t != nil && len(t.Args) == 1 {
+			if recv == "Mutex" {
+				return "swiftrt.MutexInit[" + e.m.GoType(t.Args[0], e.generics) + "](" + strings.Join(ss, ", ") + ")"
+			}
 			return "swiftrt.TaskLocalInit" + suffix + "[" + e.m.GoType(t.Args[0], e.generics) + "](" + strings.Join(ss, ", ") + ")"
 		}
 	}
