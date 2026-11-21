@@ -678,6 +678,7 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 			return
 		}
 		if x.Kind() == "bind_optional_expr" {
+			find(x.Child("sub_expr"))
 			binds = append(binds, x)
 			return
 		}
