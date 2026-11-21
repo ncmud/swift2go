@@ -72,6 +72,9 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	case "inout_expr":
 		return "&" + e.lvalue(n.Child("sub_expr"))
 	case "string_literal_expr":
+		if e.m.Recv(e.m.typeOf(n.Type())) == "Substring" {
+			return "swiftrt.SubstringInitString(" + e.stringLiteral(n) + ")"
+		}
 		return e.stringLiteral(n)
 	case "integer_literal_expr", "float_literal_expr":
 		v := n.Str("value")
@@ -1031,6 +1034,17 @@ func (e *fileEmitter) enumGoType(info *DeclInfo) string {
 
 func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg) string {
 	usr := d.Str("decl_usr")
+	if strings.HasPrefix(usr, "s:s6ResultO7success") || strings.HasPrefix(usr, "s:s6ResultO7failure") {
+		ss, _ := e.argStrings(as, false)
+		v := "struct{}{}"
+		if len(ss) == 1 {
+			v = ss[0]
+		}
+		if strings.HasPrefix(usr, "s:s6ResultO7success") {
+			return "(" + e.exprGoType(n) + "{Value: " + v + ", Ok: true})"
+		}
+		return "(" + e.exprGoType(n) + "{Err: " + v + "})"
+	}
 	if d.Str("base_name") == "init" {
 		return e.ctorCall(n, d, as)
 	}
