@@ -202,3 +202,20 @@ func AsyncStreamIteratorNext[T any](it *AsyncStreamIterator[T]) *T {
 		}
 	}
 }
+
+// ExecutorJob is Swift `ExecutorJob`: a unit of task work handed to an executor's `enqueue(_:)`.
+type ExecutorJob struct{ run func() }
+
+// UnownedJob is Swift `UnownedJob`, an unmanaged reference to an ExecutorJob.
+type UnownedJob struct{ run func() }
+
+// UnownedJobInitExecutorJob is Swift `UnownedJob(_:)` from an ExecutorJob.
+func UnownedJobInitExecutorJob(job ExecutorJob) UnownedJob { return UnownedJob(job) }
+
+// UnownedJobRunSynchronouslyOn is Swift `UnownedJob.runSynchronously(on:)`: it runs the job on the
+// calling goroutine. job is the UnownedJob; the executor it runs on does not change what it does.
+func UnownedJobRunSynchronouslyOn(job any, _ any) {
+	if j := job.(UnownedJob); j.run != nil {
+		j.run()
+	}
+}

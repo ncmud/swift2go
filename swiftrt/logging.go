@@ -23,6 +23,17 @@ const (
 	LevelCritical
 )
 
+// Logger.Level cases named through the type, as `Logger.Level.info` is written in full.
+const (
+	LoggerLevelTrace    = LevelTrace
+	LoggerLevelDebug    = LevelDebug
+	LoggerLevelInfo     = LevelInfo
+	LoggerLevelNotice   = LevelNotice
+	LoggerLevelWarning  = LevelWarning
+	LoggerLevelError    = LevelError
+	LoggerLevelCritical = LevelCritical
+)
+
 var loggerLevelNames = [...]string{"trace", "debug", "info", "notice", "warning", "error", "critical"}
 
 // LevelRawValue is swift-log `Logger.Level.rawValue`: the case name, such as "warning".
