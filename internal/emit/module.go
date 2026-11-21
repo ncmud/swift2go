@@ -568,6 +568,13 @@ func (m *Module) dedupePackageNames() {
 			setters[info.Owner+".Set"+info.GoName] = true
 		}
 	}
+	// A method such as `coloredTag(_:)` also collides with the getter of `var coloredTag`.
+	for _, usr := range usrs {
+		info := m.decls[usr]
+		if info.Kind == "var_decl" && info.Owner != "" && !info.Static {
+			setters[info.Owner+"."+info.GoName] = true
+		}
+	}
 	for k, infos := range methods {
 		if setters[k] {
 			for _, info := range infos {
