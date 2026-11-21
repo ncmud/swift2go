@@ -155,7 +155,7 @@ func (e *fileEmitter) members(n ast.Node, self *DeclInfo) {
 
 func (e *fileEmitter) member(n, mem ast.Node, self *DeclInfo) {
 	{
-		if mem.Implicit() && mem.Kind() != "constructor_decl" || isMacroName(mem.Name()) {
+		if mem.Implicit() && mem.Kind() != "constructor_decl" && !(mem.Kind() == "enum_decl" && mem.Name() == "CodingKeys") || isMacroName(mem.Name()) {
 			return
 		}
 		if mem.Kind() == "pattern_binding_decl" && isMacroName(patternName(mem.List("pattern_entries")[0].Child("pattern"))) {
@@ -341,7 +341,17 @@ func (e *fileEmitter) enumDecl(n ast.Node) {
 	}
 	var cases []ast.Node
 	payload := false
+	hasCaseDecls := false
 	for _, mem := range n.List("members") {
+		if mem.Kind() == "enum_case_decl" {
+			hasCaseDecls = true
+		}
+	}
+	for _, mem := range n.List("members") {
+		if mem.Kind() == "enum_element_decl" && !hasCaseDecls {
+			cases = append(cases, mem)
+			continue
+		}
 		if mem.Kind() == "enum_case_decl" {
 			for _, el := range mem.List("elements") {
 				cases = append(cases, el)
