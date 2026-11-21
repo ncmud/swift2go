@@ -100,13 +100,9 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if n.Kind() == "collection_upcast_expr" || n.Kind() == "any_hashable_erasure_expr" {
 			return e.upcast(n)
 		}
-		if ac := n.Child("sub_expr"); n.Kind() == "function_conversion_expr" && ac.Kind() == "autoclosure_expr" && len(ac.Child("params").List("params")) == 0 {
-			// A method reference (`QuestRuntime.tick`) is an autoclosure around the call.
-			if ft := e.m.typeOf(ac.Type()); ft != nil && ft.Kind == types.Func {
-				if res := e.m.GoType(ft.Result, e.generics); res != "" && !isVoidGo(res) {
-					return "func() " + res + " { return " + e.expr(ac) + " }"
-				}
-				return "func() { " + e.expr(ac) + " }"
+		if ac := n.Child("sub_expr"); n.Kind() == "function_conversion_expr" && ac.Kind() == "autoclosure_expr" {
+			if f, ok := e.methodRef(ac); ok {
+				return f
 			}
 		}
 		return e.expr(n.Child("sub_expr"))
@@ -953,7 +949,27 @@ func (e *fileEmitter) captureList(n ast.Node) string {
 	binds := e.b.String()
 	e.b = saved
 	body := n.Child("closure_body")
-	return "func() " + e.exprGoType(body) + " {\n" + binds + "return " + e.expr(body) + "\n}()"
+	b := e.expr(body)
+	if f, ok := e.methodRef(body); ok {
+		b = f
+	}
+	return "func() " + e.exprGoType(body) + " {\n" + binds + "return " + b + "\n}()"
+}
+
+// methodRef renders a method reference (`QuestRuntime.tick`, `tick`), which Swift represents as a
+// zero-parameter autoclosure around the call, as a function value.
+func (e *fileEmitter) methodRef(ac ast.Node) (string, bool) {
+	if ac.Kind() != "autoclosure_expr" || len(ac.Child("params").List("params")) != 0 {
+		return "", false
+	}
+	ft := e.m.typeOf(ac.Type())
+	if ft == nil || ft.Kind != types.Func {
+		return "", false
+	}
+	if res := e.m.GoType(ft.Result, e.generics); res != "" && !isVoidGo(res) {
+		return "func() " + res + " { return " + e.expr(ac) + " }", true
+	}
+	return "func() { " + e.expr(ac) + " }", true
 }
 
 // keyPath renders a key path of stored or computed property components as a getter func.
