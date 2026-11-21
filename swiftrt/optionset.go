@@ -1,5 +1,10 @@
 package swiftrt
 
+import (
+	"fmt"
+	"reflect"
+)
+
 // OptionSetOf is an OptionSet array literal.
 func OptionSetOf[T ~struct{ RawValue R }, R Integer](ms ...T) T {
 	var r R
@@ -108,4 +113,20 @@ func OptionSetFormSymmetricDifference[T ~struct{ RawValue R }, R Integer](s *T, 
 // OptionSetSubtract is OptionSet `subtract`.
 func OptionSetSubtract[T ~struct{ RawValue R }, R Integer](s *T, o T) {
 	*s = OptionSetSubtracting(*s, o)
+}
+
+// AnyContains is `OptionSet.contains(_:)` on an existential option set: whether every bit of
+// member is set in set. Both must hold the same option set type.
+func AnyContains(set, member any) bool {
+	a, b := reflect.ValueOf(set), reflect.ValueOf(member)
+	if a.Kind() == reflect.Struct {
+		a, b = a.FieldByName("RawValue"), b.FieldByName("RawValue")
+	}
+	switch a.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return a.Int()&b.Int() == b.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return a.Uint()&b.Uint() == b.Uint()
+	}
+	panic(fmt.Sprintf("swiftrt.AnyContains: %T is not an option set", set))
 }
