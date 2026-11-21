@@ -23,6 +23,9 @@ type DeclInfo struct {
 	Observed bool
 	// Overrides is the USR of the superclass member this member overrides.
 	Overrides string
+	// GenericFree marks a method whose generic parameter needs a protocol's static requirements; Go methods
+	// cannot declare type parameters, so it is emitted as a package-level function taking self.
+	GenericFree bool
 	// Lazy marks a static or global stored property with a non-literal initializer, emitted as a swiftrt.Lazy cell.
 	Lazy bool
 	// OnPayloadEnum marks a member of an enum emitted as a sealed interface, which cannot have methods.
@@ -170,6 +173,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 		m.index(f.Items, "", "")
 	}
 	m.markLazy()
+	m.markGenericFree()
 	m.assignNames()
 	return m, nil
 }
@@ -692,7 +696,21 @@ func (m *Module) lineCol(file string, off int) (int, int) {
 
 // FreeSelf reports whether a member is emitted as a package-level function taking self as its first parameter.
 func (info *DeclInfo) FreeSelf() bool {
-	return info.OwnerKind == "foreign" || info.ProtoExt || info.OnPayloadEnum
+	return info.OwnerKind == "foreign" || info.ProtoExt || info.OnPayloadEnum || info.GenericFree
+}
+
+// markGenericFree flags methods that must become generic package-level functions.
+func (m *Module) markGenericFree() {
+	for _, d := range m.decls {
+		if d.Kind != "func_decl" || d.Static || d.Owner == "" || d.OwnerKind == "protocol" || d.Node.Child("implicit_self_decl") == nil {
+			continue
+		}
+		for _, r := range d.Node.Child("generic_signature").List("generic_reqs") {
+			if r.Str("kind") == "conforms_to" && m.HasStaticRequirements(m.demangle(r.Str("protocol"))) {
+				d.GenericFree = true
+			}
+		}
+	}
 }
 
 // HasMutatingMethods reports whether a local struct has pointer-receiver methods, so only a pointer satisfies its protocols.
@@ -762,6 +780,16 @@ func isLiteralInit(n ast.Node) bool {
 		return true
 	case "inject_into_optional":
 		return isLiteralInit(n.Child("sub_expr"))
+	}
+	return false
+}
+
+// HasStaticRequirements reports whether a local protocol declares static members, which Go can only reach through a type parameter.
+func (m *Module) HasStaticRequirements(proto string) bool {
+	for _, r := range m.protoReqs[proto] {
+		if (r.Kind() == "func_decl" || r.Kind() == "var_decl") && r.Bool("static") {
+			return true
+		}
 	}
 	return false
 }
