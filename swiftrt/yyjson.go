@@ -197,6 +197,10 @@ type YYJSONError struct{ Msg string }
 
 func (e YYJSONError) Error() string { return e.Msg }
 
+// YYJSONErrorDescription is swift-yyjson `YYJSONError.description`: the message, followed by
+// " (at path)" when the error has a coding path. The runtime's errors carry none.
+func YYJSONErrorDescription(e YYJSONError) string { return e.Msg }
+
 func yyjsonThrow(msg string) { panic(Throw(YYJSONError{msg})) }
 
 // parseJSONStrict parses one RFC 8259 JSON document, numbers kept as text.
