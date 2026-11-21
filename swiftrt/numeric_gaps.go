@@ -248,3 +248,9 @@ func CFTime(_ any) int { return int(time.Now().Unix()) }
 
 // CFGetpid is C `getpid()`.
 func CFGetpid() int32 { return int32(os.Getpid()) }
+
+// IntBitWidth is Swift `Int.bitWidth` on a 64-bit platform.
+const IntBitWidth = 64
+
+// DurationSeconds is Swift `Duration.seconds(_:)` with a BinaryInteger count.
+func DurationSeconds[T Integer](s T) Duration { return Duration(Mul(int64(s), 1_000_000_000)) }

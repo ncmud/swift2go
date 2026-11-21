@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"hash/maphash"
 	"reflect"
 	"slices"
 )
@@ -235,8 +236,8 @@ func SetFlatMap[T comparable, U any](s map[T]struct{}, f func(T) []U) []U {
 	return SliceFlatMap(SetElements(s), f)
 }
 
-// SetReduceInto is `Set.reduce(into:_:)` with a reference-typed accumulator.
-func SetReduceInto[T comparable, A any](s map[T]struct{}, init A, f func(A, T)) A {
+// SetReduceInto is `Set.reduce(into:_:)`; f receives the inout accumulator as a pointer.
+func SetReduceInto[T comparable, A any](s map[T]struct{}, init A, f func(*A, T)) A {
 	return SliceReduceInto(SetElements(s), init, f)
 }
 
@@ -245,8 +246,8 @@ func SetSortedBy[T comparable](s map[T]struct{}, less func(T, T) bool) []T {
 	return SliceSortedBy(SetElements(s), less)
 }
 
-// MapReduceInto is `dict.reduce(into:_:)` with a reference-typed accumulator.
-func MapReduceInto[K comparable, V, A any](m map[K]V, init A, f func(A, struct {
+// MapReduceInto is `dict.reduce(into:_:)`; f receives the inout accumulator as a pointer.
+func MapReduceInto[K comparable, V, A any](m map[K]V, init A, f func(*A, struct {
 	F0 K
 	F1 V
 })) A {
@@ -359,8 +360,8 @@ func KeysLazy[K any](ks []K) []K { return ks }
 // ValuesCompactMap is `dict.values.compactMap`.
 func ValuesCompactMap[V, U any](vs []V, f func(V) *U) []U { return SliceCompactMap(vs, f) }
 
-// ValuesReduceInto is `dict.values.reduce(into:_:)` with a reference-typed accumulator.
-func ValuesReduceInto[V, A any](vs []V, init A, f func(A, V)) A { return SliceReduceInto(vs, init, f) }
+// ValuesReduceInto is `dict.values.reduce(into:_:)`; f receives the inout accumulator as a pointer.
+func ValuesReduceInto[V, A any](vs []V, init A, f func(*A, V)) A { return SliceReduceInto(vs, init, f) }
 
 // ValuesFirstWhere is `dict.values.first(where:)`.
 func ValuesFirstWhere[V any](vs []V, f func(V) bool) *V { return SliceFirstWhere(vs, f) }
@@ -594,3 +595,52 @@ func ObjectIdentifierInit(t Type) any { return t.Reflect() }
 
 // AssertionFailure is Swift `assertionFailure`, which does nothing in optimized (-O) builds.
 func AssertionFailure(msg ...string) {}
+
+// IndexingIterator is Swift `IndexingIterator` over an Array.
+type IndexingIterator[T any] struct {
+	Elements []T
+	Position int
+}
+
+// SliceMakeIterator is `Array.makeIterator()`; the iterator holds its own copy of the array.
+func SliceMakeIterator[T any](xs []T) IndexingIterator[T] {
+	return IndexingIterator[T]{Elements: slices.Clone(xs)}
+}
+
+// IndexingIteratorNext is `IndexingIterator.next()`.
+func IndexingIteratorNext[T any](it *IndexingIterator[T]) *T {
+	if it.Position >= len(it.Elements) {
+		return nil
+	}
+	v := it.Elements[it.Position]
+	it.Position++
+	return &v
+}
+
+var hasherSeed = maphash.MakeSeed()
+
+// Hasher is Swift `Hasher`, seeded once per process.
+type Hasher struct{ h maphash.Hash }
+
+func hasherIn(h *any) *Hasher {
+	if hh, ok := (*h).(*Hasher); ok {
+		return hh
+	}
+	hh := &Hasher{}
+	hh.h.SetSeed(hasherSeed)
+	*h = hh
+	return hh
+}
+
+// HasherCombine is `Hasher.combine(_:)`: a value with a `Hash(*any)` method feeds itself, as Swift's
+// `hash(into:)` does; any other value is hashed by Go equality.
+func HasherCombine[T comparable](h *any, v T) {
+	if hv, ok := any(v).(interface{ Hash(*any) }); ok {
+		hv.Hash(h)
+		return
+	}
+	maphash.WriteComparable(&hasherIn(h).h, v)
+}
+
+// HasherFinalize is `Hasher.finalize()`.
+func HasherFinalize(h any) int { return int(hasherIn(&h).h.Sum64()) }
