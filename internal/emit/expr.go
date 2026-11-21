@@ -528,9 +528,6 @@ func (e *fileEmitter) recvExpr(base ast.Node) string {
 
 // recvArg renders a receiver passed as a function argument (pointer when mutated).
 func (e *fileEmitter) recvArg(base ast.Node) string {
-	if base.Kind() == "inout_expr" {
-		return "&" + e.lvalue(base.Child("sub_expr"))
-	}
 	return e.expr(base)
 }
 
@@ -1757,10 +1754,13 @@ func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
 			return call, true
 		}
 	}
-	lv := e.lvalue(l)
 	if info, pfx := e.lookup(d.Str("decl_usr")); info != nil {
-		return pfx + info.GoName + "(&" + lv + ", " + rs + ")", true
+		if as[0].node.Kind() == "inout_expr" {
+			return pfx + info.GoName + "(" + e.expr(as[0].node) + ", " + rs + ")", true
+		}
+		return pfx + info.GoName + "(&" + e.lvalue(l) + ", " + rs + ")", true
 	}
+	lv := e.lvalue(l)
 	if lt.Kind == types.Named && isIntegerName(lt.Name) || base == "+" && e.m.Recv(lt) == "Slice" || len(base) == 2 && base[0] == '&' {
 		return lv + " = " + combine(lv), true
 	}
