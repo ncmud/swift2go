@@ -1,0 +1,212 @@
+package swiftrt
+
+import (
+	"reflect"
+	"testing"
+)
+
+type copyClass struct{ n int }
+
+func (*copyClass) SwiftClass() {}
+
+type copyInner struct {
+	Opt  *int
+	List []int
+}
+
+type copyOuter struct {
+	Name    string
+	Inner   copyInner
+	Nested  [][]int
+	ByKey   map[string]copyInner
+	Any     any
+	Ref     *copyClass
+	OptBox  *copyInner
+	Pair    [2]copyInner
+	private []int
+}
+
+type copyNode struct {
+	Value    int
+	Children []copyNode
+	Next     *copyNode
+}
+
+type copyPlain struct {
+	A int
+	B string
+	C [3]float64
+	D *copyClass
+}
+
+func newCopyOuter() copyOuter {
+	one, two := 1, 2
+	return copyOuter{
+		Name:    "a",
+		Inner:   copyInner{Opt: &one, List: []int{1, 2, 3}},
+		Nested:  [][]int{{1}, {2, 3}},
+		ByKey:   map[string]copyInner{"k": {Opt: &two, List: []int{4}}},
+		Any:     copyInner{List: []int{5}},
+		Ref:     &copyClass{n: 1},
+		OptBox:  &copyInner{List: []int{6}},
+		Pair:    [2]copyInner{{List: []int{7}}, {List: []int{8}}},
+		private: []int{9},
+	}
+}
+
+func TestCopyUnsharesEveryValuePart(t *testing.T) {
+	orig := newCopyOuter()
+	want := newCopyOuter()
+	c := Copy(orig)
+	if !reflect.DeepEqual(c, orig) {
+		t.Fatalf("copy differs from original: %+v", c)
+	}
+
+	*c.Inner.Opt = 100
+	c.Inner.List[0] = 100
+	c.Nested[1][0] = 100
+	c.ByKey["k"].List[0] = 100
+	*c.ByKey["k"].Opt = 100
+	c.ByKey["new"] = copyInner{}
+	c.Any.(copyInner).List[0] = 100
+	c.OptBox.List[0] = 100
+	c.Pair[1].List[0] = 100
+
+	want.Ref, want.private = orig.Ref, orig.private
+	if !reflect.DeepEqual(orig, want) {
+		t.Fatalf("mutating the copy changed the original: %+v", orig)
+	}
+	if c.Ref != orig.Ref {
+		t.Fatal("class reference lost its identity")
+	}
+}
+
+func TestCopyOriginalMutationsStayOutOfTheCopy(t *testing.T) {
+	orig := newCopyOuter()
+	c := Copy(orig)
+	want := newCopyOuter()
+	want.Ref, want.private = c.Ref, c.private
+
+	*orig.Inner.Opt = 100
+	orig.Inner.List[0] = 100
+	orig.Nested[0][0] = 100
+	orig.ByKey["k"].List[0] = 100
+	orig.Any.(copyInner).List[0] = 100
+	orig.OptBox.List[0] = 100
+	orig.Pair[0].List[0] = 100
+
+	if !reflect.DeepEqual(c, want) {
+		t.Fatalf("mutating the original changed the copy: %+v", c)
+	}
+}
+
+func TestCopyKeepsNilAndEmpty(t *testing.T) {
+	var zero copyOuter
+	c := Copy(zero)
+	if c.Inner.List != nil || c.ByKey != nil || c.Any != nil || c.OptBox != nil || c.Nested != nil {
+		t.Fatalf("nil parts became non-nil: %+v", c)
+	}
+	empty := []int{}
+	if got := Copy(empty); got == nil || len(got) != 0 {
+		t.Fatalf("empty slice became %v", got)
+	}
+}
+
+func TestCopyRecursiveTypes(t *testing.T) {
+	orig := copyNode{Value: 1, Children: []copyNode{{Value: 2, Children: []copyNode{{Value: 3}}}}, Next: &copyNode{Value: 4, Next: &copyNode{Value: 5}}}
+	c := Copy(orig)
+	c.Children[0].Children[0].Value = 30
+	c.Next.Next.Value = 50
+	if orig.Children[0].Children[0].Value != 3 || orig.Next.Next.Value != 5 {
+		t.Fatalf("recursive copy shares storage: %+v", orig)
+	}
+	if c.Children[0].Value != 2 || c.Next.Value != 4 {
+		t.Fatalf("recursive copy lost values: %+v", c)
+	}
+}
+
+func TestCopyTopLevelContainers(t *testing.T) {
+	s := []copyInner{{List: []int{1}}}
+	cs := Copy(s)
+	cs[0].List[0] = 9
+	if s[0].List[0] != 1 {
+		t.Fatal("slice of structs shares element storage")
+	}
+
+	m := map[int][]int{1: {1}}
+	cm := Copy(m)
+	cm[1][0] = 9
+	cm[2] = nil
+	if m[1][0] != 1 || len(m) != 1 {
+		t.Fatal("map shares storage")
+	}
+
+	one := 1
+	p := Copy(&one)
+	*p = 9
+	if one != 1 {
+		t.Fatal("optional pointer shares its target")
+	}
+
+	ref := &copyClass{n: 1}
+	if Copy(ref) != ref {
+		t.Fatal("class reference was copied")
+	}
+
+	var a any = []int{1}
+	ca := Copy(a)
+	ca.([]int)[0] = 9
+	if a.([]int)[0] != 1 {
+		t.Fatal("interface holding a slice shares storage")
+	}
+}
+
+func TestNeedsDeepCopy(t *testing.T) {
+	for _, tc := range []struct {
+		t    reflect.Type
+		deep bool
+	}{
+		{reflect.TypeFor[copyPlain](), false},
+		{reflect.TypeFor[[4]copyPlain](), false},
+		{reflect.TypeFor[*copyClass](), false},
+		{reflect.TypeFor[copyInner](), true},
+		{reflect.TypeFor[copyNode](), true},
+		{reflect.TypeFor[[2]copyInner](), true},
+		{reflect.TypeFor[any](), true},
+	} {
+		if got := needsDeepCopy(tc.t); got != tc.deep {
+			t.Errorf("needsDeepCopy(%v) = %v, want %v", tc.t, got, tc.deep)
+		}
+	}
+}
+
+func TestCopyPlainTypeDoesNotAllocate(t *testing.T) {
+	v := copyPlain{A: 1, B: "b", D: &copyClass{}}
+	if n := testing.AllocsPerRun(100, func() { v = Copy(v) }); n != 0 {
+		t.Fatalf("plain copy allocated %v times", n)
+	}
+}
+
+func TestCopyAllocatesOnlyForSharedParts(t *testing.T) {
+	one := 1
+	v := struct {
+		Big [32]int64
+		Opt *int
+	}{Opt: &one}
+	// One allocation for the pointer target; the struct itself must not be boxed.
+	if n := testing.AllocsPerRun(100, func() { v = Copy(v) }); n > 2 {
+		t.Fatalf("deep copy allocated %v times", n)
+	}
+}
+
+func BenchmarkCopyStructWithOptional(b *testing.B) {
+	one := 1
+	v := struct {
+		Big [32]int64
+		Opt *int
+	}{Opt: &one}
+	b.ReportAllocs()
+	for b.Loop() {
+		v = Copy(v)
+	}
+}
