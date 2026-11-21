@@ -712,7 +712,15 @@ func (e *fileEmitter) closure(n ast.Node) string {
 		if name == "_" || name == "" {
 			name = fmt.Sprintf("_p%d", i)
 		}
-		params = append(params, name+" "+e.m.GoType(e.m.typeOf(p.Str("interface_type")), e.generics))
+		pt := e.m.GoType(e.m.typeOf(p.Str("interface_type")), e.generics)
+		if p.Bool("inout") {
+			pt = "*" + pt
+			if e.inoutParams == nil {
+				e.inoutParams = map[string]bool{}
+			}
+			e.inoutParams[p.Name()] = true
+		}
+		params = append(params, name+" "+pt)
 	}
 	res := ""
 	if ft.Kind == types.Func {
