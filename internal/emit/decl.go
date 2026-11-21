@@ -28,6 +28,7 @@ type fileEmitter struct {
 	extraDecls    strings.Builder         // package-level declarations hoisted out of function bodies
 	localGenerics map[string]localGeneric // generic local functions, by Swift name
 	renames       map[string]string       // local names that refer to another Go variable here
+	observing     *DeclInfo               // the property whose setter or observers are being emitted
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
@@ -1003,6 +1004,9 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 
 // setterVar emits SetX for a computed property's setter or a stored property's observers.
 func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
+	saveObs := e.observing
+	e.observing = info
+	defer func() { e.observing = saveObs }()
 	var set, will, did ast.Node
 	for _, a := range n.List("accessors") {
 		switch {

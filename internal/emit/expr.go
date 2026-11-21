@@ -343,12 +343,15 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	case "default_argument_expr":
 		return e.defaultArg(n)
 	case "assign_expr":
-		saved := e.b
-		e.b = strings.Builder{}
+		saved, savedPost := e.b, e.post
+		e.b, e.post = strings.Builder{}, nil
 		e.assign(n)
+		for _, p := range e.post {
+			e.w("%s\n", p)
+		}
 		s := e.b.String()
-		e.b = saved
-		return "func() struct{} { " + strings.TrimSpace(s) + "; return struct{}{} }()"
+		e.b, e.post = saved, savedPost
+		return "func() struct{} {\n" + strings.TrimSpace(s) + "\nreturn struct{}{}\n}()"
 	case "try_expr", "force_try_expr", "optional_try_expr":
 		return e.tryExpr(n)
 	case "is_expr":
@@ -653,6 +656,15 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		return e.declRef(d, n)
 	case "member_ref_expr":
 		info, pfx := e.lookup(n.Child("decl").Str("decl_usr"))
+		if info != nil && info.Kind == "var_decl" && !info.Computed && info.Observed && !info.Static && !e.inInit && e.observing != info {
+			// Mutating part of an observed property runs its observers: mutate a copy, then set it.
+			tmp := e.newTmp("wb")
+			e.w("%s := swiftrt.Copy(%s)\n", tmp, e.expr(n))
+			if call, ok := e.setterCall(n, tmp); ok {
+				e.post = append(e.post, call)
+				return tmp
+			}
+		}
 		if info != nil && info.Kind == "var_decl" && !info.Computed {
 			if info.Static && info.Lazy {
 				return lazyCell(info, pfx)
