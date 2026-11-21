@@ -72,6 +72,9 @@ type Module struct {
 
 // IsOptionSet reports whether the qualified Swift type conforms to OptionSet, in this module or a dependency.
 func (m *Module) IsOptionSet(q string) bool {
+	if foreignOptionSets[q] {
+		return true
+	}
 	for _, mod := range append([]*Module{m}, m.Deps...) {
 		if mod.typeKinds[q+"#OptionSet"] != "" {
 			return true
@@ -910,4 +913,14 @@ func hasPayloadCase(n ast.Node) bool {
 		}
 	})
 	return payload
+}
+
+// foreignOptionSets are the imported OptionSet types the runtime models as `struct{ RawValue R }`.
+var foreignOptionSets = map[string]bool{
+	"Foundation.JSONEncoder.OutputFormatting":   true,
+	"Foundation.ISO8601DateFormatter.Options":   true,
+	"YYJSON.YYJSONSerialization.ReadingOptions": true,
+	"YYJSON.YYJSONSerialization.WritingOptions": true,
+	"YYJSON.YYJSONWriteOptions":                 true,
+	"YYJSON.GameJSONEncoder.OutputFormatting":   true,
 }

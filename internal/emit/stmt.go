@@ -83,6 +83,8 @@ func (e *fileEmitter) block(n ast.Node) {
 
 func (e *fileEmitter) stmt(n ast.Node) {
 	switch n.Kind() {
+	case "inject_into_optional":
+		e.stmt(n.Child("sub_expr"))
 	case "brace_stmt":
 		e.block(n)
 		e.w("\n")
@@ -100,7 +102,11 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	case "then_stmt":
 		if r := n.Child("result"); isVoidGo(e.exprGoType(r)) {
 			e.stmt(r)
-			e.w("return\n")
+			if e.resultType == "*struct{}" {
+				e.w("return &struct{}{}\n")
+			} else {
+				e.w("return\n")
+			}
 		} else {
 			e.w("return %s\n", e.expr(r))
 		}
