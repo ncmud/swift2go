@@ -33,6 +33,7 @@ type fileEmitter struct {
 	where       string
 	inoutParams map[string]bool
 	typeParams  []string
+	typeBounds  map[string]string // type parameter → Go constraint, when not `any`
 	hoisted     []ast.Node
 }
 
@@ -250,7 +251,10 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 
 // protocolForwarders gives a conforming type the protocol-extension default methods it does not define.
 func (e *fileEmitter) protocolForwarders(n ast.Node, self *DeclInfo) {
-	q := e.m.qualify(self.Owner, n.Name())
+	e.protocolForwardersFor(n, e.m.qualify(self.Owner, n.Name()))
+}
+
+func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 	if e.m.IsPayloadEnum(q) {
 		return
 	}
@@ -270,7 +274,8 @@ func (e *fileEmitter) protocolForwarders(n ast.Node, self *DeclInfo) {
 			if pm.Pkg != e.m.Pkg {
 				pfx = pm.Pkg + "."
 			}
-			e.propertyGetters(n, self, q, proto, pm, pfx)
+			e.propertyGetters(n, nil, q, proto, pm, pfx)
+			e.staticForwarders(q, proto, pm, pfx)
 			for _, info := range pm.sortedDecls() {
 				if !info.ProtoExt || info.Owner != proto || info.Kind != "func_decl" || defined[info.Node.Name()] {
 					continue
@@ -451,14 +456,35 @@ func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) 
 func (e *fileEmitter) protocolDecl(n ast.Node) {
 	info := e.info(n)
 	e.w("type %s interface {\n", info.GoName)
+	for _, p := range n.Child("inherits").Strings("protocols") {
+		pn := e.m.demangle(p)
+		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
+			if mod.typeKinds[pn] == "protocol" {
+				g := mod.LocalTypeName(pn)
+				if mod.Pkg != e.m.Pkg {
+					e.m.importPkgs[mod.Pkg] = mod.ImportPath
+					g = mod.Pkg + "." + g
+				}
+				e.w("\t%s\n", g)
+			}
+		}
+	}
 	for _, mem := range n.List("members") {
 		switch mem.Kind() {
 		case "func_decl":
 			mi := e.info(mem)
 			params, _ := e.paramList(mem)
-			e.w("\t%s(%s) %s\n", mi.GoName, params, e.resultGo(mem))
+			name := mi.GoName
+			if mi.Static {
+				name = staticReqName(mi)
+			}
+			e.w("\t%s(%s) %s\n", name, params, e.resultGo(mem))
 		case "var_decl":
 			mi := e.info(mem)
+			if mi.Static {
+				e.w("\t%s() %s\n", staticReqName(mi), e.m.GoType(e.m.typeOf(mem.Str("interface_type")), nil))
+				continue
+			}
 			e.w("\tGet%s() %s\n", mi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), nil))
 		}
 	}
@@ -481,6 +507,9 @@ func (e *fileEmitter) extensionDecl(n ast.Node) {
 		}
 	}
 	e.members(n, self)
+	if self.Kind != "foreign" && self.Kind != "protocol_ext" && len(n.Child("inherits").List("conformances")) > 0 {
+		e.protocolForwardersFor(n, q)
+	}
 }
 
 func (e *fileEmitter) globalBinding(n ast.Node) {
@@ -514,6 +543,7 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 		g[k] = v
 	}
 	e.typeParams = nil
+	e.typeBounds = map[string]string{}
 	own := map[string]bool{}
 	for _, gp := range fn.Child("generic_signature").Strings("generic_params") {
 		name := e.m.demangle(gp)
@@ -551,6 +581,10 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			continue
 		}
 		if strings.HasPrefix(proto, e.m.Name+".") {
+			if own[param] && e.m.HasStaticRequirements(proto) {
+				e.typeBounds[g[param]] = e.m.LocalTypeName(proto)
+				continue
+			}
 			dropParam(param)
 			g[param] = e.m.LocalTypeName(proto)
 		} else if _, ok := g[param]; !ok {
@@ -576,13 +610,17 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 		}
 		e.typeParams = slices.DeleteFunc(e.typeParams, func(p string) bool { return p == tp })
 	}
-	if fn.Child("implicit_self_decl") != nil && !fn.Bool("static") && len(e.typeParams) > 0 {
+	if fn.Child("implicit_self_decl") != nil && !fn.Bool("static") && len(e.typeParams) > 0 && !e.freeSelfFunc(fn) {
 		for k, v := range g {
 			for _, tp := range e.typeParams {
+				bound := "any"
+				if b, ok := e.typeBounds[tp]; ok {
+					bound = b
+				}
 				if v == tp {
-					g[k] = "any"
+					g[k] = bound
 				} else if v == "[]"+tp {
-					g[k] = "[]any"
+					g[k] = "[]" + bound
 				}
 			}
 		}
@@ -595,7 +633,15 @@ func (e *fileEmitter) typeParamList() string {
 	if len(e.typeParams) == 0 {
 		return ""
 	}
-	return "[" + strings.Join(e.typeParams, ", ") + " any]"
+	parts := make([]string, len(e.typeParams))
+	for i, tp := range e.typeParams {
+		bound := "any"
+		if b, ok := e.typeBounds[tp]; ok {
+			bound = b
+		}
+		parts[i] = tp + " " + bound
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func (e *fileEmitter) paramList(fn ast.Node) (decl string, names string) {
@@ -639,17 +685,21 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 	res := e.resultGo(n)
 	e.where = shortPath(e.file.Filename) + ":" + info.Owner + "." + n.Name()
 	switch {
-	case self == nil || info.Static:
+	case self == nil || info.Static && !info.ProtoExt:
 		e.w("func %s%s(%s) %s ", info.GoName, e.typeParamList(), params, res)
 	case self.Kind == "foreign" || info.FreeSelf():
 		selfT := self.GoName
 		if info.ProtoExt {
 			selfT = e.m.LocalTypeName(info.Owner)
 		}
-		if info.Mutating && !info.ProtoExt {
+		if info.Mutating && !info.ProtoExt && !strings.HasPrefix(selfT, "*") {
 			selfT = "*" + selfT
+			if e.inoutParams == nil {
+				e.inoutParams = map[string]bool{}
+			}
+			e.inoutParams["self"] = true
 		}
-		e.w("func %s(self %s%s) %s ", info.GoName, selfT, prefixComma(params), res)
+		e.w("func %s%s(self %s%s) %s ", info.GoName, e.typeParamList(), selfT, prefixComma(params), res)
 	default:
 		recv := self.GoName
 		if info.Mutating || self.Kind == "class_decl" {
@@ -765,7 +815,7 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	}
 	res := e.m.GoType(e.m.typeOf(n.Str("interface_type")), e.generics)
 	switch {
-	case self == nil || info.Static:
+	case self == nil || info.Static && !info.ProtoExt:
 		e.w("func %s() %s ", info.GoName, res)
 	case self.Kind == "foreign" || info.FreeSelf():
 		selfT := self.GoName
@@ -1144,4 +1194,74 @@ func prefixCommaTail(params, last string) string {
 		return last
 	}
 	return params + ", " + last
+}
+
+func (e *fileEmitter) freeSelfFunc(fn ast.Node) bool {
+	info := e.m.decls[fn.Str("usr")]
+	return info != nil && info.FreeSelf()
+}
+
+// staticReqName is the interface method that carries a protocol's static requirement.
+func staticReqName(info *DeclInfo) string {
+	return "Static" + capitalize(goSafe(info.Node.Name()))
+}
+
+// staticForwarders gives a conformer methods for its protocol's static requirements, so generic code
+// can reach them through a type parameter's zero value.
+func (e *fileEmitter) staticForwarders(q, proto string, pm *Module, pfx string) {
+	recv := e.m.GoType(&types.Type{Kind: types.Named, Name: q}, nil)
+	selfArg := "self"
+	if e.m.HasMutatingMethods(q) {
+		selfArg = "swiftrt.Ref(self)"
+	}
+	for _, r := range pm.protoReqs[proto] {
+		if !(r.Kind() == "func_decl" || r.Kind() == "var_decl") || !r.Bool("static") {
+			continue
+		}
+		req := pm.decls[r.Str("usr")]
+		if req == nil {
+			continue
+		}
+		saveM := e.m
+		e.m = pm
+		var params, args, res string
+		if r.Kind() == "func_decl" {
+			params, args = e.paramList(r)
+			res = e.resultGo(r)
+		} else {
+			res = e.m.GoType(e.m.typeOf(r.Str("interface_type")), nil)
+		}
+		e.m = saveM
+		target, isDefault := "", false
+		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
+			mpfx := ""
+			if mod.Pkg != e.m.Pkg {
+				mpfx = mod.Pkg + "."
+			}
+			for _, d := range mod.sortedDecls() {
+				if d.Kind != r.Kind() || !d.Static || d.Node == nil || d.Node.Name() != r.Name() {
+					continue
+				}
+				switch {
+				case d.Owner == q && !d.ProtoExt && target == "" || d.Owner == q && !d.ProtoExt && isDefault:
+					target, isDefault = mpfx+d.GoName, false
+					if d.Kind == "var_decl" && (d.Computed || d.Lazy) {
+						target += "()"
+					} else if d.Kind == "func_decl" {
+						target += "(" + args + ")"
+					}
+				case d.ProtoExt && d.Owner == proto && target == "":
+					target, isDefault = mpfx+d.GoName+"("+selfArg+prefixComma(args)+")", true
+				}
+			}
+		}
+		if target == "" {
+			continue
+		}
+		ret := "return "
+		if res == "" {
+			ret = ""
+		}
+		e.w("func (self %s) %s(%s) %s { %s%s }\n\n", recv, staticReqName(req), params, res, ret, target)
+	}
 }

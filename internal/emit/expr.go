@@ -355,6 +355,9 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 	name := d.Str("base_name")
 	if usr == "" {
 		if name == "self" {
+			if e.inoutParams["self"] {
+				return "(*self)"
+			}
 			return "self"
 		}
 		if e.inoutParams[name] {
@@ -415,6 +418,10 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	info, pfx := e.lookup(usr)
 	if info != nil && info.Kind == "var_decl" {
 		switch {
+		case info.Static && info.OwnerKind == "protocol":
+			return e.metaReceiver(base) + "." + staticReqName(info) + "()"
+		case info.Static && info.ProtoExt:
+			return pfx + info.GoName + "(" + e.metaReceiver(base) + ")"
 		case info.Static:
 			if info.Computed || info.Lazy {
 				return pfx + info.GoName + "()"
@@ -469,7 +476,7 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		d := n.Child("decl")
 		if d.Str("decl_usr") == "" {
 			name := d.Str("base_name")
-			if name == "self" {
+			if name == "self" && !e.inoutParams["self"] {
 				return "self"
 			}
 			if e.inoutParams[name] {
@@ -1018,6 +1025,14 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 		switch {
 		case info.Kind == "enum_element_decl":
 			return e.payloadCtor(info, pfx, as)
+		case info.Static && info.OwnerKind == "protocol":
+			call := e.metaReceiver(base) + "." + staticReqName(info) + "(" + strings.Join(ss, ", ") + ")"
+			if gt := e.exprGoType(n); gt != "" && !strings.HasPrefix(gt, "any") && strings.HasPrefix(e.m.GoType(e.m.typeOf(info.Node.Str("result")), nil), "any") {
+				return "swiftrt.MustAs[" + gt + "](" + call + ")"
+			}
+			return call
+		case info.Static && info.ProtoExt:
+			return pfx + info.GoName + "(" + strings.Join(append([]string{e.metaReceiver(base)}, ss...), ", ") + ")"
 		case info.Static || info.Owner == "":
 			return pfx + info.GoName + "(" + strings.Join(ss, ", ") + ")"
 		case info.FreeSelf():
@@ -1680,4 +1695,31 @@ func isIdentityCapture(c ast.Node) bool {
 		init = init.Child("sub_expr")
 	}
 	return init != nil && init.Kind() == "declref_expr" && init.Child("decl").Str("base_name") == patternName(pes[0].Child("pattern"))
+}
+
+// metaReceiver turns a metatype expression (`A.self`, `Self`, `Foo.self`) into a value whose methods
+// carry the type's static protocol requirements: the zero value of the type.
+func (e *fileEmitter) metaReceiver(base ast.Node) string {
+	for base != nil && (base.Kind() == "load_expr" || base.Kind() == "paren_expr" || base.Kind() == "dot_self_expr" || base.Kind() == "function_conversion_expr" || base.Kind() == "metatype_conversion_expr") {
+		base = base.Child("sub_expr")
+	}
+	if base == nil {
+		return "self"
+	}
+	if base.Kind() == "declref_expr" && base.Child("decl").Str("decl_usr") == "" && base.Child("decl").Str("base_name") == "self" {
+		return "self"
+	}
+	t := e.m.typeOf(base.Type())
+	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
+		inner := t.Args[0]
+		gt := e.m.GoType(inner, e.generics)
+		if inner.Kind == types.Generic && strings.HasPrefix(gt, "any") {
+			return "self"
+		}
+		if inner.Kind == types.Named && e.m.HasMutatingMethods(inner.Name) {
+			return "new(" + gt + ")"
+		}
+		return "(*new(" + gt + "))"
+	}
+	return e.expr(base)
 }
