@@ -197,6 +197,67 @@ func SetIntersectionSet[T comparable](a, b map[T]struct{}) map[T]struct{} {
 	return SetIntersection(a, SetElements(b))
 }
 
+// SetSubtractingSetSet is `Set.subtracting(_:)` with a Set argument: a new set of the elements of a
+// that are not in b.
+func SetSubtractingSetSet[T comparable](a, b map[T]struct{}) map[T]struct{} {
+	out := make(map[T]struct{}, len(a))
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
+// SetSubtractSetSet is `Set.subtract(_:)` with a Set argument: it removes b's elements from a.
+func SetSubtractSetSet[T comparable](a *map[T]struct{}, b map[T]struct{}) {
+	SetSubtractSet(a, b)
+}
+
+// SetIntersectionSetSet is `Set.intersection(_:)` with a Set argument: a new set of the elements in
+// both a and b.
+func SetIntersectionSetSet[T comparable](a, b map[T]struct{}) map[T]struct{} {
+	out := map[T]struct{}{}
+	for k := range a {
+		if _, ok := b[k]; ok {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
+// SetFormIntersectionSet is `Set.formIntersection(_:)` with a Set argument: it keeps only the
+// elements of a that are also in b.
+func SetFormIntersectionSet[T comparable](a *map[T]struct{}, b map[T]struct{}) {
+	*a = SetIntersectionSetSet(*a, b)
+}
+
+// SetSymmetricDifferenceSet is `Set.symmetricDifference(_:)` with a Set argument: a new set of the
+// elements in exactly one of a and b.
+func SetSymmetricDifferenceSet[T comparable](a, b map[T]struct{}) map[T]struct{} {
+	out := map[T]struct{}{}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			out[k] = struct{}{}
+		}
+	}
+	for k := range b {
+		if _, ok := a[k]; !ok {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
+// SetIsSubsetSet is `Set.isSubset(of:)` with a Set argument: whether every element of a is in b.
+func SetIsSubsetSet[T comparable](a, b map[T]struct{}) bool { return SetIsSubsetOf(a, b) }
+
+// SetIsSupersetSet is `Set.isSuperset(of:)` with a Set argument: whether every element of b is in a.
+func SetIsSupersetSet[T comparable](a, b map[T]struct{}) bool { return SetIsSubsetOf(b, a) }
+
+// SetIsDisjointSet is `Set.isDisjoint(with:)` with a Set argument: whether a and b share no element.
+func SetIsDisjointSet[T comparable](a, b map[T]struct{}) bool { return SetIsDisjointWith(a, b) }
+
 // SetRemoveAll is `Set.removeAll()`.
 func SetRemoveAll[T comparable](s *map[T]struct{}) { *s = map[T]struct{}{} }
 
@@ -384,6 +445,12 @@ func MutexInitInt[T any](v T) *Mutex[T] { return MutexInit(v) }
 
 // MutexInitBool is Synchronization `Mutex(_:)` with a Bool state.
 func MutexInitBool[T any](v T) *Mutex[T] { return MutexInit(v) }
+
+// MutexInitOpt is Synchronization `Mutex(_:)` with an Optional state; T is the Optional's Go type.
+func MutexInitOpt[T any](v T) *Mutex[T] { return MutexInit(v) }
+
+// MutexInitRef is Synchronization `Mutex(_:)` with a reference or closure state.
+func MutexInitRef[T any](v T) *Mutex[T] { return MutexInit(v) }
 
 // StringEncoding is Foundation `String.Encoding`.
 type StringEncoding int
