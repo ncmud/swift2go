@@ -2,6 +2,7 @@ package emit
 
 import (
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -86,7 +87,36 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	case "while_stmt", "repeat_while_stmt", "for_each_stmt", "switch_stmt":
 		e.jumpDepth++
 		defer func() { e.jumpDepth-- }()
+		if label := e.stmtLabel(n); label != "" && e.labelUsed(n, label) {
+			if e.doRet != nil {
+				e.doRet.inner[label] = true
+			}
+			saved := e.b
+			e.b = strings.Builder{}
+			e.stmtUnlabeled(n)
+			text := e.b.String()
+			e.b = saved
+			e.w("%s", insertLabel(text, label))
+			return
+		}
 	}
+	e.stmtUnlabeled(n)
+}
+
+// insertLabel puts "label:" before the first for or switch statement in text.
+func insertLabel(text, label string) string {
+	lines := strings.SplitAfter(text, "\n")
+	for i, l := range lines {
+		t := strings.TrimLeft(l, "\t ")
+		if strings.HasPrefix(t, "for ") || strings.HasPrefix(t, "for {") || strings.HasPrefix(t, "switch ") || strings.HasPrefix(t, "switch {") {
+			lines[i] = label + ":\n" + l
+			return strings.Join(lines, "")
+		}
+	}
+	return text
+}
+
+func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	switch n.Kind() {
 	case "inject_into_optional":
 		e.stmt(n.Child("sub_expr"))
@@ -132,9 +162,13 @@ func (e *fileEmitter) stmt(n ast.Node) {
 		e.switchStmt(n)
 	case "break_stmt", "continue_stmt":
 		jump := strings.TrimSuffix(n.Kind(), "_stmt")
-		if d := e.doRet; d != nil && e.jumpDepth == d.depth && n.Str("target_label") == "" {
+		if label := e.jumpLabel(n); label != "" {
+			jump += " " + label
+		}
+		label := e.jumpLabel(n)
+		if d := e.doRet; d != nil && (label == "" && e.jumpDepth == d.depth || label != "" && !d.inner[label]) {
 			// The do body runs in a Go closure: leave it and repeat the jump outside.
-			flag := d.flag + "_" + jump
+			flag := d.flag + "_" + strings.ReplaceAll(jump, " ", "_")
 			d.jumps[jump] = flag
 			e.w("%s = true\nreturn\n", flag)
 			break
@@ -1061,15 +1095,19 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 		e.w("var %s %s\n_ = %s\n", ret, e.resultType, ret)
 	}
 	e.w("%s := false\n", done)
-	for _, jump := range []string{"break", "continue"} {
-		e.w("%s_%s := false\n_ = %s_%s\n", done, jump, done, jump)
-	}
-	e.w("if err := swiftrt.Catch(func() ")
 	saveDo := e.doRet
-	do := &doReturn{val: ret, flag: done, depth: e.jumpDepth, jumps: map[string]string{}}
+	do := &doReturn{val: ret, flag: done, depth: e.jumpDepth, jumps: map[string]string{}, inner: map[string]bool{}}
+	saved := e.b
+	e.b = strings.Builder{}
 	e.doRet = do
 	e.block(n.Child("body"))
 	e.doRet = saveDo
+	body := e.b.String()
+	e.b = saved
+	for _, jump := range sortedKeys(do.jumps) {
+		e.w("%s := false\n", do.jumps[jump])
+	}
+	e.w("if err := swiftrt.Catch(func() %s", body)
 	e.w("); err != nil {\n")
 	matched := e.newTmp("caught")
 	e.w("%s := false\n", matched)
@@ -1113,10 +1151,8 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 	default:
 		e.w("if %s {\nreturn\n}\n", done)
 	}
-	for _, jump := range []string{"break", "continue"} {
-		if flag, ok := do.jumps[jump]; ok {
-			e.w("if %s {\n%s\n}\n", flag, jump)
-		}
+	for _, jump := range sortedKeys(do.jumps) {
+		e.w("if %s {\n%s\n}\n", do.jumps[jump], jump)
 	}
 	e.w("}\n")
 }
@@ -1126,6 +1162,16 @@ type doReturn struct {
 	val, flag string
 	depth     int               // jumpDepth when the do body began
 	jumps     map[string]string // break/continue flags the body set
+	inner     map[string]bool   // labels declared inside the body
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // setterCall renders an assignment to a computed or observed property as a call to its SetX.
@@ -1353,4 +1399,93 @@ func assertable(subj string) string {
 		return "(" + subj + ")"
 	}
 	return subj
+}
+
+func rangeStart(n ast.Node) (int, bool) {
+	r := n.Child("range")
+	if r == nil {
+		return 0, false
+	}
+	f, ok := r["start"].(float64)
+	return int(f), ok
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// jumpLabel is the label a `break name` or `continue name` names, read from the source because the
+// AST dump leaves labels out.
+func (e *fileEmitter) jumpLabel(n ast.Node) string {
+	off, ok := rangeStart(n)
+	src := e.m.sourceText(e.file.Filename)
+	if !ok || off >= len(src) {
+		return ""
+	}
+	i := off
+	for i < len(src) && isIdentByte(src[i]) {
+		i++
+	}
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	j := i
+	for j < len(src) && isIdentByte(src[j]) {
+		j++
+	}
+	label := string(src[i:j])
+	switch label {
+	case "", "case", "default", "return", "if", "else", "for", "while", "let", "var", "guard", "switch", "do", "try":
+		return ""
+	}
+	return label
+}
+
+// stmtLabel is the `name:` label written before a loop or switch, if any.
+func (e *fileEmitter) stmtLabel(n ast.Node) string {
+	off, ok := rangeStart(n)
+	src := e.m.sourceText(e.file.Filename)
+	if !ok || off > len(src) {
+		return ""
+	}
+	// The statement's range starts at its label: "name: for ...".
+	end := off
+	for end < len(src) && isIdentByte(src[end]) {
+		end++
+	}
+	if k := end; end > off {
+		for k < len(src) && (src[k] == ' ' || src[k] == '\t') {
+			k++
+		}
+		if k < len(src) && src[k] == ':' {
+			return string(src[off:end])
+		}
+	}
+	i := off - 1
+	for i >= 0 && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r') {
+		i--
+	}
+	if i < 0 || src[i] != ':' {
+		return ""
+	}
+	i--
+	for i >= 0 && (src[i] == ' ' || src[i] == '\t') {
+		i--
+	}
+	j := i + 1
+	for i >= 0 && isIdentByte(src[i]) {
+		i--
+	}
+	return string(src[i+1 : j])
+}
+
+// labelUsed reports whether a jump inside n names label.
+func (e *fileEmitter) labelUsed(n ast.Node, label string) bool {
+	used := false
+	ast.Walk(n, func(x ast.Node) {
+		if (x.Kind() == "break_stmt" || x.Kind() == "continue_stmt") && e.jumpLabel(x) == label {
+			used = true
+		}
+	})
+	return used
 }

@@ -65,6 +65,7 @@ type Module struct {
 	typeParamNames map[string][]string // generic struct/class → its Go type parameter names
 	lazyInits      map[string]bool     // owner|name of stored statics and globals with non-literal initializers
 	lineStarts     map[string][]int
+	sources        map[string][]byte
 	mutatingTypes  map[string]bool
 	overridden     map[string]bool // USRs of class members some subclass overrides
 	superOf        map[string]string
@@ -938,4 +939,17 @@ var foreignOptionSets = map[string]bool{
 	"YYJSON.YYJSONSerialization.WritingOptions": true,
 	"YYJSON.YYJSONWriteOptions":                 true,
 	"YYJSON.GameJSONEncoder.OutputFormatting":   true,
+}
+
+// sourceText returns a Swift source file's bytes, cached.
+func (m *Module) sourceText(file string) []byte {
+	if m.sources == nil {
+		m.sources = map[string][]byte{}
+	}
+	if b, ok := m.sources[file]; ok {
+		return b
+	}
+	b, _ := os.ReadFile(file)
+	m.sources[file] = b
+	return b
 }
