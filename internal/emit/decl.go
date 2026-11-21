@@ -30,6 +30,7 @@ type fileEmitter struct {
 	renames       map[string]string       // local names that refer to another Go variable here
 	observing     *DeclInfo               // the property whose setter or observers are being emitted
 	emittingFree  bool                    // the function being scoped is emitted as a free function
+	pendingOpens  int                     // scopes a statement opened that the enclosing block must close
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure

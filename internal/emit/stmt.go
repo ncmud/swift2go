@@ -37,6 +37,10 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 		e.post = nil
 		mark := len(e.slots)
 		e.stmt(s)
+		// A statement that opened scopes for its own rebinding (a guard binding a name twice) leaves
+		// them open for the statements after it.
+		opened += e.pendingOpens
+		e.pendingOpens = 0
 		if len(e.slots) > mark {
 			e.slots = e.slots[:mark]
 			e.w("_ = %s\n", e.m.Unsup("inout-slot-unwrapped", e.where, ""))
@@ -646,6 +650,11 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 		}
 	}
 	shadowed := map[string]string{}
+	boundHere := map[string]bool{}
+	// Scopes opened for rebinding stay open after the guard; report them once it is done, so the
+	// else bodies' own statement lists don't close them.
+	opens := 0
+	defer func() { e.pendingOpens += opens }()
 	elseBody := func() {
 		saved := e.renames
 		if len(shadowed) > 0 {
@@ -667,6 +676,18 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 		}
 		p := c.Child("pattern")
 		init := c.Child("initializer")
+		// `guard let (a, far) = x, let far = far`: the second binding needs a new Go scope.
+		for _, name := range patternNames(p) {
+			if boundHere[name] {
+				e.w("{\n")
+				opens++
+				boundHere = map[string]bool{}
+				break
+			}
+		}
+		for _, name := range patternNames(p) {
+			boundHere[name] = true
+		}
 		switch p.Kind() {
 		case "pattern_optional_some":
 			tmp := e.newTmp("opt")
@@ -1751,4 +1772,15 @@ func refutable(p ast.Node) bool {
 		}
 	})
 	return r
+}
+
+// patternNames lists the names a pattern binds.
+func patternNames(p ast.Node) []string {
+	var out []string
+	ast.Walk(p, func(x ast.Node) {
+		if x.Kind() == "pattern_named" {
+			out = append(out, goSafe(x.Child("name").Child("base_name").Str("name")))
+		}
+	})
+	return out
 }

@@ -42,3 +42,12 @@ func RefMapAny[T any, U any](p T, f func(T) U) *U {
 	v := f(p)
 	return &v
 }
+
+// OptDo is `optional.map(f)` with a Void closure: it runs f on the value, if any, and returns `()?`.
+func OptDo[T any](p *T, f func(T)) *struct{} {
+	if p == nil {
+		return nil
+	}
+	f(*p)
+	return &struct{}{}
+}
