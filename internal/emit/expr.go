@@ -953,6 +953,13 @@ func (e *fileEmitter) macro(n ast.Node) string {
 	name := n.Str("name")
 	as := e.args(n.Child("args"))
 	switch name {
+	case "dice":
+		// #dice(count, size, bonus) expands to Dice(count:size:bonus:)!, validated at compile time.
+		t := e.m.typeOf(n.Type())
+		if ctor, pfx := e.ctorWithLabels(t.Name, "count", "size", "bonus"); ctor != nil && len(as) == 3 {
+			ss, _ := e.argStrings(as, false)
+			return "(*swiftrt.Force(" + pfx + ctor.GoName + "(" + strings.Join(ss, ", ") + ")))"
+		}
 	case "expect", "require":
 		if len(as) == 0 {
 			break
@@ -1962,4 +1969,38 @@ func (e *fileEmitter) lessFunc(t *types.Type) string {
 		}
 	}
 	return ""
+}
+
+// ctorWithLabels finds a type's init with exactly these argument labels.
+func (e *fileEmitter) ctorWithLabels(owner string, labels ...string) (*DeclInfo, string) {
+	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
+		for _, d := range mod.sortedDecls() {
+			if d.Kind != "constructor_decl" || d.Owner != owner || d.Node == nil {
+				continue
+			}
+			ps := d.Node.Child("params").List("params")
+			if len(ps) != len(labels) {
+				continue
+			}
+			ok := true
+			for i, p := range ps {
+				l := p.Str("apiName")
+				if l == "" {
+					l = p.Name()
+				}
+				if l != labels[i] {
+					ok = false
+				}
+			}
+			if ok {
+				pfx := ""
+				if mod.Pkg != e.m.Pkg {
+					e.m.importPkgs[mod.Pkg] = mod.ImportPath
+					pfx = mod.Pkg + "."
+				}
+				return d, pfx
+			}
+		}
+	}
+	return nil, ""
 }
