@@ -9,12 +9,12 @@ import (
 // FileManager is Foundation `FileManager`.
 type FileManager struct{}
 
-// NSFileManagerCObjc is `FileManager.default`.
-var NSFileManagerCObjc = FileManager{}
+// NSFileManagerDefault is `FileManager.default`.
+var NSFileManagerDefault = FileManager{}
 
-// NSFileManagerCObjcAt is `FileManager.removeItem(at:)`: it removes the file, or the directory and
+// NSFileManagerRemoveItemAt is `FileManager.removeItem(at:)`: it removes the file, or the directory and
 // everything in it, throwing when nothing exists at the URL.
-func NSFileManagerCObjcAt(_ FileManager, u URL) {
+func NSFileManagerRemoveItemAt(_ FileManager, u URL) {
 	path := fileURLPath(u)
 	if _, err := os.Lstat(path); err != nil {
 		panic(Throw(err))
@@ -24,11 +24,11 @@ func NSFileManagerCObjcAt(_ FileManager, u URL) {
 	}
 }
 
-// NSFileManagerCObjcAtPathWithIntermediateDirectories is Foundation
+// NSFileManagerCreateDirectoryAtPathWithIntermediateDirectories is Foundation
 // `FileManager.createDirectory(atPath:withIntermediateDirectories:)`. With intermediates it creates
 // missing parents and accepts an existing directory; without, it throws when the parent is missing or
 // the path exists.
-func NSFileManagerCObjcAtPathWithIntermediateDirectories(_ FileManager, path string, intermediates bool) {
+func NSFileManagerCreateDirectoryAtPathWithIntermediateDirectories(_ FileManager, path string, intermediates bool) {
 	var err error
 	if intermediates {
 		err = os.MkdirAll(path, 0o777)
@@ -40,10 +40,10 @@ func NSFileManagerCObjcAtPathWithIntermediateDirectories(_ FileManager, path str
 	}
 }
 
-// NSFileManagerCObjcAtTo is Foundation `FileManager.copyItem(at:to:)`: it copies a file, a symbolic
+// NSFileManagerCopyItemAtTo is Foundation `FileManager.copyItem(at:to:)`: it copies a file, a symbolic
 // link, or a directory and everything in it. It throws NSCocoaErrorDomain 516 when the destination
 // exists and 260 when the source does not.
-func NSFileManagerCObjcAtTo(_ FileManager, src, dst URL) {
+func NSFileManagerCopyItemAtTo(_ FileManager, src, dst URL) {
 	from, to := fileURLPath(src), fileURLPath(dst)
 	if _, err := os.Lstat(from); err != nil {
 		panic(Throw(NSError{Domain: "NSCocoaErrorDomain", Code: 260, Msg: "The file couldn't be opened because there is no such file."}))

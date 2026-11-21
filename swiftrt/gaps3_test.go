@@ -147,13 +147,13 @@ func TestURLSessionDataFor(t *testing.T) {
 	if URLRequestValueForHTTPHeaderField(copyBefore, "Authorization") != nil {
 		t.Error("header write leaked into a copy")
 	}
-	config := NSURLSessionConfigurationCObjc
+	config := NSURLSessionConfigurationEphemeral
 	config.TimeoutIntervalForRequest = 5
 	session := NSURLSessionInitConfiguration(config)
-	defer NSURLSessionCObjc(session)
+	defer NSURLSessionFinishTasksAndInvalidate(session)
 	res := NSURLSessionDataFor(session, req)
 	http := *As[HTTPURLResponse](res.F1)
-	if NSHTTPURLResponseCObjc(http) != 429 || string(res.F0) != `{"retry_after":1.5}` {
+	if NSHTTPURLResponseStatusCode(http) != 429 || string(res.F0) != `{"retry_after":1.5}` {
 		t.Errorf("status %d body %s", http.StatusCode, res.F0)
 	}
 	if v := HTTPURLResponseValueForHTTPHeaderField(http, "x-ratelimit-remaining"); v == nil || *v != "4" {

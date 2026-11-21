@@ -240,8 +240,8 @@ func InstantDurationTo(a, b ContinuousClockInstant) Duration {
 	return Duration(time.Time(b).Sub(time.Time(a)))
 }
 
-// NSThreadCObjcForTimeInterval is Foundation `Thread.sleep(forTimeInterval:)`.
-func NSThreadCObjcForTimeInterval(s float64) { time.Sleep(time.Duration(s * 1e9)) }
+// NSThreadSleepForTimeInterval is Foundation `Thread.sleep(forTimeInterval:)`.
+func NSThreadSleepForTimeInterval(s float64) { time.Sleep(time.Duration(s * 1e9)) }
 
 // CFTime is C `time(nil)`.
 func CFTime(_ any) int { return int(time.Now().Unix()) }

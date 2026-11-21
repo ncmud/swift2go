@@ -58,9 +58,9 @@ type URLSessionConfiguration struct {
 	HttpMaximumConnectionsPerHost int
 }
 
-// NSURLSessionConfigurationCObjc is `URLSessionConfiguration.ephemeral` (and `.default`, which behaves
+// NSURLSessionConfigurationEphemeral is `URLSessionConfiguration.ephemeral` (and `.default`, which behaves
 // the same here: neither keeps a cache or cookie store between processes). Each read is a fresh copy.
-var NSURLSessionConfigurationCObjc = URLSessionConfiguration{
+var NSURLSessionConfigurationEphemeral = URLSessionConfiguration{
 	TimeoutIntervalForRequest:     60,
 	TimeoutIntervalForResource:    604800,
 	HttpMaximumConnectionsPerHost: 6,
@@ -89,9 +89,9 @@ func NSURLSessionInitConfiguration(c URLSessionConfiguration) URLSession {
 	}
 }
 
-// NSURLSessionCObjc is `URLSession.finishTasksAndInvalidate()` / `invalidateAndCancel()`: requests here
+// NSURLSessionFinishTasksAndInvalidate is `URLSession.finishTasksAndInvalidate()` / `invalidateAndCancel()`: requests here
 // complete before the call that started them returns, so it only releases idle connections.
-func NSURLSessionCObjc(s URLSession) {
+func NSURLSessionFinishTasksAndInvalidate(s URLSession) {
 	if s.client != nil {
 		s.client.CloseIdleConnections()
 	}
@@ -109,8 +109,8 @@ type HTTPURLResponse struct {
 
 func (HTTPURLResponse) isURLResponse() {}
 
-// NSHTTPURLResponseCObjc is `HTTPURLResponse.statusCode`.
-func NSHTTPURLResponseCObjc(r HTTPURLResponse) int { return r.StatusCode }
+// NSHTTPURLResponseStatusCode is `HTTPURLResponse.statusCode`.
+func NSHTTPURLResponseStatusCode(r HTTPURLResponse) int { return r.StatusCode }
 
 // HTTPURLResponseValueForHTTPHeaderField is `HTTPURLResponse.value(forHTTPHeaderField:)`, matching
 // the name case-insensitively.
@@ -216,7 +216,7 @@ func NSURLSessionDataFor(s URLSession, r URLRequest) struct {
 	}
 	client := s.client
 	if client == nil {
-		client = NSURLSessionInitConfiguration(NSURLSessionConfigurationCObjc).client
+		client = NSURLSessionInitConfiguration(NSURLSessionConfigurationEphemeral).client
 	}
 	resp, err := client.Do(req)
 	if err != nil {
