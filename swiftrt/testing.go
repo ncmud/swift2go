@@ -142,6 +142,21 @@ func TryFlat[T any](f func() *T) (out *T) {
 	return f()
 }
 
+// TryNil is Swift `try?` on an optional whose Go form is nil-able itself (an interface, closure or
+// map): a thrown error gives the zero value, nil.
+func TryNil[T any](f func() T) (out T) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+			var zero T
+			out = zero
+		}
+	}()
+	return f()
+}
+
 // Catch runs a Swift do body and returns the error it threw, or nil.
 func Catch(body func()) (err error) {
 	defer func() {
