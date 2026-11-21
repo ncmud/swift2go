@@ -115,3 +115,41 @@ func OpenUnsafePointerIntInt[M Integer](path any, flags int32, mode M) int32 {
 	}
 	return int32(fd)
 }
+
+// cCharAt reads element i of a C character pointer: the bytes of a C string the runtime hands out
+// as `UnsafePointer<CChar>`, or a Swift String passed where C expects one.
+func cCharAt(p any, i int) int8 {
+	switch v := p.(type) {
+	case []int8:
+		return v[i]
+	case []byte:
+		return int8(v[i])
+	case string:
+		if i == len(v) {
+			return 0
+		}
+		return int8(v[i])
+	case *any:
+		if v == nil {
+			Trap("unexpectedly found nil while unwrapping an Optional value")
+		}
+		return cCharAt(*v, i)
+	}
+	panic(fmt.Sprintf("swiftrt: %T is not a C character pointer", p))
+}
+
+// UnsafePointerSubscriptInt is Swift `UnsafePointer<CChar>[i]`: the C character at offset i.
+func UnsafePointerSubscriptInt(p any, i int) int8 { return cCharAt(p, i) }
+
+// UnsafePointerPointee is Swift `UnsafePointer<CChar>.pointee`: the first C character.
+func UnsafePointerPointee(p any) int8 { return cCharAt(p, 0) }
+
+// StringWithCString is Swift `String.withCString(_:)`: body receives a pointer to the string's
+// NUL-terminated UTF-8 bytes, valid for the call.
+func StringWithCString[R any](s string, body func(any) R) R {
+	buf := make([]int8, len(s)+1)
+	for i := 0; i < len(s); i++ {
+		buf[i] = int8(s[i])
+	}
+	return body(buf)
+}

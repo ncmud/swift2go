@@ -692,3 +692,67 @@ func YYJSONDecoderDecodeFrom[T any](_ YYJSONDecoder, t TypeT[T], data []byte) T 
 	}
 	return JSONDecoderDecodeFrom(JSONDecoderInit(), t, data)
 }
+
+// NSNumberDoubleValue is Foundation `NSNumber.doubleValue`.
+func NSNumberDoubleValue(n NSNumber) float64 {
+	switch n.kind {
+	case 'u':
+		return float64(n.u)
+	case 'd':
+		return n.f
+	}
+	return float64(n.i)
+}
+
+// NSNumberUint64Value is Foundation `NSNumber.uint64Value` as on Linux: integers keep their bit
+// pattern, and a Double is floored to a 128-bit integer (saturating, NaN as the maximum) whose low
+// 64 bits are the result.
+func NSNumberUint64Value(n NSNumber) uint64 {
+	switch n.kind {
+	case 'u':
+		return n.u
+	case 'd':
+		return doubleLow64(n.f)
+	}
+	return uint64(n.i)
+}
+
+func doubleLow64(d float64) uint64 {
+	const two63, two64, two127 = 1 << 63, 1 << 64, 1 << 127
+	f := math.Floor(d)
+	switch {
+	case math.IsNaN(f) || f >= two127:
+		return math.MaxUint64
+	case f < -two127:
+		return 0
+	case f >= -two63 && f < two63:
+		return uint64(int64(f))
+	case f >= two63 && f < two64:
+		return uint64(f)
+	case f > 0:
+		return uint64(math.Mod(f, two64))
+	}
+	m := math.Mod(-f, two64)
+	if m == 0 {
+		return 0
+	}
+	return uint64(two64 - m)
+}
+
+// NSValueObjCType is Foundation `NSValue.objCType` on an NSNumber, as a C string pointer: as on
+// Linux, "c" for a Bool, "d" for a Double, "Q" for an unsigned value above Int64.max, "i" for the
+// integers -1 through 12 (Core Foundation's cached Int32 numbers) and "q" for other integers.
+func NSValueObjCType(n NSNumber) any {
+	c := byte('q')
+	switch {
+	case n.kind == 'b':
+		c = 'c'
+	case n.kind == 'd':
+		c = 'd'
+	case n.kind == 'u' && n.u > math.MaxInt64:
+		c = 'Q'
+	case n.kind == 'u' && n.u <= 12, n.kind == 'i' && n.i >= -1 && n.i <= 12:
+		c = 'i'
+	}
+	return []int8{int8(c), 0}
+}

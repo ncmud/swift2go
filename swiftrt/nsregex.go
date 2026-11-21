@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"regexp/syntax"
 	"strings"
@@ -136,4 +137,60 @@ func RangeOptInit_NSRangeIn(r Range[int], s string) *Range[int] {
 		Trap("Range requires lowerBound <= upperBound")
 	}
 	return &Range[int]{Lo: lo, Hi: hi}
+}
+
+// TextCheckingResult is Foundation `NSTextCheckingResult` for a regular-expression match: the UTF-16
+// range of the whole match followed by each capture group's, NSNotFound for a group that did not
+// participate.
+type TextCheckingResult struct{ Ranges []Range[int] }
+
+// NSTextCheckingResultRange is Foundation `NSTextCheckingResult.range`: the whole match's range.
+func NSTextCheckingResultRange(m TextCheckingResult) Range[int] { return m.Ranges[0] }
+
+// NSRegularExpressionMatchesInRange is Foundation `NSRegularExpression.matches(in:range:)`: the
+// non-overlapping matches inside the UTF-16 range r of s, which bounds anchors and lookaround as
+// the default (non-transparent, anchoring) bounds do. A range outside s traps. Unlike ICU, an empty
+// match directly after a non-empty match is not reported (RE2's iteration rule).
+func NSRegularExpressionMatchesInRange(re *Regex, s string, r Range[int]) []TextCheckingResult {
+	lo, sub := nsRegexSearchRange(s, r)
+	out := []TextCheckingResult{}
+	for _, loc := range re.re.FindAllStringSubmatchIndex(sub, -1) {
+		out = append(out, textCheckingResult(s, lo, loc))
+	}
+	return out
+}
+
+// NSRegularExpressionFirstMatchInRange is Foundation `NSRegularExpression.firstMatch(in:range:)`:
+// the first match inside the UTF-16 range r of s, or nil.
+func NSRegularExpressionFirstMatchInRange(re *Regex, s string, r Range[int]) *TextCheckingResult {
+	lo, sub := nsRegexSearchRange(s, r)
+	loc := re.re.FindStringSubmatchIndex(sub)
+	if loc == nil {
+		return nil
+	}
+	m := textCheckingResult(s, lo, loc)
+	return &m
+}
+
+// nsRegexSearchRange is the byte offset and text of the UTF-16 range r of s.
+func nsRegexSearchRange(s string, r Range[int]) (int, string) {
+	lo, ok1 := utf16ByteIndex(s, r.Lo)
+	hi, ok2 := utf16ByteIndex(s, r.Hi)
+	if !ok1 || !ok2 || r.Hi < r.Lo {
+		Trap(fmt.Sprintf("NSRegularExpression: range {%d, %d} out of bounds of the string", r.Lo, r.Hi-r.Lo))
+	}
+	return lo, s[lo:hi]
+}
+
+// textCheckingResult converts submatch byte offsets within s[base:] to UTF-16 ranges of s.
+func textCheckingResult(s string, base int, loc []int) TextCheckingResult {
+	m := TextCheckingResult{Ranges: make([]Range[int], len(loc)/2)}
+	for i := range m.Ranges {
+		if loc[2*i] < 0 {
+			m.Ranges[i] = Range[int]{Lo: IntMax, Hi: IntMax}
+			continue
+		}
+		m.Ranges[i] = Range[int]{Lo: utf16Offset(s, base+loc[2*i]), Hi: utf16Offset(s, base+loc[2*i+1])}
+	}
+	return m
 }
