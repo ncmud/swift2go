@@ -1,0 +1,35 @@
+# swift2go
+
+Transpiles ncmud's Swift targets to Go by reading the compiler's typed AST
+(`swiftc -dump-ast -dump-ast-format json`, Swift 6.4.2).
+
+- `cmd/swift2go` — CLI: `swift2go transpile <Target> [<TestTarget> ...]`, targets in dependency order.
+- `internal/swiftmod` — `swift package describe`, `-emit-module`, AST dumps (with swift-testing macros).
+- `internal/ast` — loader for the concatenated per-file JSON documents.
+- `internal/types` — batch `swift-demangle` and a parser for demangled types.
+- `internal/emit` — declaration, statement and expression emitters.
+- `swiftrt` — runtime the generated code calls: checked arithmetic, grapheme-aware strings,
+  optionals as pointers, stdlib collection methods, swift-testing `#expect`/`#require`.
+
+Generated Go goes to `out/` (gitignored). Unsupported constructs compile to
+`swiftrt.Unsupported[T]("kind")` and are counted in the transpile report.
+
+```
+just termcore        # transpile TermCore + TermCoreTests, vet, go test
+just errors termcore # compile errors by message
+```
+
+## Mappings
+
+| Swift | Go |
+|---|---|
+| struct / class | struct / `*struct` |
+| enum without payload | `int` type + consts |
+| enum with payload | sealed interface + case structs |
+| protocol + extension defaults | interface + `ProtoMethod(self, …)` + forwarding methods on conformers |
+| `T?` | `*T` (reference types stay bare) |
+| `throws` / `try` / `do-catch` | panic with `swiftrt.Thrown`, `swiftrt.DoCatch` |
+| `Int` `+ - *` | `swiftrt.Add/Sub/Mul` (trap on overflow) |
+| `String.Index` | byte offset; `Character` = grapheme string; `Substring` = base + range |
+| stdlib member `x.foo(bar:)` | `swiftrt.<Kind>FooBar(x, …)` |
+| `@Test` func | `func TestSuiteMethod(t *testing.T)` |
