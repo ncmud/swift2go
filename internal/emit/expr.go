@@ -207,7 +207,13 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.magicLiteral(n)
 	case "declref_expr":
 		return e.declRef(n.Child("decl"), n)
+	case "inout_to_pointer":
+		return "&" + e.lvalue(stripLoads(n.Child("sub_expr")))
 	case "member_ref_expr":
+		if usr := n.Child("decl").Str("decl_usr"); strings.HasPrefix(usr, "c:@S@") && strings.Contains(usr, "@FI@") {
+			// A C struct field is a Go field of the runtime struct.
+			return e.expr(n.Child("base")) + "." + capitalize(usr[strings.Index(usr, "@FI@")+4:])
+		}
 		if n.Child("decl").Str("base_name") == "magnitude" && strings.HasPrefix(n.Child("decl").Str("decl_usr"), "s:s") {
 			// The runtime returns uint; Swift's magnitude is the unsigned type of the operand's width.
 			return e.exprGoType(n) + "(" + e.memberRef(n) + ")"
@@ -681,6 +687,9 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 				return pfx + info.GoName
 			}
 			return e.lvalue(n.Child("base")) + "." + info.GoName
+		}
+		if usr := n.Child("decl").Str("decl_usr"); info == nil && strings.HasPrefix(usr, "c:@S@") && strings.Contains(usr, "@FI@") {
+			return e.lvalue(n.Child("base")) + "." + capitalize(usr[strings.Index(usr, "@FI@")+4:])
 		}
 		if info == nil && n.Child("decl").Str("decl_usr") != "" {
 			return e.lvalue(n.Child("base")) + "." + capitalize(n.Child("decl").Str("base_name"))
