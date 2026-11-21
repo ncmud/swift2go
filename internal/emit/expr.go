@@ -114,6 +114,10 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	case "declref_expr":
 		return e.declRef(n.Child("decl"), n)
 	case "member_ref_expr":
+		if n.Child("decl").Str("base_name") == "magnitude" && strings.HasPrefix(n.Child("decl").Str("decl_usr"), "s:s") {
+			// The runtime returns uint; Swift's magnitude is the unsigned type of the operand's width.
+			return e.exprGoType(n) + "(" + e.memberRef(n) + ")"
+		}
 		return e.memberRef(n)
 	case "dot_syntax_call_expr":
 		return e.unappliedDot(n)
@@ -1166,6 +1170,11 @@ func (e *fileEmitter) call(n ast.Node) string {
 			if less := e.lessFunc(e.m.typeOf(kept[0].node.Type())); less != "" {
 				return "swiftrt." + capitalize(sig.base) + "Less(" + less + ", " + strings.Join(ss, ", ") + ")"
 			}
+			if len(kept) > 2 {
+				elem := e.m.GoType(e.m.typeOf(kept[0].node.Type()), e.generics)
+				last := len(ss) - 1
+				return "swiftrt." + capitalize(sig.base) + "Of([]" + elem + "{" + strings.Join(ss[:last], ", ") + "}, " + ss[last] + ")"
+			}
 		}
 		return "swiftrt." + capitalize(sig.base) + e.suffix(sig, kept, true) + "(" + strings.Join(ss, ", ") + ")"
 	}
@@ -1340,6 +1349,11 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		}
 	}
 	refSuffix := ""
+	if bt := e.m.typeOf(base.Type()); base != nil && len(as) == 0 && (d.Str("base_name") == "max" || d.Str("base_name") == "min") && bt != nil && len(bt.Args) == 1 && (e.m.Recv(bt) == "Slice" || e.m.Recv(bt) == "Set") {
+		if less := e.lessFunc(bt.Args[0]); less != "" {
+			return "swiftrt.Slice" + capitalize(d.Str("base_name")) + "By(swiftrt.Iterate[" + e.m.GoType(bt.Args[0], e.generics) + "](" + e.expr(base) + "), " + less + ")"
+		}
+	}
 	if base != nil && e.m.Recv(e.m.typeOf(base.Type())) == "Set" && len(as) == 1 && as[0].label == "" && e.m.Recv(e.m.typeOf(as[0].node.Type())) == "Set" {
 		switch d.Str("base_name") {
 		case "union", "formUnion", "intersection", "subtracting", "subtract", "isSubset", "isSuperset", "isDisjoint", "symmetricDifference", "formIntersection":
@@ -1655,6 +1669,9 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "+", "-", "*":
+		if op == "-" && e.m.GoType(lt, e.generics) == "swiftrt.ContinuousClockInstant" {
+			return "swiftrt.InstantSub(" + e.expr(l) + ", " + e.expr(r) + ")"
+		}
 		if op == "+" && (e.m.Recv(lt) == "String" || e.m.Recv(lt) == "Substring") {
 			return e.stringish(l) + " + " + e.stringish(r)
 		}
