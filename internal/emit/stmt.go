@@ -245,7 +245,13 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 	r := n.Child("result")
 	if e.doRet != nil {
 		if r != nil && e.resultType != "" && !e.inInit {
+			savePost := e.post
+			e.post = nil
 			e.w("%s = %s\n", e.doRet.val, e.expr(r))
+			for _, p := range e.post {
+				e.w("%s\n", p)
+			}
+			e.post = savePost
 		} else if r != nil && !e.inInit {
 			e.stmt(r)
 		}
@@ -263,7 +269,20 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 		e.w("return\n")
 		return
 	}
-	e.w("return %s\n", e.expr(r))
+	savePost := e.post
+	e.post = nil
+	v := e.expr(r)
+	if len(e.post) > 0 {
+		// Write-backs must run before leaving the function.
+		tmp := e.newTmp("res")
+		e.w("%s := %s\n", tmp, v)
+		for _, p := range e.post {
+			e.w("%s\n", p)
+		}
+		v = tmp
+	}
+	e.post = savePost
+	e.w("return %s\n", v)
 }
 
 func (e *fileEmitter) localBinding(n ast.Node) {
