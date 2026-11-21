@@ -397,9 +397,8 @@ type StringEncoding int
 const EncodingUtf8 StringEncoding = 4
 
 // StringOptInitDataEncoding is Foundation `String(data:encoding:)`.
-func StringOptInitDataEncoding(b []byte, _ StringEncoding) *string {
-	s := string(b)
-	return &s
+func StringOptInitDataEncoding(b []byte, e StringEncoding) *string {
+	return StringOptInitBytesEncoding(b, e)
 }
 
 // StringDataUsing is Foundation `String.data(using:)`.
