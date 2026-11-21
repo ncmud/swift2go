@@ -413,7 +413,18 @@ func stripConv(n ast.Node) ast.Node {
 func nodeID(n ast.Node) string { return fmt.Sprintf("%p", map[string]any(n)) }
 
 func (e *fileEmitter) upcast(n ast.Node) string {
-	return e.expr(n.Child("sub_expr"))
+	sub := n.Child("sub_expr")
+	src, dst := e.exprGoType(sub), e.exprGoType(n)
+	if src != dst && strings.HasPrefix(src, "[]") && strings.HasPrefix(dst, "[]") {
+		// [Subclass] as [Base], or [Concrete] as [any Protocol]: convert element by element.
+		se, de := src[2:], dst[2:]
+		conv := "v"
+		if f, t := strings.TrimPrefix(se, "*"), strings.TrimPrefix(de, "*"); strings.HasPrefix(se, "*") && strings.HasPrefix(de, "*") && e.m.IsAncestor(t, f) {
+			conv = "v.As" + t + "()"
+		}
+		return "swiftrt.SliceMap(" + e.expr(sub) + ", func(v " + se + ") " + de + " { return " + conv + " })"
+	}
+	return e.expr(sub)
 }
 
 func (e *fileEmitter) stringLiteral(n ast.Node) string {
