@@ -1954,6 +1954,9 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return same
 	case "/", "%":
+		if op == "/" && e.m.GoType(lt, e.generics) == "swiftrt.Duration" && e.exprGoType(r) == "swiftrt.Duration" {
+			return "swiftrt.DurationRatio(" + e.expr(l) + ", " + e.expr(r) + ")"
+		}
 		if lt.Kind == types.Named && isIntegerName(lt.Name) {
 			fn := map[string]string{"/": "Div", "%": "Rem"}[op]
 			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"

@@ -101,3 +101,6 @@ func LiftOpt2[A, B, R any](f func(A, B) R) func(A, B) *R {
 		return &r
 	}
 }
+
+// DurationRatio is `Duration / Duration`, a Double.
+func DurationRatio(a, b Duration) float64 { return float64(a) / float64(b) }
