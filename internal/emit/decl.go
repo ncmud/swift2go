@@ -818,7 +818,18 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 			}
 			e.inoutParams["self"] = true
 		}
-		e.w("func %s%s(self %s%s) %s ", info.GoName, e.typeParamList(), selfT, prefixComma(params), res)
+		tps := e.typeParamList()
+		if info.GenericFree && self.Kind != "foreign" && self.Kind != "class_decl" && !info.ProtoExt && !strings.Contains(selfT, "[") {
+			// A method of a generic struct made free for its constraints keeps the struct's parameters.
+			if args := e.selfTypeArgs(self); args != "" {
+				if tps == "" {
+					tps = strings.TrimSuffix(strings.TrimPrefix(args, "["), "]")
+					tps = "[" + strings.ReplaceAll(tps, ", ", " any, ") + " any]"
+				}
+				selfT = strings.Replace(selfT, e.m.LocalTypeName(info.Owner), e.m.LocalTypeName(info.Owner)+args, 1)
+			}
+		}
+		e.w("func %s%s(self %s%s) %s ", info.GoName, tps, selfT, prefixComma(params), res)
 	default:
 		recv := self.GoName + e.selfTypeArgs(self)
 		if info.Mutating || self.Kind == "class_decl" {
@@ -1194,7 +1205,7 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 		e.w("return %s\n", e.initRet)
 	}
 	e.w("}\n\n")
-	if ps := n.Child("params").List("params"); len(ps) == 1 && !failable && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Decoder" && !n.Implicit() {
+	if ps := n.Child("params").List("params"); len(ps) == 1 && !failable && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Decoder" && !n.Implicit() && !strings.Contains(ret, "[") {
 		e.w("func init() { swiftrt.RegisterDecoder(func(d *swiftrt.Decoder) %s { return %s(d) }) }\n\n", ret, info.GoName)
 	}
 }

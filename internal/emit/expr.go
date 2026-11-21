@@ -632,6 +632,9 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		case info.Static && info.OwnerKind == "protocol":
 			call := e.metaReceiver(base) + "." + staticReqName(info) + "()"
 			declared := e.m.GoType(e.m.typeOf(info.Node.Str("interface_type")), nil)
+			if gt := e.exprGoType(n); gt != "" && !strings.HasPrefix(gt, "any") && strings.HasPrefix(declared, "any") {
+				return "swiftrt.MustAs[" + gt + "](" + call + ")"
+			}
 			if gt := e.exprGoType(n); strings.HasPrefix(gt, "[]") && gt != "[]any" && declared == "[]any" {
 				return "swiftrt.FromAnySlice[" + gt[2:] + "](" + call + ")"
 			}
