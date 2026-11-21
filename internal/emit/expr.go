@@ -543,6 +543,14 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		if info == nil && n.Child("decl").Str("decl_usr") != "" {
 			return e.lvalue(n.Child("base")) + "." + capitalize(n.Child("decl").Str("base_name"))
 		}
+		if info != nil && info.Kind == "var_decl" && info.Computed {
+			// A getter that returns a class reference can be written through directly.
+			if t := e.m.typeOf(n.Type()); t != nil {
+				if gt := e.m.GoType(t, e.generics); strings.HasPrefix(gt, "*") && e.m.isReferenceGo(t, gt) && t.Kind != types.Optional {
+					return e.expr(n)
+				}
+			}
+		}
 		if info != nil && info.Kind == "var_decl" && info.Settable {
 			tmp := e.newTmp("wb")
 			e.w("%s := %s\n", tmp, e.expr(n))
