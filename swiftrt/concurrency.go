@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"reflect"
+	"sync"
 	"sync/atomic"
 )
 
@@ -96,4 +97,108 @@ func CheckedContinuationResumeReturning(c any, value any) {
 // CheckedContinuationResumeThrowing is `CheckedContinuation.resume(throwing:)`; a second resume traps.
 func CheckedContinuationResumeThrowing(c any, err any) {
 	c.(*CheckedContinuation).resume(nil, Throw(err).Err)
+}
+
+// asyncStreamStorage is the shared state of an AsyncStream and its continuation: an unbounded buffer
+// of yielded elements and whether the stream has finished. changed is closed and replaced whenever
+// either changes.
+type asyncStreamStorage[T any] struct {
+	mu       sync.Mutex
+	buf      []T
+	finished bool
+	changed  chan struct{}
+}
+
+func (s *asyncStreamStorage[T]) signal() {
+	close(s.changed)
+	s.changed = make(chan struct{})
+}
+
+func (s *asyncStreamStorage[T]) finish() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.finished {
+		s.finished = true
+		s.signal()
+	}
+}
+
+// AsyncStream is Swift `AsyncStream` with the default unbounded buffering policy.
+type AsyncStream[T any] struct{ s *asyncStreamStorage[T] }
+
+// AsyncStreamContinuation is Swift `AsyncStream.Continuation`.
+type AsyncStreamContinuation[T any] struct{ s *asyncStreamStorage[T] }
+
+// AsyncStreamIterator is Swift `AsyncStream.Iterator`.
+type AsyncStreamIterator[T any] struct{ s *asyncStreamStorage[T] }
+
+// AsyncStreamMakeStreamOf is Swift `AsyncStream.makeStream(of:)`: a stream and the continuation that
+// feeds it, buffering every element until it is consumed.
+func AsyncStreamMakeStreamOf[T any](_ TypeT[T]) struct {
+	F0 AsyncStream[T]
+	F1 AsyncStreamContinuation[T]
+} {
+	s := &asyncStreamStorage[T]{changed: make(chan struct{})}
+	return struct {
+		F0 AsyncStream[T]
+		F1 AsyncStreamContinuation[T]
+	}{AsyncStream[T]{s}, AsyncStreamContinuation[T]{s}}
+}
+
+// ContinuationYield is Swift `AsyncStream.Continuation.yield(_:)`: it buffers v for the consumer,
+// or drops it once the stream has finished.
+func ContinuationYield[T any](c AsyncStreamContinuation[T], v T) {
+	c.s.mu.Lock()
+	defer c.s.mu.Unlock()
+	if c.s.finished {
+		return
+	}
+	c.s.buf = append(c.s.buf, v)
+	c.s.signal()
+}
+
+// ContinuationFinish is Swift `AsyncStream.Continuation.finish()`: the consumer receives the
+// elements already buffered and then nil. Later yields are dropped; finishing again does nothing.
+func ContinuationFinish[T any](c AsyncStreamContinuation[T]) { c.s.finish() }
+
+// AsyncStreamMakeAsyncIterator is Swift `AsyncStream.makeAsyncIterator()`.
+func AsyncStreamMakeAsyncIterator[T any](s AsyncStream[T]) AsyncStreamIterator[T] {
+	return AsyncStreamIterator[T]{s.s}
+}
+
+// AsyncStreamIteratorNext is Swift `AsyncStream.Iterator.next()`: it waits for the next element and
+// returns nil once the stream has finished and its buffer is drained. Cancelling the waiting task
+// finishes the stream, as AsyncStream's cancellation handler does.
+func AsyncStreamIteratorNext[T any](it *AsyncStreamIterator[T]) *T {
+	s := it.s
+	var cancelled <-chan struct{}
+	if scope := currentScope(); scope != nil {
+		if scope.isCancelled() {
+			s.finish()
+		}
+		cancelled = scope.done
+	}
+	for {
+		s.mu.Lock()
+		if len(s.buf) > 0 {
+			v := s.buf[0]
+			var zero T
+			s.buf[0] = zero
+			s.buf = s.buf[1:]
+			s.mu.Unlock()
+			return &v
+		}
+		if s.finished {
+			s.mu.Unlock()
+			return nil
+		}
+		changed := s.changed
+		s.mu.Unlock()
+		select {
+		case <-changed:
+		case <-cancelled:
+			s.finish()
+			cancelled = nil
+		}
+	}
 }

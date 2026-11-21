@@ -307,6 +307,8 @@ type yyjsonWriter struct {
 	// integralDoubles writes doubles with no fractional part as integers, for trees in which
 	// Codable integers have already become float64.
 	integralDoubles bool
+	// fourSpaces indents pretty output by four spaces per level instead of two.
+	fourSpaces bool
 }
 
 func (w *yyjsonWriter) str(s string) {
@@ -348,6 +350,9 @@ func (w *yyjsonWriter) str(s string) {
 func (w *yyjsonWriter) indent(level int) {
 	if w.pretty {
 		w.b.WriteByte('\n')
+		if w.fourSpaces {
+			level *= 2
+		}
 		w.b.WriteString(strings.Repeat("  ", level))
 	}
 }
@@ -512,6 +517,167 @@ func GameJSONDecoderInit() GameJSONDecoder { return GameJSONDecoder{} }
 func GameJSONDecoderDecodeFrom[T any](_ GameJSONDecoder, t TypeT[T], data []byte) T {
 	if _, err := parseJSONStrict(data); err != nil {
 		panic(Throw(CodingError{"dataCorrupted: " + err.Error()}))
+	}
+	return JSONDecoderDecodeFrom(JSONDecoderInit(), t, data)
+}
+
+// YYJSONSerializationReadingOptions is swift-yyjson `YYJSONSerialization.ReadingOptions`.
+type YYJSONSerializationReadingOptions struct{ RawValue uint }
+
+// YYJSONSerialization.ReadingOptions members. The mutability options change nothing here, since Go
+// containers are always mutable.
+var (
+	ReadingOptionsMutableContainers = YYJSONSerializationReadingOptions{1 << 0}
+	ReadingOptionsMutableLeaves     = YYJSONSerializationReadingOptions{1 << 1}
+	ReadingOptionsFragmentsAllowed  = YYJSONSerializationReadingOptions{1 << 2}
+)
+
+// YYJSONSerializationJsonObjectWithOptions is swift-yyjson
+// `YYJSONSerialization.jsonObject(with:options:)`: YYJSONSerializationJsonObjectWith, except that
+// with `.fragmentsAllowed` a top-level string, number, Boolean or null is returned instead of
+// thrown on.
+func YYJSONSerializationJsonObjectWithOptions(data []byte, options YYJSONSerializationReadingOptions) any {
+	if options.RawValue&ReadingOptionsFragmentsAllowed.RawValue == 0 {
+		return YYJSONSerializationJsonObjectWith(data)
+	}
+	v, err := parseJSONStrict(data)
+	if err != nil {
+		yyjsonThrow(err.Error())
+	}
+	return foundationObject(v)
+}
+
+// YYJSONSerializationWritingOptions is swift-yyjson `YYJSONSerialization.WritingOptions`.
+type YYJSONSerializationWritingOptions struct{ RawValue uint }
+
+// YYJSONSerialization.WritingOptions members.
+var (
+	WritingOptionsFragmentsAllowed       = YYJSONSerializationWritingOptions{1 << 0}
+	WritingOptionsPrettyPrinted          = YYJSONSerializationWritingOptions{1 << 1}
+	WritingOptionsSortedKeys             = YYJSONSerializationWritingOptions{1 << 2}
+	WritingOptionsWithoutEscapingSlashes = YYJSONSerializationWritingOptions{1 << 3}
+	WritingOptionsIndentationTwoSpaces   = YYJSONSerializationWritingOptions{1 << 4}
+	WritingOptionsNewlineAtEnd           = YYJSONSerializationWritingOptions{1 << 6}
+)
+
+// isJSONFragment reports whether v is a value `data(withJSONObject:)` treats as a fragment: an
+// NSString, NSNumber (Bool or number) or NSNull.
+func isJSONFragment(v any) bool {
+	switch v.(type) {
+	case string, Substring, bool, NSNumber, NSNull:
+		return true
+	}
+	switch reflect.ValueOf(v).Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+// YYJSONSerializationDataWithJSONObjectOptions is swift-yyjson
+// `YYJSONSerialization.data(withJSONObject:options:)`. `.indentationTwoSpaces` pretty-prints with two
+// spaces and overrides `.prettyPrinted`, which indents by four; `/` is escaped unless
+// `.withoutEscapingSlashes`; `.newlineAtEnd` appends a newline; and `.fragmentsAllowed` accepts a
+// top-level string, number, Boolean or null. Keys are written sorted with or without `.sortedKeys`,
+// as in YYJSONSerializationDataWithJSONObject.
+func YYJSONSerializationDataWithJSONObjectOptions(obj any, options YYJSONSerializationWritingOptions) []byte {
+	has := func(o YYJSONSerializationWritingOptions) bool { return options.RawValue&o.RawValue != 0 }
+	rv := reflect.ValueOf(obj)
+	for rv.IsValid() && (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && !rv.IsNil() {
+		rv = rv.Elem()
+	}
+	switch {
+	case rv.IsValid() && (rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array || rv.Kind() == reflect.Map):
+	case rv.IsValid() && isJSONFragment(rv.Interface()):
+		if !has(WritingOptionsFragmentsAllowed) {
+			yyjsonThrow("Top-level JSON value must be an array or dictionary")
+		}
+	default:
+		yyjsonThrow("Invalid JSON object")
+	}
+	w := &yyjsonWriter{
+		pretty:        has(WritingOptionsIndentationTwoSpaces) || has(WritingOptionsPrettyPrinted),
+		fourSpaces:    !has(WritingOptionsIndentationTwoSpaces),
+		escapeSlashes: !has(WritingOptionsWithoutEscapingSlashes),
+	}
+	w.value(rv.Interface(), 0)
+	if has(WritingOptionsNewlineAtEnd) {
+		w.b.WriteByte('\n')
+	}
+	return []byte(w.b.String())
+}
+
+// YYJSONWriteOptions is swift-yyjson `YYJSONWriteOptions`, the flags YYJSONEncoder writes with.
+type YYJSONWriteOptions struct{ RawValue uint32 }
+
+// YYJSONWriteOptions members.
+var (
+	YYJSONWriteOptionsDefault              = YYJSONWriteOptions{0}
+	YYJSONWriteOptionsPrettyPrinted        = YYJSONWriteOptions{1 << 0}
+	YYJSONWriteOptionsEscapeSlashes        = YYJSONWriteOptions{1 << 2}
+	YYJSONWriteOptionsIndentationTwoSpaces = YYJSONWriteOptions{1 << 6}
+	YYJSONWriteOptionsNewlineAtEnd         = YYJSONWriteOptions{1 << 7}
+	YYJSONWriteOptionsSortedKeys           = YYJSONWriteOptions{1 << 16}
+)
+
+// YYJSONWriteOptionsInsert is OptionSet `insert(_:)` on YYJSONWriteOptions.
+func YYJSONWriteOptionsInsert(s *YYJSONWriteOptions, m YYJSONWriteOptions) struct {
+	F0 bool
+	F1 YYJSONWriteOptions
+} {
+	return OptionSetInsert(s, m)
+}
+
+// YYJSONWriteOptionsFormUnion is OptionSet `formUnion(_:)` on YYJSONWriteOptions.
+func YYJSONWriteOptionsFormUnion(s *YYJSONWriteOptions, o YYJSONWriteOptions) {
+	*s = OptionSetUnion(*s, o)
+}
+
+// YYJSONEncoder is swift-yyjson `YYJSONEncoder`.
+type YYJSONEncoder struct {
+	WriteOptions YYJSONWriteOptions
+}
+
+// YYJSONEncoderInit is swift-yyjson `YYJSONEncoder()`: an encoder with the default write options.
+func YYJSONEncoderInit() YYJSONEncoder { return YYJSONEncoder{} }
+
+// YYJSONEncoderEncode is swift-yyjson `YYJSONEncoder.encode(_:)`. `.prettyPrinted` indents by four
+// spaces, or two with `.indentationTwoSpaces` (which alone also pretty-prints); `/` is escaped only
+// with `.escapeSlashes`; `.newlineAtEnd` appends a newline. Object keys are always sorted, and doubles
+// without a fractional part are written as integers, because the Codable tree keeps neither the
+// encoding order nor the Int/Double distinction. NaN and infinity throw YYJSONError.
+func YYJSONEncoderEncode[T any](e YYJSONEncoder, value T) []byte {
+	has := func(o YYJSONWriteOptions) bool { return e.WriteOptions.RawValue&o.RawValue != 0 }
+	tree := EncodeValue(value)
+	w := &yyjsonWriter{
+		pretty:          has(YYJSONWriteOptionsPrettyPrinted) || has(YYJSONWriteOptionsIndentationTwoSpaces),
+		fourSpaces:      !has(YYJSONWriteOptionsIndentationTwoSpaces),
+		escapeSlashes:   has(YYJSONWriteOptionsEscapeSlashes),
+		integralDoubles: true,
+	}
+	w.value(tree, 0)
+	if has(YYJSONWriteOptionsNewlineAtEnd) {
+		w.b.WriteByte('\n')
+	}
+	return []byte(w.b.String())
+}
+
+// YYJSONDecoder is swift-yyjson `YYJSONDecoder`.
+type YYJSONDecoder struct{}
+
+// YYJSONDecoderInit is swift-yyjson `YYJSONDecoder()`.
+func YYJSONDecoderInit() YYJSONDecoder { return YYJSONDecoder{} }
+
+// YYJSONDecoderDecodeFrom is swift-yyjson `YYJSONDecoder.decode(_:from:)`: strict JSON decoded with
+// Codable semantics, throwing YYJSONError on malformed input.
+func YYJSONDecoderDecodeFrom[T any](_ YYJSONDecoder, t TypeT[T], data []byte) T {
+	if len(data) == 0 {
+		yyjsonThrow("Empty content")
+	}
+	if _, err := parseJSONStrict(data); err != nil {
+		yyjsonThrow(err.Error())
 	}
 	return JSONDecoderDecodeFrom(JSONDecoderInit(), t, data)
 }

@@ -519,6 +519,8 @@ type DispatchQueue struct {
 	mu      sync.Mutex
 	jobs    []func()
 	running bool
+	// concurrent queues start every job on its own goroutine instead of draining them in order.
+	concurrent bool
 }
 
 // OS_dispatch_queue is the Objective-C class name the emitter uses for `DispatchQueue`.
@@ -526,6 +528,10 @@ type OS_dispatch_queue = *DispatchQueue
 
 // enqueue appends a job without blocking, starting the worker when the queue was idle.
 func (q *DispatchQueue) enqueue(f func()) {
+	if q.concurrent {
+		go f()
+		return
+	}
 	q.mu.Lock()
 	q.jobs = append(q.jobs, f)
 	start := !q.running
@@ -568,6 +574,37 @@ const (
 	DispatchQoSUserInitiated
 	DispatchQoSUserInteractive
 )
+
+// DispatchQoSQoSClass is Dispatch `DispatchQoS.QoSClass`.
+type DispatchQoSQoSClass int
+
+// DispatchQoS.QoSClass cases.
+const (
+	DispatchQoSQoSClassUnspecified DispatchQoSQoSClass = iota
+	DispatchQoSQoSClassBackground
+	DispatchQoSQoSClassUtility
+	DispatchQoSQoSClassDefault
+	DispatchQoSQoSClassUserInitiated
+	DispatchQoSQoSClassUserInteractive
+)
+
+var globalQueues = [...]*DispatchQueue{
+	DispatchQoSQoSClassBackground:      {Label: "com.apple.root.background-qos", concurrent: true},
+	DispatchQoSQoSClassUtility:         {Label: "com.apple.root.utility-qos", concurrent: true},
+	DispatchQoSQoSClassDefault:         {Label: "com.apple.root.default-qos", concurrent: true},
+	DispatchQoSQoSClassUserInitiated:   {Label: "com.apple.root.user-initiated-qos", concurrent: true},
+	DispatchQoSQoSClassUserInteractive: {Label: "com.apple.root.user-interactive-qos", concurrent: true},
+}
+
+// OS_dispatch_queueGlobalQos is Dispatch `DispatchQueue.global(qos:)`: the shared concurrent queue
+// for the class, the same instance on every call; `.unspecified` gives the default queue. `async`
+// work on it runs on its own goroutine.
+func OS_dispatch_queueGlobalQos(qos DispatchQoSQoSClass) *DispatchQueue {
+	if qos <= DispatchQoSQoSClassUnspecified || int(qos) >= len(globalQueues) {
+		qos = DispatchQoSQoSClassDefault
+	}
+	return globalQueues[qos]
+}
 
 // OS_dispatch_queueInitLabelQos is Dispatch `DispatchQueue(label:qos:)`: a serial queue.
 func OS_dispatch_queueInitLabelQos(label string, _ DispatchQoS) *DispatchQueue {
