@@ -645,6 +645,7 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			e.typeParams = slices.DeleteFunc(e.typeParams, func(p string) bool { return p == tp })
 		}
 	}
+	seqParams := 0
 	for _, r := range fn.Child("generic_signature").List("generic_reqs") {
 		if r.Str("kind") != "conforms_to" {
 			continue
@@ -655,7 +656,9 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 		case "Swift.Collection", "Swift.Sequence", "Swift.BidirectionalCollection", "Swift.RandomAccessCollection":
 			if v, ok := g[param]; !ok || v == "any" || own[param] && !strings.HasPrefix(v, "[]") {
 				dropParam(param)
-				tp := "E" + strconv.Itoa(len(e.typeParams))
+				// Count element parameters separately: dropping params shrinks typeParams.
+				tp := "E" + strconv.Itoa(seqParams)
+				seqParams++
 				e.typeParams = append(e.typeParams, tp)
 				g[param] = "[]" + tp
 				g[param+".Element"] = tp
