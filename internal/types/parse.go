@@ -119,7 +119,7 @@ func (p *parser) eat(tok string) bool {
 
 func (p *parser) parseType() *Type {
 	p.skipSpace()
-	for _, attr := range []string{"@escaping ", "@Sendable ", "@lvalue ", "inout ", "@noescape ", "@autoclosure ", "__owned ", "__shared ", "sending "} {
+	for _, attr := range []string{"@escaping ", "@Sendable ", "@lvalue ", "inout ", "@noescape ", "@autoclosure ", "__owned ", "__shared ", "sending ", "@convention(block) ", "@convention(c) ", "@convention(thin) "} {
 		if p.eat(attr) {
 			return p.parseType()
 		}
@@ -164,6 +164,13 @@ func (p *parser) parsePrimary() *Type {
 		if p.eat(":") {
 			v := p.parseType()
 			p.eat("]")
+			// Dictionary<K, V>.Keys and .Values views are modeled as arrays of keys or values.
+			if p.eat(".Keys") {
+				return &Type{Kind: Array, Args: []*Type{k}}
+			}
+			if p.eat(".Values") {
+				return &Type{Kind: Array, Args: []*Type{v}}
+			}
 			return &Type{Kind: Dict, Args: []*Type{k, v}}
 		}
 		p.eat("]")
