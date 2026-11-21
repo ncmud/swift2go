@@ -67,6 +67,11 @@ func (m *Module) GoType(t *types.Type, generics map[string]string) string {
 		}
 		return s
 	case types.Meta:
+		if len(t.Args) == 1 && (t.Args[0].Kind == types.Existential || t.Args[0].Kind == types.Named && m.isLocalProtocol(t.Args[0].Name)) {
+			if g := m.GoType(t.Args[0], generics); !strings.HasPrefix(g, "any") {
+				return g
+			}
+		}
 		if len(t.Args) == 1 && t.Args[0].Kind == types.Generic {
 			if g, ok := generics[t.Args[0].Name]; ok && g != "any" {
 				return "swiftrt.TypeT[" + g + "]"

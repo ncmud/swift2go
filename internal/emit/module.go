@@ -677,7 +677,7 @@ func (m *Module) Report() string {
 	return b.String()
 }
 
-var foreignRuntimeName = regexp.MustCompile(`swiftrt\.[A-Za-z0-9_]*[:@$][A-Za-z0-9_:@$]*`)
+var foreignRuntimeName = regexp.MustCompile(`swiftrt\.[A-Za-z0-9_]*[:@$][A-Za-z0-9_@$][A-Za-z0-9_:@$]*`)
 
 // sanitizeRuntimeNames turns clang/ObjC USR fragments that leaked into swiftrt identifiers into Go identifiers.
 func sanitizeRuntimeNames(src string) string {
