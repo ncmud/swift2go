@@ -1288,6 +1288,9 @@ func (e *fileEmitter) staticForwarders(q, proto string, pm *Module, pfx string) 
 		if res == "" {
 			ret = ""
 		}
+		if res == "[]any" {
+			target = "swiftrt.ToAnySlice(" + target + ")"
+		}
 		e.w("func (self %s) %s(%s) %s { %s%s }\n\n", recv, staticReqName(req), params, res, ret, target)
 	}
 }

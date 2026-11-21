@@ -423,7 +423,12 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	if info != nil && info.Kind == "var_decl" {
 		switch {
 		case info.Static && info.OwnerKind == "protocol":
-			return e.metaReceiver(base) + "." + staticReqName(info) + "()"
+			call := e.metaReceiver(base) + "." + staticReqName(info) + "()"
+			declared := e.m.GoType(e.m.typeOf(info.Node.Str("interface_type")), nil)
+			if gt := e.exprGoType(n); strings.HasPrefix(gt, "[]") && gt != "[]any" && declared == "[]any" {
+				return "swiftrt.FromAnySlice[" + gt[2:] + "](" + call + ")"
+			}
+			return call
 		case info.Static && info.ProtoExt:
 			return pfx + info.GoName + "(" + e.metaReceiver(base) + ")"
 		case info.Static:
@@ -448,7 +453,11 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	sig := parseDeclSig(dem)
 	bt := e.m.typeOf(base.Type())
 	if base.Kind() == "type_expr" || bt.Kind == types.Meta {
-		return "swiftrt." + e.m.Recv(e.m.typeOf(n.Type())) + capitalize(sig.base)
+		name := "swiftrt." + e.m.Recv(e.m.typeOf(n.Type())) + capitalize(sig.base)
+		if dynamicStatics[strings.TrimPrefix(name, "swiftrt.")] {
+			name += "()"
+		}
+		return name
 	}
 	recv := e.m.Recv(bt)
 	return "swiftrt." + recv + capitalize(sig.base) + "(" + e.recvArg(base) + ")"
@@ -1007,6 +1016,11 @@ func (e *fileEmitter) call(n ast.Node) string {
 		}
 		sig := parseDeclSig(dem)
 		ss, kept := e.argStrings(as, true)
+		if (sig.base == "max" || sig.base == "min") && len(kept) >= 2 {
+			if less := e.lessFunc(e.m.typeOf(kept[0].node.Type())); less != "" {
+				return "swiftrt." + capitalize(sig.base) + "Less(" + less + ", " + strings.Join(ss, ", ") + ")"
+			}
+		}
 		return "swiftrt." + capitalize(sig.base) + e.suffix(sig, kept, true) + "(" + strings.Join(ss, ", ") + ")"
 	}
 	ss, _ := e.argStrings(as, false)
@@ -1068,8 +1082,12 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 			return e.payloadCtor(info, pfx, as)
 		case info.Static && info.OwnerKind == "protocol":
 			call := e.metaReceiver(base) + "." + staticReqName(info) + "(" + strings.Join(ss, ", ") + ")"
-			if gt := e.exprGoType(n); gt != "" && !strings.HasPrefix(gt, "any") && strings.HasPrefix(e.m.GoType(e.m.typeOf(info.Node.Str("result")), nil), "any") {
+			declared := e.m.GoType(e.m.typeOf(info.Node.Str("result")), nil)
+			if gt := e.exprGoType(n); gt != "" && !strings.HasPrefix(gt, "any") && strings.HasPrefix(declared, "any") {
 				return "swiftrt.MustAs[" + gt + "](" + call + ")"
+			}
+			if gt := e.exprGoType(n); strings.HasPrefix(gt, "[]") && gt != "[]any" && declared == "[]any" {
+				return "swiftrt.FromAnySlice[" + gt[2:] + "](" + call + ")"
 			}
 			return call
 		case info.Static && info.ProtoExt:
@@ -1146,6 +1164,14 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 	if b := d.Str("base_name"); strings.HasPrefix(b, "withLock") || strings.HasPrefix(b, "withValue") || b == "sync" || b == "withCriticalRegion" {
 		e.unitCallee = true
 	}
+	refSuffix := ""
+	if d.Str("base_name") == "compactMap" && len(as) == 1 {
+		if ft := e.m.typeOf(as[0].node.Type()); ft != nil && ft.Kind == types.Func && ft.Result != nil && ft.Result.Kind == types.Optional && len(ft.Result.Args) == 1 {
+			if e.m.isReferenceGo(ft.Result.Args[0], e.m.GoType(ft.Result.Args[0], e.generics)) {
+				refSuffix = "Ref"
+			}
+		}
+	}
 	ss, kept := e.argStrings(as, true)
 	if base == nil || base.Kind() == "type_expr" || e.m.typeOf(base.Type()).Kind == types.Meta {
 		owner := sig.owner
@@ -1161,7 +1187,7 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 	if s, ok := e.nativeMethod(recv, sig.base, base, kept, ss); ok {
 		return s
 	}
-	return "swiftrt." + recv + capitalize(sig.base) + e.suffix(sig, kept, false) + "(" + strings.Join(append([]string{e.recvArg(base)}, ss...), ", ") + ")"
+	return "swiftrt." + recv + capitalize(sig.base) + e.suffix(sig, kept, false) + refSuffix + "(" + strings.Join(append([]string{e.recvArg(base)}, ss...), ", ") + ")"
 }
 
 func lastComponent(s string) string {
@@ -1331,6 +1357,9 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "<", "<=", ">", ">=":
+		if lt.Kind == types.Tuple {
+			return "swiftrt.TupleCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
+		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "+", "-", "*":
 		if op == "+" && (e.m.Recv(lt) == "String" || e.m.Recv(lt) == "Substring") {
@@ -1763,4 +1792,30 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 		return "(*new(" + gt + "))"
 	}
 	return e.expr(base)
+}
+
+// dynamicStatics are foreign static properties Swift recomputes on every read, so Go calls them.
+var dynamicStatics = map[string]bool{
+	"TimeZoneCurrent": true, "TimeZoneAutoupdatingCurrent": true, "CalendarCurrent": true,
+	"CalendarAutoupdatingCurrent": true, "LocaleCurrent": true, "InstantNow": true,
+	"ContinuousClockInstantNow": true, "SuspendingClockInstantNow": true, "DateNow": true,
+}
+
+// lessFunc names the Go function for a local type's `<` operator, or "" if it has none.
+func (e *fileEmitter) lessFunc(t *types.Type) string {
+	if t == nil || t.Kind != types.Named {
+		return ""
+	}
+	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
+		for _, d := range mod.sortedDecls() {
+			if d.Kind == "func_decl" && d.Owner == t.Name && d.Node != nil && d.Node.Name() == "<" {
+				if mod.Pkg != e.m.Pkg {
+					e.m.importPkgs[mod.Pkg] = mod.ImportPath
+					return mod.Pkg + "." + d.GoName
+				}
+				return d.GoName
+			}
+		}
+	}
+	return ""
 }

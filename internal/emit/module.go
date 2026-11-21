@@ -596,6 +596,7 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 		}
 		out := filepath.Join(dir, toSnake(base)+suffix)
 		src = sanitizeRuntimeNames(src)
+		src = strings.ReplaceAll(src, "for _, _ := range ", "for range ")
 		formatted, err := format.Source([]byte(src))
 		if err != nil {
 			formatted = []byte(src)
