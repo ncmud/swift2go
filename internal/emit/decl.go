@@ -800,6 +800,13 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 		if info.Mutating || self.Kind == "class_decl" {
 			recv = "*" + recv
 		}
+		if info.Mutating && self.Kind != "class_decl" {
+			// self is a pointer here; Swift's self is the value.
+			if e.inoutParams == nil {
+				e.inoutParams = map[string]bool{}
+			}
+			e.inoutParams["self"] = true
+		}
 		e.w("func (self %s) %s(%s) %s ", recv, info.GoName, params, res)
 		_, names := e.paramList(n)
 		var post string
