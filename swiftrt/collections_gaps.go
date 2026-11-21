@@ -646,4 +646,10 @@ func HasherCombine[T comparable](h *any, v T) {
 func HasherFinalize(h any) int { return int(hasherIn(&h).h.Sum64()) }
 
 // ObjectIdentifierInitAny is `ObjectIdentifier(_: Any.Type)`: the identity of a metatype.
-func ObjectIdentifierInitAny(t Type) any { return t.Reflect() }
+func ObjectIdentifierInitAny(t any) any {
+	if tt, ok := t.(Type); ok {
+		return tt.Reflect()
+	}
+	// An existential metatype value is the zero value of its concrete type.
+	return reflect.TypeOf(t)
+}
