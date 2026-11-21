@@ -110,6 +110,14 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.tuple(n)
 	case "tuple_element_expr":
 		return e.expr(n.Child("base")) + ".F" + n.Str("field #")
+	case "property_wrapper_value_placeholder_expr":
+		if v := n.Child("original_wrapped_value"); v != nil {
+			return e.expr(v)
+		}
+		if v, ok := e.opaque[n.Child("opaque_value_placeholder").Str("identity")]; ok {
+			return v
+		}
+		return e.m.Unsup("expr:property_wrapper_value_placeholder_expr", e.where, e.exprGoType(n))
 	case "single_value_stmt_expr":
 		saved := e.b
 		e.b = strings.Builder{}
@@ -241,7 +249,11 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	case "keypath_expr":
 		return e.keyPath(n)
 	case "keypath_application_expr":
-		return e.expr(n.Child("keypath")) + "(" + e.expr(n.Child("base")) + ")"
+		kp := n.Child("keypath")
+		if strings.HasPrefix(e.exprGoType(kp), "swiftrt.WritableKeyPath[") {
+			return e.expr(kp) + ".Get(" + e.expr(n.Child("base")) + ")"
+		}
+		return e.expr(kp) + "(" + e.expr(n.Child("base")) + ")"
 	case "open_existential_expr":
 		e.opaque[n.Child("opaque_value").Str("identity")] = e.expr(n.Child("existential_value"))
 		return e.expr(n.Child("sub_expr"))
@@ -830,7 +842,44 @@ func (e *fileEmitter) keyPath(n ast.Node) string {
 			acc = acc + "." + info.GoName
 		}
 	}
-	return "func(root " + root + ") " + val + " { return " + acc + " }"
+	get := "func(root " + root + ") " + val + " { return " + acc + " }"
+	if !strings.HasPrefix(e.exprGoType(n), "swiftrt.WritableKeyPath[") {
+		return get
+	}
+	set := e.keyPathSetter(n, root, val)
+	return "(" + e.exprGoType(n) + "{Get: " + get + ", Set: " + set + "})"
+}
+
+// keyPathSetter writes through a writable key path's member chain.
+func (e *fileEmitter) keyPathSetter(n ast.Node, root, val string) string {
+	acc := "(*root)"
+	comps := n.List("components")
+	for i, c := range comps {
+		if c.Kind() == "tuple_element" {
+			acc += ".F" + c.Str("index")
+			continue
+		}
+		if c.Kind() != "member" {
+			return e.m.Unsup("keypath-setter:"+c.Kind(), e.where, "func(*"+root+", "+val+")")
+		}
+		info, pfx := e.lookup(c.Child("decl").Str("decl_usr"))
+		if info == nil || info.Kind != "var_decl" || info.FreeSelf() {
+			return e.m.Unsup("keypath-setter-member", e.where, "func(*"+root+", "+val+")")
+		}
+		last := i == len(comps)-1
+		switch {
+		case last && (info.Settable || info.Observed):
+			return "func(root *" + root + ", v " + val + ") { " + acc + ".Set" + info.GoName + "(v) }"
+		case info.Computed:
+			if last {
+				return e.m.Unsup("keypath-setter-readonly", e.where, "func(*"+root+", "+val+")")
+			}
+			acc += "." + info.GoName + "()"
+		default:
+			acc += "." + pfx + info.GoName
+		}
+	}
+	return "func(root *" + root + ", v " + val + ") { " + acc + " = v }"
 }
 
 func (e *fileEmitter) autoclosureFunc(n ast.Node, ps []ast.Node) string {
