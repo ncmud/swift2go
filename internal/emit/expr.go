@@ -31,6 +31,11 @@ func (e *fileEmitter) wrapSlots(n ast.Node, call string, mark int) string {
 func (e *fileEmitter) expr(n ast.Node) string {
 	mark := len(e.slots)
 	out := e.exprRaw(n)
+	if out == "swiftrt.IntMax" || out == "swiftrt.IntMin" {
+		if c, ok := intBound[e.exprGoType(n)+out[len("swiftrt.Int"):]]; ok {
+			return c
+		}
+	}
 	if len(e.slots) > mark {
 		switch n.Kind() {
 		case "call_expr", "binary_expr", "prefix_unary_expr", "postfix_unary_expr":
@@ -2394,4 +2399,17 @@ func (e *fileEmitter) expectThrows(as []arg, fatal bool) string {
 		return fmt.Sprintf("swiftrt.ExpectThrowsType[%s](%s, %t, %s)", inner, fn, fatal, msg)
 	}
 	return fmt.Sprintf("swiftrt.ExpectThrowsEqual(%s, %s, %t, %s)", e.expr(what), fn, fatal, msg)
+}
+
+// intBound is `.max`/`.min` of each fixed-width integer type as a typed Go constant.
+var intBound = map[string]string{
+	"int8Max": "int8(math.MaxInt8)", "int8Min": "int8(math.MinInt8)",
+	"int16Max": "int16(math.MaxInt16)", "int16Min": "int16(math.MinInt16)",
+	"int32Max": "int32(math.MaxInt32)", "int32Min": "int32(math.MinInt32)",
+	"int64Max": "int64(math.MaxInt64)", "int64Min": "int64(math.MinInt64)",
+	"uintMax": "uint(math.MaxUint)", "uintMin": "uint(0)",
+	"uint8Max": "uint8(math.MaxUint8)", "uint8Min": "uint8(0)",
+	"uint16Max": "uint16(math.MaxUint16)", "uint16Min": "uint16(0)",
+	"uint32Max": "uint32(math.MaxUint32)", "uint32Min": "uint32(0)",
+	"uint64Max": "uint64(math.MaxUint64)", "uint64Min": "uint64(0)",
 }

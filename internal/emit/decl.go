@@ -76,6 +76,9 @@ func (e *fileEmitter) emitFile() string {
 	if strings.Contains(src, "testing.T") {
 		imports = append(imports, `"testing"`)
 	}
+	if strings.Contains(src, "(math.M") {
+		imports = append(imports, `"math"`)
+	}
 	if len(imports) > 0 {
 		sort.Strings(imports)
 		hdr.WriteString("import (\n")
@@ -474,6 +477,46 @@ func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) 
 		}
 		e.w("}\n\nfunc (%s%s) is%s() {}\n\n", ci.GoName, use, info.GoName)
 	}
+	if decl == "" && e.synthesizesCodable(n) {
+		var cs []string
+		for _, c := range cases {
+			ci := e.info(c)
+			parts := []string{strconv.Quote(c.Name())}
+			for i, p := range c.Child("params").List("params") {
+				label := p.Name()
+				if label == "" {
+					label = "_" + strconv.Itoa(i)
+				}
+				parts = append(parts, strconv.Quote(label))
+			}
+			cs = append(cs, "swiftrt.CaseOf["+ci.GoName+"]("+strings.Join(parts, ", ")+")")
+		}
+		e.w("func init() {\nswiftrt.RegisterPayloadEnum[%s](\n%s,\n)\n}\n\n", info.GoName, strings.Join(cs, ",\n"))
+	}
+}
+
+// synthesizesCodable reports whether Swift synthesizes the enum's Codable conformance: it conforms
+// to Encodable or Decodable and writes neither encode(to:) nor init(from:).
+func (e *fileEmitter) synthesizesCodable(n ast.Node) bool {
+	codable := false
+	for _, c := range n.Child("inherits").List("conformances") {
+		switch e.m.demangle(c.Str("protocol")) {
+		case "Swift.Encodable", "Swift.Decodable":
+			codable = true
+		}
+	}
+	if !codable {
+		return false
+	}
+	for _, mem := range n.List("members") {
+		if mem.Implicit() {
+			continue
+		}
+		if mem.Kind() == "func_decl" && mem.Name() == "encode" || mem.Kind() == "constructor_decl" && len(mem.Child("params").List("params")) == 1 && mem.Child("params").List("params")[0].Name() == "decoder" {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *fileEmitter) protocolDecl(n ast.Node) {
