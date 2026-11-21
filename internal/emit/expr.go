@@ -229,7 +229,11 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return "swiftrt.MustAs[" + e.castTarget(n) + "](" + e.expr(n.Child("sub_expr")) + ")"
 	case "type_expr":
 		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
-			return "swiftrt.TypeOf[" + e.m.GoType(t.Args[0], e.generics) + "]()"
+			inner := e.m.GoType(t.Args[0], e.generics)
+			if inner == "" {
+				inner = "struct{}"
+			}
+			return "swiftrt.TypeOf[" + inner + "]()"
 		}
 		return e.m.Unsup("type-as-value", e.where, "")
 	case "if_expr", "switch_expr":
@@ -688,7 +692,7 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 	}
 	rt := e.exprGoType(n)
 	body := e.expr(n.Child("sub_expr"))
-	if rt == "" || rt == "*" {
+	if rt == "" || rt == "*" || rt == "*struct{}" {
 		return "func() { " + strings.ReplaceAll(pre.String(), "return nil", "return") + body + " }()"
 	}
 	return "func() " + rt + " {\n" + pre.String() + "return " + body + "\n}()"
