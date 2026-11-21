@@ -1073,7 +1073,7 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 	e.w("); err != nil {\n")
 	matched := e.newTmp("caught")
 	e.w("%s := false\n", matched)
-	for _, c := range n.List("catches") {
+	for _, c := range n.List("catch_stmts") {
 		items := c.List("case_label_items")
 		var tests []string
 		var bind ast.Node
@@ -1083,6 +1083,11 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 			if up == nil || up.Kind() == "pattern_any" || up.Kind() == "pattern_named" {
 				tests = append(tests, "true")
 				bind = p
+				continue
+			}
+			if up.Kind() == "pattern_is" || up.Kind() == "pattern_enum_element" {
+				tests = append(tests, e.patternTest(up, "err", e.m.typeOf(p.Type())))
+				bind = up
 				continue
 			}
 			tests = append(tests, e.m.Unsup("catch-pattern:"+up.Kind(), e.where, "bool"))
