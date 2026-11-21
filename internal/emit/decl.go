@@ -1180,6 +1180,13 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 					body = d.GoName + "(self)"
 				case d.ProtoExt && d.Owner == proto && body == "":
 					body = pfx + d.GoName + "(" + selfArg + ")"
+				case body == "" && !d.Static && !d.FreeSelf() && mod == e.m && e.m.IsAncestor(e.m.LocalTypeName(d.Owner), e.m.LocalTypeName(q)):
+					// Inherited from a superclass: the embedded base promotes it.
+					if d.Computed {
+						body = "self." + d.GoName + "()"
+					} else {
+						body = "self." + d.GoName
+					}
 				}
 			}
 		}
