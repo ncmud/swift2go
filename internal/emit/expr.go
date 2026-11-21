@@ -1423,7 +1423,9 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 			}
 		}
 		if ft := e.m.typeOf(a.node.Type()); foreign && ft != nil && ft.Kind == types.Func && len(ft.Args) == 1 && ft.Args[0].Kind == types.Tuple && len(ft.Args[0].Args) > 1 {
-			if cl := stripConv(a.node); cl != nil && cl.Kind() == "closure_expr" && len(cl.Child("params").List("params")) == len(ft.Args[0].Args) {
+			// A closure, or an operator or function reference (`contains(where: ==)`), taking the tuple's
+			// elements as separate parameters.
+			if cl := stripConv(a.node); cl != nil && (cl.Kind() == "closure_expr" && len(cl.Child("params").List("params")) == len(ft.Args[0].Args) || isOperatorRef(cl) && strings.HasPrefix(s, "func(")) {
 				suffix := ""
 				if ft.Result == nil || e.m.GoType(ft.Result, e.generics) == "" {
 					suffix = "V"
@@ -1508,6 +1510,14 @@ func (e *fileEmitter) call(n ast.Node) string {
 				elem := e.m.GoType(e.m.typeOf(kept[0].node.Type()), e.generics)
 				last := len(ss) - 1
 				return "swiftrt." + capitalize(sig.base) + "Of([]" + elem + "{" + strings.Join(ss[:last], ", ") + "}, " + ss[last] + ")"
+			}
+		}
+		if sig.base == "zip" {
+			// zip takes any two sequences; a String or Substring zips its Characters.
+			for i, a := range kept {
+				if r := e.m.Recv(e.m.typeOf(a.node.Type())); i < len(ss) && (r == "String" || r == "Substring") {
+					ss[i] = "swiftrt.Iterate[swiftrt.Character](" + ss[i] + ")"
+				}
 			}
 		}
 		return "swiftrt." + capitalize(sig.base) + e.suffix(sig, kept, true) + "(" + strings.Join(ss, ", ") + ")"
@@ -1680,6 +1690,12 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 			case "Map":
 				return "swiftrt.SliceFlattenMaps(" + e.expr(base) + ")"
 			}
+		}
+	}
+	if bt := e.m.typeOf(base.Type()); base != nil && d.Str("base_name") == "flatMap" && len(as) == 1 && bt != nil && e.m.Recv(bt) == "Slice" {
+		if ft := e.m.typeOf(as[0].node.Type()); ft != nil && ft.Kind == types.Func && ft.Result != nil && e.m.Recv(ft.Result) == "Set" {
+			ss, _ := e.argStrings(as, false)
+			return "swiftrt.SliceFlatMapSet(" + e.expr(base) + ", " + ss[0] + ")"
 		}
 	}
 	if bt := e.m.typeOf(base.Type()); base != nil && d.Str("base_name") == "map" && len(as) == 1 && bt != nil && bt.Kind == types.Optional {
@@ -2721,4 +2737,20 @@ func paramConformsTo(m *Module, fn ast.Node, t *types.Type, proto string) bool {
 		}
 	}
 	return false
+}
+
+// isOperatorRef reports whether n is an operator or other function (`==`) passed as a value.
+func isOperatorRef(n ast.Node) bool {
+	switch n.Kind() {
+	case "autoclosure_expr":
+		// The compiler wraps an operator passed as a function value in an implicit closure.
+		return true
+	case "dot_syntax_call_expr":
+		n = n.Child("fn")
+	}
+	if n == nil || n.Kind() != "declref_expr" {
+		return false
+	}
+	name := n.Child("decl").Str("base_name")
+	return name != "" && strings.ContainsAny(name[:1], "=<>!+-*/%&|^~")
 }
