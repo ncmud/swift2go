@@ -93,3 +93,13 @@ func MinLess[T any](less func(T, T) bool, x T, ys ...T) T {
 	}
 	return m
 }
+
+// SingleValueDecodingContainerDecodeAny is `container.decode(T.self)` where T is a generic parameter.
+func SingleValueDecodingContainerDecodeAny[T any](c SingleValueDecodingContainer, t TypeT[T]) T {
+	return SingleValueDecodingContainerDecode(c, t)
+}
+
+// KeyedDecodingContainerDecodeAnyForKey is `container.decode(T.self, forKey:)` where T is a generic parameter.
+func KeyedDecodingContainerDecodeAnyForKey[T any](c KeyedDecodingContainer, t TypeT[T], key any) T {
+	return KeyedDecodingContainerDecodeForKey(c, t, key)
+}
