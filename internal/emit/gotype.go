@@ -281,7 +281,7 @@ func (m *Module) Recv(t *types.Type) string {
 	case "Swift.EnumeratedSequence":
 		return "Enumerated"
 	}
-	if m.IsOptionSet(t.Name) {
+	if m.IsOptionSet(t.Name) && !foreignOptionSets[t.Name] {
 		return "OptionSet"
 	}
 	parts := strings.Split(t.Name, ".")
