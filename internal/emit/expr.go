@@ -427,6 +427,10 @@ func (e *fileEmitter) upcast(n ast.Node) string {
 		}
 		return "swiftrt.SliceMap(" + e.expr(sub) + ", func(v " + se + ") " + de + " { return " + conv + " })"
 	}
+	if src != dst && strings.HasPrefix(src, "map[") && strings.HasSuffix(src, "]struct{}") && strings.HasPrefix(dst, "map[") && strings.HasSuffix(dst, "]struct{}") {
+		// Set<Concrete> as Set<AnyHashable>.
+		return "swiftrt.SetUpcast[" + dst + "](" + e.expr(sub) + ")"
+	}
 	return e.expr(sub)
 }
 
@@ -622,6 +626,10 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 // recvExpr renders a receiver for field access or a Go method call.
 func (e *fileEmitter) recvExpr(base ast.Node) string {
 	if base.Kind() == "inout_expr" {
+		if ds := stripLoads(base.Child("sub_expr")); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "Map" {
+			// A mutating method on a dictionary element runs on a slot the enclosing call stores back.
+			return "(" + e.expr(base) + ")"
+		}
 		return e.lvalue(base.Child("sub_expr"))
 	}
 	s := e.expr(base)

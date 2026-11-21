@@ -144,3 +144,12 @@ func (s HSet[T]) Elements() []T {
 	}
 	return out
 }
+
+// SetUpcast is a Set converted to a Set of a wider element type (Set<Race> as Set<AnyHashable>).
+func SetUpcast[D ~map[K2]struct{}, K2, K1 comparable](s map[K1]struct{}) D {
+	out := D{}
+	for k := range s {
+		out[any(k).(K2)] = struct{}{}
+	}
+	return out
+}
