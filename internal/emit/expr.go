@@ -9,8 +9,34 @@ import (
 	"github.com/ncmud/swift2go/internal/types"
 )
 
+// slot is a dictionary element copied out for an inout argument and stored back after the call.
+type slot struct{ pre, writeBack string }
+
+// wrapSlots runs call inside a closure that copies the slots it takes out of their dictionaries
+// first and stores them back after it returns.
+func (e *fileEmitter) wrapSlots(n ast.Node, call string, mark int) string {
+	var pre, wb strings.Builder
+	for _, s := range e.slots[mark:] {
+		pre.WriteString(s.pre)
+		wb.WriteString(s.writeBack)
+	}
+	e.slots = e.slots[:mark]
+	rt := e.exprGoType(n)
+	if isVoidGo(rt) {
+		return "func() {\n" + pre.String() + call + "\n" + wb.String() + "}()"
+	}
+	return "func() " + rt + " {\n" + pre.String() + "res := " + call + "\n" + wb.String() + "return res\n}()"
+}
+
 func (e *fileEmitter) expr(n ast.Node) string {
+	mark := len(e.slots)
 	out := e.exprRaw(n)
+	if len(e.slots) > mark {
+		switch n.Kind() {
+		case "call_expr", "binary_expr", "prefix_unary_expr", "postfix_unary_expr":
+			out = e.wrapSlots(n, out, mark)
+		}
+	}
 	if n == nil || !strings.HasPrefix(out, "swiftrt.") {
 		return out
 	}
@@ -92,14 +118,18 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.expr(sub)
 	case "inout_expr":
 		sub := n.Child("sub_expr")
+		saved := e.b
+		e.b = strings.Builder{}
 		lv := e.lvalue(sub)
+		pre := e.b.String()
+		e.b = saved
 		if ds := stripLoads(sub); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "Map" && strings.HasSuffix(lv, "]") {
-			// Go map elements are not addressable: mutate a copy, then store it back.
+			// Go map elements are not addressable: the enclosing call mutates a copy and stores it back.
 			tmp := e.newTmp("slot")
-			e.w("%s := %s\n", tmp, lv)
-			e.post = append(e.post, lv+" = "+tmp)
+			e.slots = append(e.slots, slot{pre: pre + tmp + " := " + lv + "\n", writeBack: lv + " = " + tmp + "\n"})
 			return "&" + tmp
 		}
+		e.w("%s", pre)
 		return "&" + lv
 	case "string_literal_expr":
 		if e.m.Recv(e.m.typeOf(n.Type())) == "Substring" {
@@ -1104,17 +1134,37 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 		if foreign && a.node.Kind() == "default_argument_expr" {
 			continue
 		}
-		s := e.expr(a.node)
+		lazy := false
 		if i < len(params) && params[i].Bool("autoclosure") && !foreign {
 			if ac := stripConv(a.node); ac != nil && ac.Kind() == "autoclosure_expr" && len(ac.Child("params").List("params")) == 0 {
 				if ft := e.m.typeOf(ac.Type()); ft != nil && ft.Kind == types.Func {
-					if res := e.m.GoType(ft.Result, e.generics); res != "" && !isVoidGo(res) {
-						s = "func() " + res + " { return " + s + " }"
-					} else {
-						s = "func() { " + s + " }"
-					}
+					lazy = true
 				}
 			}
+		}
+		var s string
+		if lazy {
+			// The argument is evaluated when the callee calls it: keep its statements inside the closure.
+			ft := e.m.typeOf(stripConv(a.node).Type())
+			saved, savedPost := e.b, e.post
+			e.b, e.post = strings.Builder{}, nil
+			body := e.expr(a.node)
+			pre, post := e.b.String(), ""
+			for _, p := range e.post {
+				post += p + "\n"
+			}
+			e.b, e.post = saved, savedPost
+			if res := e.m.GoType(ft.Result, e.generics); res != "" && !isVoidGo(res) {
+				if post == "" {
+					s = "func() " + res + " {\n" + pre + "return " + body + "\n}"
+				} else {
+					s = "func() " + res + " {\n" + pre + "res := " + body + "\n" + post + "return res\n}"
+				}
+			} else {
+				s = "func() {\n" + pre + body + "\n" + post + "}"
+			}
+		} else {
+			s = e.expr(a.node)
 		}
 		if ft := e.m.typeOf(a.node.Type()); foreign && ft != nil && ft.Kind == types.Func && len(ft.Args) == 1 && ft.Args[0].Kind == types.Tuple && len(ft.Args[0].Args) > 1 {
 			if cl := stripConv(a.node); cl != nil && cl.Kind() == "closure_expr" && len(cl.Child("params").List("params")) == len(ft.Args[0].Args) {
@@ -1764,7 +1814,12 @@ func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
 	}
 	if info, pfx := e.lookup(d.Str("decl_usr")); info != nil {
 		if as[0].node.Kind() == "inout_expr" {
-			return pfx + info.GoName + "(" + e.expr(as[0].node) + ", " + rs + ")", true
+			mark := len(e.slots)
+			call := pfx + info.GoName + "(" + e.expr(as[0].node) + ", " + rs + ")"
+			if len(e.slots) > mark {
+				call = e.wrapSlots(n, call, mark)
+			}
+			return call, true
 		}
 		return pfx + info.GoName + "(&" + e.lvalue(l) + ", " + rs + ")", true
 	}

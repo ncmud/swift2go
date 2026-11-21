@@ -34,7 +34,12 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 		}
 		savePost := e.post
 		e.post = nil
+		mark := len(e.slots)
 		e.stmt(s)
+		if len(e.slots) > mark {
+			e.slots = e.slots[:mark]
+			e.w("_ = %s\n", e.m.Unsup("inout-slot-unwrapped", e.where, ""))
+		}
 		for _, p := range e.post {
 			e.w("%s\n", p)
 		}
@@ -153,9 +158,19 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	case "while_stmt":
 		e.whileStmt(n)
 	case "repeat_while_stmt":
-		e.w("for {\n")
+		// `continue` must still test the condition, so it is the loop's post statement.
+		again := e.newTmp("again")
+		saved := e.b
+		e.b = strings.Builder{}
+		cond := e.expr(n.Child("cond"))
+		condPre := e.b.String()
+		e.b = saved
+		if condPre != "" {
+			cond = "func() bool {\n" + condPre + "return " + cond + "\n}()"
+		}
+		e.w("for %s := true; %s; %s = %s {\n", again, again, again, cond)
 		e.stmt(n.Child("body"))
-		e.w("if !(%s) { break }\n}\n", e.expr(n.Child("cond")))
+		e.w("}\n")
 	case "for_each_stmt":
 		e.forEach(n)
 	case "switch_stmt":
