@@ -116,7 +116,7 @@ func TestDecomposedStringWithCanonicalMapping(t *testing.T) {
 func TestNSRegularExpressionMatches(t *testing.T) {
 	re := NSRegularExpressionInitPattern("b+")
 	s := "abbcb🎉bb"
-	full := _NSRangeInitPartialRangeFromIn(PartialRangeFrom[int]{Lo: 0}, s)
+	full := NSRangeInitPartialRangeFromIn(PartialRangeFrom[int]{Lo: 0}, s)
 	var got []Range[int]
 	for _, m := range NSRegularExpressionMatchesInRange(re, s, full) {
 		got = append(got, NSTextCheckingResultRange(m))

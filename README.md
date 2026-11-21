@@ -70,6 +70,21 @@ with `go test`. Set `SWIFT_PKG` to the package directory.
 The runtime also covers the parts of Foundation, Dispatch, Synchronization, swift-collections,
 swift-log, CryptoKit and a few C library calls that the driving codebase uses.
 
+## Design decisions
+
+These are choices made for the codebase that drives the project. Each fits it, and each could become an
+option.
+
+- **Overflow traps.** `Int` arithmetic panics on overflow, as a Swift debug build does. `&+` and the other wrapping operators wrap.
+- **Optionals are pointers.** `T?` is `*T`, and a class's Optional is the class pointer itself. A generic `T?` instantiated with a class is unwrapped at call sites, so callers see `*C`, not `**C`.
+- **Value semantics by copying.** Struct values, arrays, dictionaries and sets are deep-copied (`swiftrt.Copy`) wherever Swift would copy them. Class references, which embed a marker, are never copied.
+- **Statics are lazy.** Static and global stored properties become `swiftrt.Lazy` cells initialized on first use, as Swift does, so initialization cycles that Swift allows still work in Go.
+- **Errors are panics.** `throw` panics with the error, and `do`/`catch`, `try?` and `try!` recover it. Functions keep their Go signatures without an `error` result.
+- **Observers run on in-place mutation.** `didSet`/`willSet` fire for whole-value assignments and for mutations of part of the value (`dict[k] = v`, `array.append(x)`), except inside initializers and the property's own observers.
+- **Names follow Swift.** Methods are named after their base name and argument labels (`pad(_:to:)` becomes `PadTo`). Runtime calls are `swiftrt.<Receiver><Member><Labels>`. Objective-C classes keep their Objective-C names as receivers (`NSFileManagerFileExistsAtPath`). Clashes get a type or `Fn` suffix.
+- **Imported option sets are listed by name.** Foreign `OptionSet` types the runtime models (`JSONEncoder.OutputFormatting`, YYJSON's options) are named in the emitter, so array literals of them build option sets.
+- **Targets come in dependency order.** A dependency must be transpiled before, or in the same run as, the targets that import it. Otherwise its types are treated as foreign, and calls go to the runtime.
+
 ## Limits
 
 - Matching for Swift `Regex` is scalar-based, apart from the trailing `\b` handled above.

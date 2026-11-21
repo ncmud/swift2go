@@ -45,12 +45,12 @@ func TestNSRangeConversions(t *testing.T) {
 		{Range[int]{IntMax, IntMax}, "", false},
 	}
 	for _, c := range cases {
-		got := RangeOptInit_NSRangeIn(c.r, s)
+		got := RangeOptInitNSRangeIn(c.r, s)
 		if (got != nil) != c.ok || got != nil && s[got.Lo:got.Hi] != c.want {
 			t.Errorf("Range(%v) = %v", c.r, got)
 		}
 	}
-	if got := _NSRangeInitPartialRangeFromIn(PartialRangeFrom[int]{Lo: 1}, s); got != (Range[int]{1, 6}) {
+	if got := NSRangeInitPartialRangeFromIn(PartialRangeFrom[int]{Lo: 1}, s); got != (Range[int]{1, 6}) {
 		t.Errorf("NSRange(1...) = %v, want {1, 5}", got)
 	}
 }

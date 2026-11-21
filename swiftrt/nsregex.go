@@ -109,19 +109,19 @@ func utf16ByteIndex(s string, u int) (int, bool) {
 	return 0, false
 }
 
-// _NSRangeInitPartialRangeFromIn is Foundation `NSRange(_:in:)` on a `PartialRangeFrom<String.Index>`:
+// NSRangeInitPartialRangeFromIn is Foundation `NSRange(_:in:)` on a `PartialRangeFrom<String.Index>`:
 // the UTF-16 location and length of `s[r...]`.
-func _NSRangeInitPartialRangeFromIn(r PartialRangeFrom[int], s string) Range[int] {
+func NSRangeInitPartialRangeFromIn(r PartialRangeFrom[int], s string) Range[int] {
 	if r.Lo < 0 || r.Lo > len(s) {
 		Trap("String index is out of bounds")
 	}
 	return Range[int]{Lo: utf16Offset(s, r.Lo), Hi: utf16Offset(s, len(s))}
 }
 
-// RangeOptInit_NSRangeIn is Foundation `Range<String.Index>(_:in:)`: the string range an NSRange
+// RangeOptInitNSRangeIn is Foundation `Range<String.Index>(_:in:)`: the string range an NSRange
 // (UTF-16 offsets) covers, or nil when it is NSNotFound, out of bounds, or (as on Linux) either end
 // is not on a Character boundary.
-func RangeOptInit_NSRangeIn(r Range[int], s string) *Range[int] {
+func RangeOptInitNSRangeIn(r Range[int], s string) *Range[int] {
 	if r.Lo == IntMax {
 		return nil
 	}
