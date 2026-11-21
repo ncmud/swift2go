@@ -158,7 +158,7 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	case "discard_assignment_expr":
 	case "optional_evaluation_expr":
 		s := e.expr(n)
-		if strings.HasPrefix(s, "func() {") {
+		if strings.HasPrefix(s, "func() {") || e.exprGoType(n) == "" && strings.HasSuffix(s, ")") {
 			e.w("%s\n", s)
 		} else {
 			e.w("_ = %s\n", s)
@@ -168,7 +168,7 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	default:
 		if strings.HasSuffix(n.Kind(), "_expr") {
 			s := e.expr(n)
-			if e.isCallLike(n) {
+			if e.isCallLike(n) || e.exprGoType(n) == "" && (strings.HasSuffix(s, ")") || strings.HasSuffix(s, "}()")) {
 				e.w("%s\n", s)
 			} else {
 				e.w("_ = %s\n", s)

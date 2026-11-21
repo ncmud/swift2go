@@ -610,7 +610,7 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 		}
 		e.typeParams = slices.DeleteFunc(e.typeParams, func(p string) bool { return p == tp })
 	}
-	if fn.Child("implicit_self_decl") != nil && !fn.Bool("static") && len(e.typeParams) > 0 && !e.freeSelfFunc(fn) {
+	if (fn.Child("implicit_self_decl") != nil || fn.Kind() == "subscript_decl") && !fn.Bool("static") && len(e.typeParams) > 0 && !e.freeSelfFunc(fn) {
 		for k, v := range g {
 			for _, tp := range e.typeParams {
 				bound := "any"
@@ -691,6 +691,11 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 		selfT := self.GoName
 		if info.ProtoExt {
 			selfT = e.m.LocalTypeName(info.Owner)
+		}
+		if (self.Kind == "foreign" || info.ProtoExt) && !e.m.isLocalProtocol(info.Owner) {
+			if st := e.m.GoType(e.m.typeOf(n.Child("implicit_self_decl").Str("interface_type")), e.generics); st != "" && !strings.HasPrefix(st, "any") {
+				selfT = st
+			}
 		}
 		if info.Mutating && !info.ProtoExt && !strings.HasPrefix(selfT, "*") {
 			selfT = "*" + selfT
@@ -822,7 +827,18 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		if info.ProtoExt {
 			selfT = e.m.LocalTypeName(info.Owner)
 		}
-		e.w("func %s(self %s) %s ", info.GoName, selfT, res)
+		tps := ""
+		if (self.Kind == "foreign" || info.ProtoExt) && !e.m.isLocalProtocol(info.Owner) {
+			saveG := e.generics
+			e.generics = e.genericScope(getter)
+			tps = e.typeParamList()
+			defer func() { e.generics = saveG }()
+			res = e.m.GoType(e.m.typeOf(n.Str("interface_type")), e.generics)
+			if st := e.m.GoType(e.m.typeOf(getter.Child("implicit_self_decl").Str("interface_type")), e.generics); st != "" && !strings.HasPrefix(st, "any") {
+				selfT = st
+			}
+		}
+		e.w("func %s%s(self %s) %s ", info.GoName, tps, selfT, res)
 	default:
 		recv := self.GoName
 		if self.Kind == "class_decl" {
