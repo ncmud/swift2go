@@ -413,6 +413,7 @@ func (e *fileEmitter) enumDecl(n ast.Node) {
 				names = append(names, e.info(c).GoName)
 			}
 			e.w("func %sAllCases() []%s { return []%s{%s} }\n\n", info.GoName, info.GoName, info.GoName, strings.Join(names, ", "))
+			e.w("func init() { swiftrt.RegisterAllCases(%sAllCases) }\n\n", info.GoName)
 		}
 	}
 	e.members(n, info)
@@ -469,6 +470,7 @@ func (e *fileEmitter) rawValue(n ast.Node, info *DeclInfo, cases []ast.Node) {
 			e.w("\tcase %s:\n\t\tv := %s\n\t\treturn &v\n", raw[i], e.info(c).GoName)
 		}
 		e.w("\t}\n\treturn nil\n}\n\n")
+		e.w("func init() { swiftrt.RegisterRawInit(%s) }\n\n", ctor.GoName)
 	}
 }
 

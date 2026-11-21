@@ -304,6 +304,10 @@ func (m *Module) Recv(t *types.Type) string {
 	if rest, ok := strings.CutPrefix(t.Name, "__C."); ok && rest != "" && rest[0] >= 'a' && rest[0] <= 'z' && !strings.Contains(rest, ".") {
 		return "C" + capitalize(rest)
 	}
+	if strings.HasSuffix(t.Name, ".AllCases") {
+		// CaseIterable.AllCases is an array of the cases here.
+		return "Slice"
+	}
 	parts := strings.Split(t.Name, ".")
 	last := strings.Map(func(r rune) rune {
 		if r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
