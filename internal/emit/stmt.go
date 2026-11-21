@@ -867,6 +867,18 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 	st := e.m.typeOf(subj.Type())
 	tmp := e.newTmp("sw")
 	e.w("%s := %s\n_ = %s\n", tmp, e.expr(subj), tmp)
+	// A case that falls through needs Go's switch; otherwise an if-chain reads better.
+	goSwitch := false
+	for _, c := range n.List("cases") {
+		ast.Walk(c.Child("body"), func(x ast.Node) {
+			if x.Kind() == "fallthrough_stmt" {
+				goSwitch = true
+			}
+		})
+	}
+	if goSwitch {
+		e.w("switch {\n")
+	}
 	first := true
 	for _, c := range n.List("cases") {
 		var tests []string
@@ -896,18 +908,27 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 		if isDefault {
 			cond = "true"
 		}
-		if first {
+		switch {
+		case goSwitch:
+			e.w("case %s:\n", cond)
+		case first:
 			e.w("if %s {\n", cond)
-			first = false
-		} else {
+		default:
 			e.w("} else if %s {\n", cond)
 		}
+		first = false
 		if bindPat != nil {
 			e.patternBind(bindPat, tmp)
 		}
-		e.caseBody(c.Child("body"))
+		if goSwitch {
+			if els := c.Child("body").List("elements"); !(len(els) == 1 && els[0].Kind() == "break_stmt") {
+				e.stmts(els)
+			}
+		} else {
+			e.caseBody(c.Child("body"))
+		}
 	}
-	if !first {
+	if !first || goSwitch {
 		e.w("}\n")
 	}
 }
