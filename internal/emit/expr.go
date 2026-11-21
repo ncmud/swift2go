@@ -58,6 +58,10 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			return "swiftrt.Ref(" + e.expr(sub) + ")"
 		}
 		return e.expr(sub)
+	case "dot_syntax_base_ignored":
+		return e.expr(n.Child("rhs"))
+	case "archetype_to_super_expr":
+		return e.expr(n.Child("sub_expr"))
 	case "super_ref_expr":
 		if t := e.m.typeOf(n.Type()); t != nil {
 			return "(&self." + strings.TrimPrefix(e.m.GoType(t, e.generics), "*") + ")"
@@ -555,8 +559,10 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 			}
 		}
 		return e.m.Unsup("lvalue:member:"+why, e.where+" ."+n.Child("decl").Str("base_name"), "")
-	case "load_expr", "paren_expr", "inout_expr", "derived_to_base_expr", "dot_self_expr":
+	case "load_expr", "paren_expr", "inout_expr", "derived_to_base_expr", "dot_self_expr", "archetype_to_super_expr":
 		return e.lvalue(n.Child("sub_expr"))
+	case "dot_syntax_base_ignored":
+		return e.lvalue(n.Child("rhs"))
 	case "opaque_value_expr":
 		if v, ok := e.opaque[n.Str("identity")]; ok {
 			return v

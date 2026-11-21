@@ -192,9 +192,10 @@ func (m *Module) typeOf(mangled string) *types.Type {
 		return t
 	}
 	dem := m.demangle(mangled)
-	for _, marker := range []string{" & Swift.Sendable", "Swift.Sendable & "} {
+	for _, marker := range []string{" & Swift.Sendable", "Swift.Sendable & ", "@isolated(any) ", "@MainActor ", "nonisolated(nonsending) ", "@concurrent "} {
 		dem = strings.ReplaceAll(dem, marker, "")
 	}
+	dem = extensionInPrefix.ReplaceAllString(dem, "")
 	t := types.Parse(dem)
 	if t.Kind == types.Unknown {
 		m.Unsup("type-parse", m.demangle(mangled), "")
@@ -878,3 +879,6 @@ func mergeTypeParams(a, b string) string {
 	}
 	return a[:len(a)-1] + ", " + b[1:]
 }
+
+// extensionInPrefix strips the demangler's "(extension in Foundation):" qualifier from type names.
+var extensionInPrefix = regexp.MustCompile(`\(extension in [^)]*\):`)
