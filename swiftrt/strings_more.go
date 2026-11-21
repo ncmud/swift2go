@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"strconv"
@@ -476,15 +477,84 @@ func SubstringTrimmingCharactersIn(s Substring, cs CharacterSet) string {
 // StringComponentsSeparatedBy is Foundation `components(separatedBy:)` with a String separator.
 func StringComponentsSeparatedBy(s, sep string) []string { return strings.Split(s, sep) }
 
-// StringInitDecodingAs is Swift `String(decoding:as: UTF8.self)`; invalid bytes become U+FFFD.
-func StringInitDecodingAs(b []byte, _ any) string { return strings.ToValidUTF8(string(b), "�") }
-
-// StringInitCString is Swift `String(cString:)`.
-func StringInitCString(b []byte) string {
-	if i := strings.IndexByte(string(b), 0); i >= 0 {
-		b = b[:i]
+// StringInitDecodingAs is Swift `String(decoding:as: UTF8.self)`: each maximal ill-formed subpart of
+// the bytes becomes one U+FFFD, so `[0xE2, 0x82]` decodes to one replacement and `[0xFF, 0xFF]` to two.
+func StringInitDecodingAs(b []byte, _ any) string {
+	if utf8.Valid(b) {
+		return string(b)
 	}
-	return StringInitDecodingAs(b, nil)
+	var sb strings.Builder
+	for i := 0; i < len(b); {
+		r, n := utf8.DecodeRune(b[i:])
+		if r != utf8.RuneError || n > 1 {
+			sb.Write(b[i : i+n])
+			i += n
+			continue
+		}
+		sb.WriteRune(utf8.RuneError)
+		i += utf8MaximalSubpart(b[i:])
+	}
+	return sb.String()
+}
+
+// utf8MaximalSubpart is the length of the maximal ill-formed subpart at the start of b, which does
+// not begin a well-formed scalar: the lead byte and the continuation bytes that could still have
+// completed it under Unicode Table 3-7, and at least one byte.
+func utf8MaximalSubpart(b []byte) int {
+	lead := b[0]
+	var need int
+	lo, hi := byte(0x80), byte(0xBF)
+	switch {
+	case lead >= 0xC2 && lead <= 0xDF:
+		need = 1
+	case lead == 0xE0:
+		need, lo = 2, 0xA0
+	case lead >= 0xE1 && lead <= 0xEC, lead == 0xEE, lead == 0xEF:
+		need = 2
+	case lead == 0xED:
+		need, hi = 2, 0x9F
+	case lead == 0xF0:
+		need, lo = 3, 0x90
+	case lead >= 0xF1 && lead <= 0xF3:
+		need = 3
+	case lead == 0xF4:
+		need, hi = 3, 0x8F
+	default:
+		return 1
+	}
+	n := 1
+	for ; n <= need && n < len(b); n++ {
+		if b[n] < lo || b[n] > hi {
+			break
+		}
+		lo, hi = 0x80, 0xBF
+	}
+	return n
+}
+
+// StringInitCString is Swift `String(cString:)`. b holds the C string's bytes, as a byte or CChar
+// slice or a string, and the result stops at the first NUL.
+func StringInitCString(b any) string {
+	var raw []byte
+	switch v := b.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	case []int8:
+		raw = make([]byte, len(v))
+		for i, c := range v {
+			raw[i] = byte(c)
+		}
+	case *any:
+		return StringInitCString(*v)
+	default:
+		panic(fmt.Sprintf("swiftrt.StringInitCString: %T is not a C string", b))
+	}
+	if i := bytes.IndexByte(raw, 0); i >= 0 {
+		raw = raw[:i]
+	}
+	return StringInitDecodingAs(raw, nil)
 }
 
 // UnicodeScalarProperties is Swift `Unicode.Scalar.Properties`.
