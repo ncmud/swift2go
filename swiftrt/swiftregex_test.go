@@ -29,3 +29,25 @@ func TestSwiftRegexWholeMatch(t *testing.T) {
 		t.Fatal("ignoresCase")
 	}
 }
+
+type fourCaps = struct {
+	F0, F1, F2, F3 Substring
+}
+
+func TestSwiftRegexUnicodeWordBoundary(t *testing.T) {
+	re := RegexLiteral[fourCaps](`\$([eE])((?:\s|\{[^}]+\})*(?:(?:simply|suddenly|just|completely|accidentally|finally)\s+)?)([A-Za-z]+(?:['’]t)?)\b`)
+	for in, want := range map[string]bool{"$e attack's foo": false, "$e e.g": false, "$e attacks you": true, "$e can't stop": true} {
+		if got := StringFirstMatchOf(in, re) != nil; got != want {
+			t.Errorf("%q: matched %v, want %v", in, got, want)
+		}
+	}
+	if m := StringFirstMatchOf("$e can't stop", re); m == nil || m.Output.F3.String() != "can't" {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestSwiftRegexEmptyMatchAfterMatch(t *testing.T) {
+	if got := StringReplacingWith("baaac", RegexLiteral[Substring](`a*`), "-"); got != "-b--c-" {
+		t.Fatalf("got %q", got)
+	}
+}
