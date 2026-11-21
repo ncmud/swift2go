@@ -1543,7 +1543,14 @@ func (e *fileEmitter) call(n ast.Node) string {
 				}
 			}
 		}
-		return "swiftrt." + capitalize(sig.base) + e.suffix(sig, kept, true) + "(" + strings.Join(ss, ", ") + ")"
+		call := "swiftrt." + capitalize(sig.base) + e.suffix(sig, kept, true) + "(" + strings.Join(ss, ", ") + ")"
+		if sig.base == "withCheckedThrowingContinuation" || sig.base == "withCheckedContinuation" {
+			// The runtime's continuation carries any; the call's Swift type says what it resumes with.
+			if gt := e.exprGoType(n); gt != "" && gt != "any" && gt != "struct{}" {
+				return "swiftrt.MustAs[" + gt + "](" + call + ")"
+			}
+		}
+		return call
 	}
 	ss, _ := e.argStrings(as, false)
 	f := e.expr(fn)
@@ -2791,6 +2798,19 @@ func (e *fileEmitter) optionalParamConversion(n ast.Node) (string, bool) {
 		return "", false
 	}
 	fp, tp := from.Args[0], to.Args[0]
+	if len(to.Inout) == 1 && to.Inout[0] && (len(from.Inout) == 0 || !from.Inout[0]) {
+		// A function taking T passed where one taking inout T is expected: read through the pointer.
+		pg := e.m.GoType(fp, e.generics)
+		res := ""
+		if from.Result != nil {
+			res = e.m.GoType(from.Result, e.generics)
+		}
+		body := "f(*v)"
+		if res != "" {
+			body = "return " + body
+		}
+		return "func(f func(" + pg + ") " + res + ") func(*" + pg + ") " + res + " { return func(v *" + pg + ") " + res + " { " + body + " } }(" + e.expr(sub) + ")", true
+	}
 	if fp.Kind != types.Optional || len(fp.Args) != 1 || tp.Kind == types.Optional {
 		return "", false
 	}

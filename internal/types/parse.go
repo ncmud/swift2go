@@ -192,6 +192,9 @@ func (p *parser) parsePrimary() *Type {
 			} else {
 				p.pos = save
 			}
+			// Ownership modifiers can precede inout (`sending inout [T]`).
+			for p.eat("sending ") || p.eat("__owned ") || p.eat("__shared ") || p.eat("consuming ") || p.eat("borrowing ") {
+			}
 			io := p.eat("inout ")
 			before := p.pos
 			at := p.parseType()
