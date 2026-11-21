@@ -45,7 +45,7 @@ func (e *fileEmitter) expr(n ast.Node) string {
 		}
 	}
 	if n != nil && n.Kind() == "call_expr" && !strings.HasPrefix(out, "swiftrt.") && e.returnsGenericOptional(n) {
-		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
+		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && t.Args[0].Kind != types.Optional && e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
 			// A generic `T?` with T a class comes back as **C; Swift's C? is *C.
 			return "swiftrt.Flat(" + out + ")"
 		}
@@ -278,6 +278,9 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		gt := e.exprGoType(n)
 		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Named && e.m.IsOptionSet(t.Name) {
 			return "swiftrt.OptionSetOf[" + gt + "](" + strings.Join(parts, ", ") + ")"
+		}
+		if strings.HasPrefix(gt, "swiftrt.HSet[") {
+			return "swiftrt.HSetOf[" + strings.TrimSuffix(strings.TrimPrefix(gt, "swiftrt.HSet["), "]") + "](" + strings.Join(parts, ", ") + ")"
 		}
 		if strings.HasPrefix(gt, "map[") && strings.HasSuffix(gt, "]struct{}") {
 			for i := range parts {
@@ -766,7 +769,7 @@ func (e *fileEmitter) subscriptAssign(dest, src ast.Node) (string, bool) {
 		return m + "[" + k + "] = " + e.expr(src.Child("sub_expr")), true
 	}
 	if bt.Kind == types.Dict && len(bt.Args) == 2 {
-		if vt := e.m.GoType(bt.Args[1], e.generics); e.m.isReferenceGo(bt.Args[1], vt) && vt != "any" {
+		if vt := e.m.GoType(bt.Args[1], e.generics); bt.Args[1].Kind != types.Optional && e.m.isReferenceGo(bt.Args[1], vt) && vt != "any" {
 			// An optional class reference is the pointer itself: nil removes the entry.
 			return "swiftrt.MapSetRef(" + m + ", " + k + ", " + e.expr(src) + ")", true
 		}
@@ -1286,7 +1289,7 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 			// A closure for a generic `(…) -> T?` parameter, with T a class, returns the class pointer;
 			// the generic signature wants a pointer to it.
 			if pt := e.m.typeOf(params[i].Str("interface_type")); pt != nil && pt.Kind == types.Func && pt.Result != nil && pt.Result.Kind == types.Optional && len(pt.Result.Args) == 1 && isGenericParam(pt.Result.Args[0]) && len(pt.Args) <= 2 {
-				if at := e.m.typeOf(a.node.Type()); at != nil && at.Kind == types.Func && at.Result != nil && at.Result.Kind == types.Optional && len(at.Result.Args) == 1 && e.m.isReferenceGo(at.Result.Args[0], e.m.GoType(at.Result.Args[0], e.generics)) {
+				if at := e.m.typeOf(a.node.Type()); at != nil && at.Kind == types.Func && at.Result != nil && at.Result.Kind == types.Optional && len(at.Result.Args) == 1 && at.Result.Args[0].Kind != types.Optional && e.m.isReferenceGo(at.Result.Args[0], e.m.GoType(at.Result.Args[0], e.generics)) {
 					s = "swiftrt.LiftOpt" + itoa(len(pt.Args)) + "(" + s + ")"
 				}
 			}
@@ -1321,6 +1324,20 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 func (e *fileEmitter) call(n ast.Node) string {
 	fn := stripConv(n.Child("fn"))
 	as := e.args(n.Child("args"))
+	if d := fn.Child("decl"); fn.Kind() == "declref_expr" && d.Str("decl_usr") == "" {
+		if lg, ok := e.localGenerics[d.Str("base_name")]; ok {
+			ss, _ := e.argStrings(as, false)
+			var caps []string
+			for _, c := range lg.captures {
+				if e.inoutParams[c] {
+					caps = append(caps, c)
+				} else {
+					caps = append(caps, "&"+c)
+				}
+			}
+			return lg.goName + "(" + strings.Join(append(caps, ss...), ", ") + ")"
+		}
+	}
 	switch fn.Kind() {
 	case "dot_syntax_call_expr":
 		d := stripConv(fn.Child("fn")).Child("decl")
