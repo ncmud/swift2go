@@ -311,6 +311,8 @@ func (m *Module) Recv(t *types.Type) string {
 		}
 		return -1
 	}, parts[len(parts)-1])
+	// A leading underscore (`_NSRange`) would make the runtime name unexported.
+	last = strings.TrimLeft(last, "_")
 	if last == "" {
 		return "Any"
 	}

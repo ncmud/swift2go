@@ -609,11 +609,22 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 	// variable: keep that value reachable after the binding shadows it.
 	outer := map[string]string{}
 	referenced := map[string]bool{}
+	declaredInside := map[string]bool{}
 	ast.Walk(n.Child("body"), func(x ast.Node) {
-		if x.Kind() == "declref_expr" && x.Child("decl").Str("decl_usr") == "" {
-			referenced[x.Child("decl").Str("base_name")] = true
+		switch x.Kind() {
+		case "declref_expr":
+			if x.Child("decl").Str("decl_usr") == "" {
+				referenced[x.Child("decl").Str("base_name")] = true
+			}
+		case "pattern_named":
+			declaredInside[x.Child("name").Child("base_name").Str("name")] = true
+		case "parameter":
+			declaredInside[x.Name()] = true
 		}
 	})
+	for name := range declaredInside {
+		delete(referenced, name)
+	}
 	for _, name := range declaredNames(n) {
 		if referenced[name] {
 			alias := e.newTmp("outer")
@@ -754,7 +765,12 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		inner := unwrapPattern(p)
 		if inner.Kind() == "pattern_tuple" {
 			els := inner.List("elements")
-			if a, b := name(els[0]), name(els[1]); a == "_" && b == "_" {
+			if second := unwrapPattern(els[1]); second != nil && second.Kind() == "pattern_tuple" {
+				// for (i, (a, b)) in pairs.enumerated(): bind the element's fields.
+				el := e.newTmp("el")
+				e.w("for %s, %s := range %s {\n", name(els[0]), el, base)
+				e.bindFromExpr(second, el)
+			} else if a, b := name(els[0]), name(els[1]); a == "_" && b == "_" {
 				e.w("for range %s {\n", base)
 			} else {
 				e.w("for %s, %s := range %s {\n", a, b, base)
