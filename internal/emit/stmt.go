@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"maps"
 	"reflect"
 	"sort"
 	"strconv"
@@ -587,8 +588,34 @@ func (e *fileEmitter) ifStmt(n ast.Node) {
 }
 
 func (e *fileEmitter) guardStmt(n ast.Node) {
+	// The else body cannot see the guard's bindings, so a name it shares with one is the outer
+	// variable: keep that value reachable after the binding shadows it.
+	outer := map[string]string{}
+	referenced := map[string]bool{}
+	ast.Walk(n.Child("body"), func(x ast.Node) {
+		if x.Kind() == "declref_expr" && x.Child("decl").Str("decl_usr") == "" {
+			referenced[x.Child("decl").Str("base_name")] = true
+		}
+	})
+	for _, name := range declaredNames(n) {
+		if referenced[name] {
+			alias := e.newTmp("outer")
+			e.w("%s := %s\n_ = %s\n", alias, e.declRef(ast.Node{"base_name": name, "decl_usr": ""}, nil), alias)
+			outer[name] = alias
+		}
+	}
+	shadowed := map[string]string{}
 	elseBody := func() {
+		saved := e.renames
+		if len(shadowed) > 0 {
+			e.renames = maps.Clone(e.renames)
+			if e.renames == nil {
+				e.renames = map[string]string{}
+			}
+			maps.Copy(e.renames, shadowed)
+		}
 		e.block(n.Child("body"))
+		e.renames = saved
 		e.w("\n")
 	}
 	for _, c := range n.List("conditions") {
@@ -613,6 +640,13 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 			elseBody()
 			e.patternBind(p, tmp)
 		}
+		ast.Walk(p, func(x ast.Node) {
+			if x.Kind() == "pattern_named" {
+				if alias, ok := outer[x.Child("name").Child("base_name").Str("name")]; ok {
+					shadowed[x.Child("name").Child("base_name").Str("name")] = alias
+				}
+			}
+		})
 	}
 }
 

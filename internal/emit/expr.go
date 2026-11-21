@@ -513,6 +513,9 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 			}
 			return "self"
 		}
+		if alias, ok := e.renames[name]; ok {
+			return alias
+		}
 		if e.inoutParams[name] {
 			return "(*" + goSafe(name) + ")"
 		}
@@ -1563,6 +1566,13 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 			case "Map":
 				return "swiftrt.SliceFlattenMaps(" + e.expr(base) + ")"
 			}
+		}
+	}
+	if base != nil && d.Str("base_name") == "filter" && len(as) == 1 && sig.owner == "Swift.Sequence" {
+		// Sequence.filter (chosen over Set.filter when the context wants an Array) returns an Array.
+		if bt := e.m.typeOf(base.Type()); bt != nil && e.m.Recv(bt) == "Set" && len(bt.Args) == 1 {
+			ss, _ := e.argStrings(as, false)
+			return "swiftrt.SliceFilter(swiftrt.Iterate[" + e.m.GoType(bt.Args[0], e.generics) + "](" + e.expr(base) + "), " + ss[0] + ")"
 		}
 	}
 	refSuffix := ""

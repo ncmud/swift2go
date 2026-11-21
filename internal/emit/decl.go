@@ -27,6 +27,7 @@ type fileEmitter struct {
 	slots         []slot                  // dictionary elements taken inout by the call being emitted
 	extraDecls    strings.Builder         // package-level declarations hoisted out of function bodies
 	localGenerics map[string]localGeneric // generic local functions, by Swift name
+	renames       map[string]string       // local names that refer to another Go variable here
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
