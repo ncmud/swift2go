@@ -70,13 +70,23 @@ type Thrown struct{ Err error }
 
 func (t Thrown) Error() string { return "swift error: " + t.Err.Error() }
 
-// Throw wraps a Swift `throw`.
+// Throw wraps a Swift `throw`. A thrown value whose Go type is not an error, such as an enum
+// emitted as an interface, is kept whole, so `catch let e as E`, `as?` and `#expect(throws:)`
+// still see it.
 func Throw(err any) Thrown {
 	if e, ok := err.(error); ok {
 		return Thrown{e}
 	}
-	return Thrown{fmt.Errorf("%v", err)}
+	return Thrown{thrownValue{err}}
 }
+
+// thrownValue is the error carrying a thrown Swift value that does not implement Go's error.
+type thrownValue struct{ value any }
+
+func (t thrownValue) Error() string { return fmt.Sprintf("%v", t.value) }
+
+// SwiftDynamic exposes the thrown value to Is, As and MustAs.
+func (t thrownValue) SwiftDynamic() any { return t.value }
 
 // DoCatch runs body; a thrown Swift error goes to handler, which reports whether a catch clause matched.
 func DoCatch(body func(), handler func(error) bool) {

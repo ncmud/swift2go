@@ -190,12 +190,47 @@ func RegisterDecoder[T any](f func(*Decoder) T) {
 	decoders[reflect.TypeFor[T]()] = func(d *Decoder) any { return f(d) }
 }
 
+type registeredEncoder struct {
+	iface reflect.Type
+	f     func(v any, e *Encoder)
+}
+
+var (
+	encodersMu sync.RWMutex
+	encoders   []registeredEncoder
+)
+
+// RegisterEncoder records the `encode(to:)` of a type emitted as a Go interface, such as an enum
+// with associated values, whose encoder is a function rather than a method. EncodeValue calls it
+// for every value whose dynamic type implements T.
+func RegisterEncoder[T any](f func(T, *Encoder)) {
+	encodersMu.Lock()
+	defer encodersMu.Unlock()
+	encoders = append(encoders, registeredEncoder{reflect.TypeFor[T](), func(v any, e *Encoder) { f(v.(T), e) }})
+}
+
+func registeredEncoderFor(t reflect.Type) func(any, *Encoder) {
+	encodersMu.RLock()
+	defer encodersMu.RUnlock()
+	for _, r := range encoders {
+		if t == r.iface || r.iface.Kind() == reflect.Interface && t.Implements(r.iface) {
+			return r.f
+		}
+	}
+	return nil
+}
+
 // EncodeValue turns a Swift value into a JSON-shaped tree.
 func EncodeValue(v any) any {
 	if v == nil {
 		return nil
 	}
 	rv := reflect.ValueOf(v)
+	if f := registeredEncoderFor(rv.Type()); f != nil {
+		e := &Encoder{}
+		f(v, e)
+		return e.Value
+	}
 	if m := rv.MethodByName("Encode"); m.IsValid() && m.Type().NumIn() == 1 && m.Type().In(0) == reflect.TypeFor[*Encoder]() {
 		e := &Encoder{}
 		m.Call([]reflect.Value{reflect.ValueOf(e)})

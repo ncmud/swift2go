@@ -135,3 +135,64 @@ func TestJSONSerializationFoundationValues(t *testing.T) {
 		t.Errorf("NaN write: %v", err)
 	}
 }
+
+type registeredShape interface{ isRegisteredShape() }
+
+type registeredShapeCircle struct{ r int }
+
+func (registeredShapeCircle) isRegisteredShape() {}
+
+func registeredShapeEncode(s registeredShape, e *Encoder) {
+	c := EncoderSingleValueContainer(e)
+	SingleValueEncodingContainerEncode(&c, s.(registeredShapeCircle).r)
+}
+
+func TestRegisteredEncoderEncodesInterfaceValues(t *testing.T) {
+	RegisterEncoder(registeredShapeEncode)
+	got := string(JSONEncoderEncode(JSONEncoderInit(), []registeredShape{registeredShapeCircle{3}}))
+	if got != "[3]" {
+		t.Errorf("encode = %s, want [3]", got)
+	}
+}
+
+type thrownEnum interface{ isThrownEnum() }
+
+type thrownEnumDuplicate struct{ F0 string }
+
+func (thrownEnumDuplicate) isThrownEnum() {}
+
+func TestThrownNonErrorValuesKeepTheirType(t *testing.T) {
+	err := Catch(func() { panic(Throw(thrownEnum(thrownEnumDuplicate{"body"}))) })
+	if !Is[thrownEnum](err) || !Equal(MustAs[thrownEnum](err), thrownEnum(thrownEnumDuplicate{"body"})) {
+		t.Errorf("caught %#v", err)
+	}
+	if p := As[thrownEnumDuplicate](err); p == nil || p.F0 != "body" {
+		t.Errorf("as? = %v", p)
+	}
+	if err.Error() != "{body}" {
+		t.Errorf("Error() = %q", err.Error())
+	}
+}
+
+func TestClosedRangeFilterAndDisjointSequences(t *testing.T) {
+	got := ClosedRangeFilter(ClosedRange[int8]{Lo: 120, Hi: 127}, func(i int8) bool { return i%2 == 1 })
+	if !Equal(got, []int8{121, 123, 125, 127}) {
+		t.Errorf("filter = %v", got)
+	}
+	set := map[int]struct{}{1: {}, 2: {}}
+	if SetIsDisjointWith(set, []int{2, 5}) || !SetIsDisjointWith(set, []int{3}) || !SetIsDisjointWith(set, map[int]struct{}{4: {}}) {
+		t.Error("isDisjoint(with:)")
+	}
+}
+
+func TestCreateDirectoryAtPath(t *testing.T) {
+	dir := t.TempDir() + "/a/b"
+	if err := Catch(func() { NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, false) }); err == nil {
+		t.Error("created a directory with a missing parent")
+	}
+	NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, true)
+	NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, true)
+	if err := Catch(func() { NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, false) }); err == nil {
+		t.Error("created an existing directory without intermediates")
+	}
+}
