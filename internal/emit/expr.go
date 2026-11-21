@@ -942,13 +942,13 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 			if vt := e.m.typeOf(sub.Type()); vt != nil && vt.Kind == types.Optional && len(vt.Args) == 1 && !e.m.isReferenceGo(vt.Args[0], e.m.GoType(vt.Args[0], e.generics)) {
 				k := e.newTmp("key")
 				m := e.lvalue(stripLoads(ds.Child("base")))
-				fmt.Fprintf(&pre, "%s := %s\n%s := swiftrt.MapGet(%s, %s)\nif %s == nil { return nil }\n", k, e.expr(ds.Child("args").List("args")[0].Child("expr")), v, m, k, v)
+				fmt.Fprintf(&pre, "%s := %s\n%s := swiftrt.MapGet(%s, %s)\nif %s == nil { %s }\n", k, e.expr(ds.Child("args").List("args")[0].Child("expr")), v, m, k, v, chainReturn)
 				fmt.Fprintf(&post, "%s[%s] = *%s\n", m, k, v)
 				e.opaque[nodeID(b)] = "(*" + v + ")"
 				continue
 			}
 		}
-		fmt.Fprintf(&pre, "%s := %s\nif %s == nil { return nil }\n", v, e.expr(sub), v)
+		fmt.Fprintf(&pre, "%s := %s\nif %s == nil { %s }\n", v, e.expr(sub), v, chainReturn)
 		u := e.unwrap(v, sub)
 		if strings.HasPrefix(u, "*") {
 			u = "(" + u + ")"
@@ -966,12 +966,13 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 	}
 	e.b, e.post = savedB, savedPost
 	if rt == "" || rt == "*" || rt == "*struct{}" {
-		return "func() { " + strings.ReplaceAll(pre.String(), "return nil", "return") + body + "\n" + post.String() + " }()"
+		return "func() { " + strings.ReplaceAll(pre.String(), chainReturn, "return") + body + "\n" + post.String() + " }()"
 	}
+	chainPre := strings.ReplaceAll(pre.String(), chainReturn, "return nil")
 	if post.Len() > 0 {
-		return "func() " + rt + " {\n" + pre.String() + "res := " + body + "\n" + post.String() + "return res\n}()"
+		return "func() " + rt + " {\n" + chainPre + "res := " + body + "\n" + post.String() + "return res\n}()"
 	}
-	return "func() " + rt + " {\n" + pre.String() + "return " + body + "\n}()"
+	return "func() " + rt + " {\n" + chainPre + "return " + body + "\n}()"
 }
 
 func (e *fileEmitter) tuple(n ast.Node) string {
@@ -1634,6 +1635,13 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 			case "Map":
 				return "swiftrt.SliceFlattenMaps(" + e.expr(base) + ")"
 			}
+		}
+	}
+	if bt := e.m.typeOf(base.Type()); base != nil && d.Str("base_name") == "map" && len(as) == 1 && bt != nil && bt.Kind == types.Optional {
+		if ft := e.m.typeOf(as[0].node.Type()); ft != nil && ft.Kind == types.Func && (ft.Result == nil || isVoidGo(e.m.GoType(ft.Result, e.generics))) {
+			// optional.map { sideEffect($0) } runs the closure for its effect.
+			ss, _ := e.argStrings(as, false)
+			return "swiftrt.OptDo(" + e.expr(base) + ", " + ss[0] + ")"
 		}
 	}
 	if base != nil && d.Str("base_name") == "encode" && len(as) == 1 && as[0].label == "to" && isGenericParam(e.m.typeOf(base.Type())) {
@@ -2484,6 +2492,9 @@ func (e *fileEmitter) lessFunc(t *types.Type) string {
 	if t == nil || t.Kind != types.Named {
 		return ""
 	}
+	if t.Name == "Swift.Int128" {
+		return "swiftrt.Int128Less"
+	}
 	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
 		for _, d := range mod.sortedDecls() {
 			if d.Kind == "func_decl" && d.Owner == t.Name && d.Node != nil && d.Node.Name() == "<" {
@@ -2617,3 +2628,7 @@ func sequenceParam(m *Module, fn ast.Node, t *types.Type) bool {
 	}
 	return false
 }
+
+// chainReturn marks an optional chain's own early exit until the closure's result type is known, so
+// rewriting it never reaches a nested closure's returns.
+const chainReturn = "return /*chain*/ nil"

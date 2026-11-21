@@ -122,3 +122,6 @@ func Int128ToInt[R Integer](a Int128) R {
 	}
 	return bigTo[R](a.big())
 }
+
+// Int128Less is Int128 `<`.
+func Int128Less(a, b Int128) bool { return Int128Compare(a, b) < 0 }
