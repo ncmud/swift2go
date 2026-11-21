@@ -562,6 +562,19 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		return "_"
 	}
 	st := e.m.typeOf(seq.Type())
+	if containsKind(n.Child("desugared_loop"), "current_context_isolation_expr") {
+		et := e.m.GoType(e.m.typeOf(p.Type()), e.generics)
+		next, tmp := e.newTmp("next"), e.newTmp("el")
+		e.w("%s := swiftrt.AsyncIter[%s](%s)\nfor {\n%s := %s()\nif %s == nil {\nbreak\n}\n", next, et, e.expr(seq), tmp, next, tmp)
+		if inner := unwrapPattern(p); inner != nil && inner.Kind() == "pattern_tuple" {
+			e.bindFromExpr(inner, "(*"+tmp+")")
+		} else if nm := name(p); nm != "_" {
+			e.w("%s := *%s\n_ = %s\n", nm, tmp, nm)
+		}
+		body()
+		e.w("}\n")
+		return
+	}
 	if inner := unwrapPattern(p); inner != nil && (inner.Kind() == "pattern_is" || inner.Kind() == "pattern_enum_element" || inner.Kind() == "pattern_optional_some" || inner.Kind() == "pattern_expr") {
 		et := e.m.typeOf(p.Type())
 		src := e.expr(seq)
@@ -1274,4 +1287,14 @@ func (e *fileEmitter) optionalValue(subj string, t *types.Type) string {
 		return subj
 	}
 	return "(*" + subj + ")"
+}
+
+func containsKind(n ast.Node, kind string) bool {
+	found := false
+	ast.Walk(n, func(x ast.Node) {
+		if x.Kind() == kind {
+			found = true
+		}
+	})
+	return found
 }
