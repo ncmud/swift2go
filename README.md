@@ -1,7 +1,11 @@
 # swift2go
 
 [![CI](https://github.com/ncmud/swift2go/actions/workflows/ci.yml/badge.svg?branch=trunk)](https://github.com/ncmud/swift2go/actions/workflows/ci.yml)
-![Go 1.27](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)
+[![CodeQL](https://github.com/ncmud/swift2go/actions/workflows/codeql.yml/badge.svg?branch=trunk)](https://github.com/ncmud/swift2go/actions/workflows/codeql.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ncmud/swift2go)](https://goreportcard.com/report/github.com/ncmud/swift2go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ncmud/swift2go.svg)](https://pkg.go.dev/github.com/ncmud/swift2go)
+![Go version](https://img.shields.io/github/go-mod/go-version/ncmud/swift2go?logo=go&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Swift 6.4.2 AST](https://img.shields.io/badge/swift_AST-6.4.2-F05138?logo=swift&logoColor=white)
 
 Transpiles ncmud's Swift targets to Go by reading the compiler's typed AST
