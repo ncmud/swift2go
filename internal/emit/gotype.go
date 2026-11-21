@@ -124,6 +124,8 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		return "[]int"
 	case "Swift.KeyPath", "Swift.WritableKeyPath", "Swift.ReferenceWritableKeyPath":
 		return "func(" + arg(0) + ") " + arg(1)
+	case "Swift.IndexingIterator":
+		return "swiftrt.IndexingIterator[" + strings.TrimPrefix(arg(0), "[]") + "]"
 	case "Testing.Comment":
 		return "string"
 	case "Testing.SourceLocation":
@@ -131,8 +133,28 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	case "_Concurrency.TaskLocal":
 		return "*swiftrt.TaskLocal[" + arg(0) + "]"
 	}
+	typeArgs := func(mod *Module) string {
+		ps := mod.typeParamNames[name]
+		if len(ps) == 0 {
+			return ""
+		}
+		out := make([]string, len(ps))
+		for i, p := range ps {
+			if i < len(args) {
+				out[i] = m.GoType(args[i], generics)
+				if out[i] == "" {
+					out[i] = "struct{}"
+				}
+			} else if g, ok := generics[p]; ok {
+				out[i] = g
+			} else {
+				out[i] = p
+			}
+		}
+		return "[" + strings.Join(out, ", ") + "]"
+	}
 	if strings.HasPrefix(name, m.Name+".") {
-		g := m.LocalTypeName(name)
+		g := m.LocalTypeName(name) + typeArgs(m)
 		if m.typeKinds[name] == "class_decl" {
 			return "*" + g
 		}
@@ -140,7 +162,7 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	}
 	for _, d := range m.Deps {
 		if strings.HasPrefix(name, d.Name+".") {
-			g := d.LocalTypeName(name)
+			g := d.LocalTypeName(name) + typeArgs(d)
 			if d.Pkg != m.Pkg {
 				m.importPkgs[d.Pkg] = d.ImportPath
 				g = d.Pkg + "." + g
@@ -167,7 +189,7 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	if strings.HasPrefix(name, "Swift.") {
 		return "any /* " + name + " */"
 	}
-	for _, pfx := range []string{"Foundation.", "__C.NS", "__C.", "Synchronization.", "Dispatch.", "_Concurrency."} {
+	for _, pfx := range []string{"Foundation.", "__C.NS", "__C.", "Synchronization.", "Dispatch.", "_Concurrency.", "CryptoKit.", "Crypto."} {
 		if strings.HasPrefix(name, pfx) {
 			return "swiftrt." + strings.ReplaceAll(strings.TrimPrefix(name, pfx), ".", "")
 		}

@@ -1221,8 +1221,16 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 	usr := d.Str("decl_usr")
 	info, pfx := e.lookup(usr)
 	if info != nil {
+		e.callee = info
 		ss, _ := e.argStrings(as, false)
-		return pfx + info.GoName + "(" + strings.Join(ss, ", ") + ")"
+		targs := ""
+		if len(e.m.TypeParams(info.Owner)) > 0 {
+			gt := strings.TrimPrefix(e.exprGoType(n), "*")
+			if i := strings.Index(gt, "["); i >= 0 && strings.HasSuffix(gt, "]") {
+				targs = gt[i:]
+			}
+		}
+		return pfx + info.GoName + targs + "(" + strings.Join(ss, ", ") + ")"
 	}
 	sig := parseDeclSig(e.m.demangle(usr))
 	ss, kept := e.argStrings(as, true)

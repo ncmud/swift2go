@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -144,4 +145,15 @@ func Catch(body func()) (err error) {
 	}()
 	body()
 	return nil
+}
+
+// IssueRecord is swift-testing `Issue.record(_:)`: a non-fatal test failure.
+func IssueRecord(args ...any) {
+	parts := make([]string, 0, len(args))
+	for _, a := range args {
+		if s := Str(a); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	report(false, "issue recorded: %s", strings.Join(parts, " "))
 }
