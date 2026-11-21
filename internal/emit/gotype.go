@@ -187,8 +187,8 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		}
 	}
 	if (name == "Swift.UnsafePointer" || name == "Swift.UnsafeMutablePointer") && len(args) == 1 && args[0].Kind == types.Named && args[0].Name == "Swift.Int8" {
-		// C strings are the runtime's NUL-terminated byte values.
-		return "any"
+		// C strings are the runtime's pointers to NUL-terminated bytes.
+		return "*any"
 	}
 	if g, ok := foreignTypes[name]; ok {
 		if strings.Contains(g, "%s") {
@@ -356,6 +356,7 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 var foreignTypes = map[string]string{
 	"Swift.AnyObject":                         "any",
 	"Swift.Result":                            "swiftrt.Result[%s]",
+	"__C.NSNumber":                            "swiftrt.NSNumber",
 	"Swift.UnsafeMutablePointer":              "*%s",
 	"Swift.UnsafePointer":                     "*%s",
 	"_StringProcessing.Regex":                 "swiftrt.SwiftRegex[%s]",

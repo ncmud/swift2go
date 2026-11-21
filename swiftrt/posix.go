@@ -149,10 +149,6 @@ func UnsafePointerPointee(p any) int8 { return cCharAt(p, 0) }
 
 // StringWithCString is Swift `String.withCString(_:)`: body receives a pointer to the string's
 // NUL-terminated UTF-8 bytes, valid for the call.
-func StringWithCString[R any](s string, body func(any) R) R {
-	buf := make([]int8, len(s)+1)
-	for i := 0; i < len(s); i++ {
-		buf[i] = int8(s[i])
-	}
-	return body(buf)
+func StringWithCString[R any](s string, body func(*any) R) R {
+	return body(cStringResult(s))
 }

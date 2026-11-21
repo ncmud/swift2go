@@ -35,7 +35,7 @@ func TestCryptTraditionalDES(t *testing.T) {
 			t.Errorf("crypt(%q, %q) = %q, want %q", tc.key, tc.salt, got, tc.want)
 		}
 	}
-	got := StringWithCString("password", func(p any) string {
+	got := StringWithCString("password", func(p *any) string {
 		var salt any = "ab"
 		return StringInitCString(CFCrypt(Some[any](p), &salt))
 	})
