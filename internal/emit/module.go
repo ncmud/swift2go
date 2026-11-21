@@ -232,6 +232,10 @@ func (m *Module) typeOf(mangled string) *types.Type {
 		dem = strings.ReplaceAll(dem, marker, "")
 	}
 	dem = extensionInPrefix.ReplaceAllString(dem, "")
+	// Reference ownership doesn't change the Go type: a weak reference is the same pointer.
+	for _, own := range []string{"weak ", "unowned(unsafe) ", "unowned "} {
+		dem = strings.TrimPrefix(dem, own)
+	}
 	t := types.Parse(dem)
 	if t.Kind == types.Unknown {
 		m.Unsup("type-parse", m.demangle(mangled), "")
