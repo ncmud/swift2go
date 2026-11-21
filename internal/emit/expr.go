@@ -1395,12 +1395,19 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 			gt = e.m.GoType(t.Args[0], e.generics)
 		}
 	}
+	if recv == "Heap" && len(ss) == 0 {
+		if t := e.m.typeOf(n.Type()); t != nil && len(t.Args) == 1 {
+			if less := e.lessFunc(t.Args[0]); less != "" {
+				return "swiftrt.HeapInitLess(" + less + ")"
+			}
+		}
+	}
 	if recv == "TaskLocal" {
 		if t := e.m.typeOf(n.Type()); t != nil && len(t.Args) == 1 {
 			return "swiftrt.TaskLocalInit" + suffix + "[" + e.m.GoType(t.Args[0], e.generics) + "](" + strings.Join(ss, ", ") + ")"
 		}
 	}
-	if recv == "Slice" || recv == "Map" || recv == "Range" || recv == "ClosedRange" || recv == "Int" || recv == "Float" || recv == "IntOpt" || recv == "FloatOpt" || recv == "Set" || recv == "OptionSet" {
+	if recv == "Slice" || recv == "Map" || recv == "Range" || recv == "ClosedRange" || recv == "Int" || recv == "Float" || recv == "IntOpt" || recv == "FloatOpt" || recv == "Set" || recv == "OptionSet" || recv == "Heap" {
 		return "swiftrt." + recv + "Init" + suffix + "[" + gt + "](" + strings.Join(ss, ", ") + ")"
 	}
 	return "swiftrt." + recv + "Init" + suffix + "(" + strings.Join(ss, ", ") + ")"
