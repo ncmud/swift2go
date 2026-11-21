@@ -181,11 +181,7 @@ func (e *fileEmitter) member(n, mem ast.Node, self *DeclInfo) {
 					init := pe.Child("processed_init")
 					t := e.m.typeOf(pe.Child("pattern").Type())
 					gt := e.m.GoType(t, e.generics)
-					if init != nil {
-						e.w("var %s %s = %s\n\n", vi.GoName, gt, e.expr(init))
-					} else {
-						e.w("var %s %s\n\n", vi.GoName, gt)
-					}
+					e.storedGlobal(vi, vi.GoName, gt, init)
 				}
 			}
 		case "struct_decl", "class_decl":
@@ -496,15 +492,17 @@ func (e *fileEmitter) globalBinding(n ast.Node) {
 		t := e.m.typeOf(pe.Child("pattern").Type())
 		init := pe.Child("processed_init")
 		goName := capitalize(goSafe(name))
+		var info *DeclInfo
 		for _, it := range e.file.Items {
 			if it.Kind() == "var_decl" && it.Name() == name {
 				if vi := e.info(it); vi != nil {
 					goName = vi.GoName
+					info = vi
 				}
 			}
 		}
 		if init != nil {
-			e.w("var %s %s = %s\n\n", goName, e.m.GoType(t, nil), e.expr(init))
+			e.storedGlobal(info, goName, e.m.GoType(t, nil), init)
 		}
 	}
 }
@@ -841,6 +839,9 @@ func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	field := "self." + info.GoName
 	if self == nil || info.Static {
 		field = info.GoName
+		if info.Lazy {
+			field = lazyCell(info, "")
+		}
 	}
 	if will != nil {
 		e.w("func() {\n")

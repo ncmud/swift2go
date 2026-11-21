@@ -23,6 +23,8 @@ type DeclInfo struct {
 	Observed bool
 	// Overrides is the USR of the superclass member this member overrides.
 	Overrides string
+	// Lazy marks a static or global stored property with a non-literal initializer, emitted as a swiftrt.Lazy cell.
+	Lazy bool
 	// OnPayloadEnum marks a member of an enum emitted as a sealed interface, which cannot have methods.
 	OnPayloadEnum bool
 	Node          ast.Node
@@ -57,6 +59,7 @@ type Module struct {
 	importPkgs    map[string]string
 	typeCache     map[string]*types.Type
 	payloadEnums  map[string]bool
+	lazyInits     map[string]bool // owner|name of stored statics and globals with non-literal initializers
 	lineStarts    map[string][]int
 	mutatingTypes map[string]bool
 	overridden    map[string]bool // USRs of class members some subclass overrides
@@ -144,7 +147,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
 		protoReqs: map[string][]ast.Node{}, conformers: map[string][]string{},
-		varInit: map[string]ast.Node{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
+		varInit: map[string]ast.Node{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
 	}
 	var syms []string
 	for _, f := range files {
@@ -166,6 +169,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 	for _, f := range files {
 		m.index(f.Items, "", "")
 	}
+	m.markLazy()
 	m.assignNames()
 	return m, nil
 }
@@ -283,6 +287,9 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				}
 				if name := patternName(e.Child("pattern")); name != "" {
 					m.pendingInit(owner, name, init)
+					if !isLiteralInit(init) {
+						m.lazyInits[owner+"|"+name] = true
+					}
 				}
 			}
 		}
@@ -732,4 +739,29 @@ func (m *Module) paramTypeSuffix(info *DeclInfo) string {
 		return "2"
 	}
 	return "By" + b.String()
+}
+
+// markLazy flags static and global stored properties whose initializers must run lazily, as Swift's do.
+func (m *Module) markLazy() {
+	for _, d := range m.decls {
+		if d.Kind == "var_decl" && !d.Computed && (d.Static || d.Owner == "") && m.lazyInits[d.Owner+"|"+d.Node.Name()] {
+			d.Lazy = true
+		}
+	}
+}
+
+// isLiteralInit reports an initializer Go can evaluate eagerly without creating initialization cycles.
+func isLiteralInit(n ast.Node) bool {
+	for n.Kind() == "paren_expr" {
+		n = n.Child("sub_expr")
+	}
+	switch n.Kind() {
+	case "integer_literal_expr", "float_literal_expr", "boolean_literal_expr", "nil_literal_expr":
+		return true
+	case "string_literal_expr":
+		return true
+	case "inject_into_optional":
+		return isLiteralInit(n.Child("sub_expr"))
+	}
+	return false
 }

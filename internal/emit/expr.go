@@ -373,7 +373,7 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 	switch info.Kind {
 	case "var_decl":
 		if info.Owner == "" || info.Static {
-			if info.Computed {
+			if info.Computed || info.Lazy {
 				return pfx + info.GoName + "()"
 			}
 			return pfx + info.GoName
@@ -416,7 +416,7 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	if info != nil && info.Kind == "var_decl" {
 		switch {
 		case info.Static:
-			if info.Computed {
+			if info.Computed || info.Lazy {
 				return pfx + info.GoName + "()"
 			}
 			return pfx + info.GoName
@@ -477,10 +477,16 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 			}
 			return goSafe(name)
 		}
+		if info, pfx := e.lookup(d.Str("decl_usr")); info != nil && info.Lazy {
+			return lazyCell(info, pfx)
+		}
 		return e.declRef(d, n)
 	case "member_ref_expr":
 		info, pfx := e.lookup(n.Child("decl").Str("decl_usr"))
 		if info != nil && info.Kind == "var_decl" && !info.Computed {
+			if info.Static && info.Lazy {
+				return lazyCell(info, pfx)
+			}
 			if info.Static {
 				return pfx + info.GoName
 			}
@@ -727,7 +733,7 @@ func (e *fileEmitter) captureList(n ast.Node) string {
 				meta = true
 			}
 		}
-		if meta {
+		if meta || isIdentityCapture(c) {
 			continue
 		}
 		e.localBinding(c)
@@ -1632,4 +1638,46 @@ func (e *fileEmitter) stringish(n ast.Node) string {
 		return e.expr(n) + ".String()"
 	}
 	return e.expr(n)
+}
+
+// lazyCell is the addressable storage of a lazily initialized static or global.
+func lazyCell(info *DeclInfo, pfx string) string {
+	return "(*" + pfx + "Lazy_" + info.GoName + ".Ptr())"
+}
+
+// storedGlobal emits a static or global stored property, lazily when its initializer isn't a literal.
+func (e *fileEmitter) storedGlobal(info *DeclInfo, goName, gt string, init ast.Node) {
+	if init == nil {
+		e.w("var %s %s\n\n", goName, gt)
+		return
+	}
+	saved := e.b
+	e.b = strings.Builder{}
+	val := e.expr(init)
+	pre := e.b.String()
+	e.b = saved
+	if info == nil || !info.Lazy {
+		if pre != "" {
+			e.w("var %s %s = func() %s {\n%sreturn %s\n}()\n\n", goName, gt, gt, pre, val)
+			return
+		}
+		e.w("var %s %s = %s\n\n", goName, gt, val)
+		return
+	}
+	e.w("var Lazy_%s swiftrt.Lazy[%s]\n\n", goName, gt)
+	e.w("func init() {\nLazy_%s.Init = func() %s {\n%sreturn %s\n}\n}\n\n", goName, gt, pre, val)
+	e.w("func %s() %s { return *Lazy_%s.Ptr() }\n\n", goName, gt, goName)
+}
+
+// isIdentityCapture reports a capture like `[self]` or `[x]` that rebinds a name to itself.
+func isIdentityCapture(c ast.Node) bool {
+	pes := c.List("pattern_entries")
+	if len(pes) != 1 {
+		return false
+	}
+	init := pes[0].Child("processed_init")
+	for init != nil && (init.Kind() == "load_expr" || init.Kind() == "paren_expr") {
+		init = init.Child("sub_expr")
+	}
+	return init != nil && init.Kind() == "declref_expr" && init.Child("decl").Str("base_name") == patternName(pes[0].Child("pattern"))
 }
