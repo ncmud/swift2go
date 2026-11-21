@@ -75,7 +75,7 @@ func TestPosixEnvironmentAndFiles(t *testing.T) {
 	if CFUnlink(cArg(a)) != -1 || CFRename(cArg(a), cArg(b)) != -1 {
 		t.Error("unlink/rename of a missing file succeeded")
 	}
-	os.WriteFile(a, []byte("x"), 0o644)
+	_ = os.WriteFile(a, []byte("x"), 0o600)
 	if CFRename(cArg(a), cArg(b)) != 0 {
 		t.Error("rename failed")
 	}
@@ -128,7 +128,7 @@ func (p wsTestPeer) send(fin bool, op byte, data []byte) {
 	} else {
 		buf = binary.BigEndian.AppendUint16(append(buf, 126), uint16(len(data)))
 	}
-	p.conn.Write(append(buf, data...))
+	_, _ = p.conn.Write(append(buf, data...))
 }
 
 func (p wsTestPeer) sendClose(code uint16, reason string) {
@@ -159,7 +159,7 @@ func wsTestServer(t *testing.T, serve func(wsTestPeer)) string {
 		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 		conn, rw, _ := w.(http.Hijacker).Hijack()
 		defer conn.Close()
-		rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+		_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
 			"Sec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(sum[:]) + "\r\n\r\n")
 		rw.Flush()
 		serve(wsTestPeer{conn, rw.Reader})

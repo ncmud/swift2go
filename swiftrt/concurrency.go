@@ -163,7 +163,7 @@ func ContinuationFinish[T any](c AsyncStreamContinuation[T]) { c.s.finish() }
 
 // AsyncStreamMakeAsyncIterator is Swift `AsyncStream.makeAsyncIterator()`.
 func AsyncStreamMakeAsyncIterator[T any](s AsyncStream[T]) AsyncStreamIterator[T] {
-	return AsyncStreamIterator[T]{s.s}
+	return AsyncStreamIterator[T](s)
 }
 
 // AsyncStreamIteratorNext is Swift `AsyncStream.Iterator.next()`: it waits for the next element and

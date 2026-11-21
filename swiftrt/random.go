@@ -125,8 +125,8 @@ func floatRandom[F ~float32 | ~float64](r interval[F], g RandomNumberGenerator) 
 		} else {
 			rand = g.Next() & (maxSig - 1)
 		}
-		unit := F(F(rand) * half)
-		v := F(delta*unit) + lo
+		unit := F(rand) * half
+		v := delta*unit + lo
 		if closed || v != hi {
 			return v
 		}
