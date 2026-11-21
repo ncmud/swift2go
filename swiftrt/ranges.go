@@ -46,6 +46,22 @@ func ClosedRangeMap[U any](r ClosedRange[int], f func(int) U) []U {
 	return RangeMap(Range[int]{r.Lo, r.Hi + 1}, f)
 }
 
+// ClosedRangeFilter is Swift `(lo...hi).filter(f)` over an integer range.
+func ClosedRangeFilter[T Integer](r ClosedRange[T], f func(T) bool) []T {
+	out := []T{}
+	if r.Lo > r.Hi {
+		return out
+	}
+	for i := r.Lo; ; i++ {
+		if f(i) {
+			out = append(out, i)
+		}
+		if i == r.Hi {
+			return out
+		}
+	}
+}
+
 // RangeCount is Range.count.
 func RangeCount(r Range[int]) int { return max(0, r.Hi-r.Lo) }
 

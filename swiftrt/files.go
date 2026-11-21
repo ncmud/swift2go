@@ -20,6 +20,22 @@ func NSFileManagerCObjcAt(_ FileManager, u URL) {
 	}
 }
 
+// NSFileManagerCObjcAtPathWithIntermediateDirectories is Foundation
+// `FileManager.createDirectory(atPath:withIntermediateDirectories:)`. With intermediates it creates
+// missing parents and accepts an existing directory; without, it throws when the parent is missing or
+// the path exists.
+func NSFileManagerCObjcAtPathWithIntermediateDirectories(_ FileManager, path string, intermediates bool) {
+	var err error
+	if intermediates {
+		err = os.MkdirAll(path, 0o777)
+	} else {
+		err = os.Mkdir(path, 0o777)
+	}
+	if err != nil {
+		panic(Throw(err))
+	}
+}
+
 // FileHandle is Foundation `FileHandle`.
 type FileHandle struct{ File *os.File }
 

@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 )
 
@@ -390,12 +391,24 @@ func SetIsSubsetOf[T comparable](a map[T]struct{}, b map[T]struct{}) bool {
 	return true
 }
 
-// SetIsDisjointWith is Swift `Set.isDisjoint(with:)`.
-func SetIsDisjointWith[T comparable](a map[T]struct{}, b map[T]struct{}) bool {
-	for k := range a {
-		if _, ok := b[k]; ok {
-			return false
+// SetIsDisjointWith is Swift `Set.isDisjoint(with:)`, taking another set or any sequence of
+// elements, passed as a map[T]struct{} or a []T.
+func SetIsDisjointWith[T comparable](a map[T]struct{}, b any) bool {
+	switch other := b.(type) {
+	case map[T]struct{}:
+		for k := range a {
+			if _, ok := other[k]; ok {
+				return false
+			}
 		}
+	case []T:
+		for _, k := range other {
+			if _, ok := a[k]; ok {
+				return false
+			}
+		}
+	default:
+		panic(fmt.Sprintf("swiftrt.SetIsDisjointWith: unsupported sequence %T", b))
 	}
 	return true
 }
