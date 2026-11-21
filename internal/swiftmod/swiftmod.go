@@ -88,9 +88,14 @@ func DumpAST(t Target, modulesDir string, extra ...string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(list.Name())
-	fmt.Fprintln(list, strings.Join(sources, "\n"))
-	list.Close()
+	defer func() { _ = os.Remove(list.Name()) }()
+	if _, err := fmt.Fprintln(list, strings.Join(sources, "\n")); err != nil {
+		_ = list.Close()
+		return nil, err
+	}
+	if err := list.Close(); err != nil {
+		return nil, err
+	}
 	job = append(job, "-filelist", list.Name())
 
 	outs := make([][]byte, len(sources))

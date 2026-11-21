@@ -1,5 +1,9 @@
 # swift2go
 
+[![CI](https://github.com/ncmud/swift2go/actions/workflows/ci.yml/badge.svg?branch=trunk)](https://github.com/ncmud/swift2go/actions/workflows/ci.yml)
+![Go 1.27](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)
+![Swift 6.4.2 AST](https://img.shields.io/badge/swift_AST-6.4.2-F05138?logo=swift&logoColor=white)
+
 Transpiles ncmud's Swift targets to Go by reading the compiler's typed AST
 (`swiftc -dump-ast -dump-ast-format json`, Swift 6.4.2).
 

@@ -307,10 +307,6 @@ func (m *Module) pendingInit(owner, name string, init ast.Node) {
 	m.varInit[owner+"|"+name] = init
 }
 
-func (m *Module) initFor(info *DeclInfo) ast.Node {
-	return m.varInit[info.Owner+"|"+info.Node.Name()]
-}
-
 // isMacroName reports a mangled name the compiler gives macro-expanded declarations.
 func isMacroName(n string) bool {
 	return len(n) > 2 && strings.HasPrefix(n, "$s") && n[2] >= '0' && n[2] <= '9'
