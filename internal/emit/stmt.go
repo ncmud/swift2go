@@ -272,6 +272,11 @@ func (e *fileEmitter) isCallLike(n ast.Node) bool {
 }
 
 func (e *fileEmitter) localFunc(n ast.Node) {
+	key := n.Str("usr")
+	if key == "" {
+		key = "local:" + n.Name()
+	}
+	e.m.localFuncs[key] = n
 	saveG := e.generics
 	e.generics = e.genericScope(n)
 	params, _ := e.paramList(n)

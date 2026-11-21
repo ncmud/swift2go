@@ -76,6 +76,9 @@ func (e *fileEmitter) emitFile() string {
 	if strings.Contains(src, "testing.T") {
 		imports = append(imports, `"testing"`)
 	}
+	if strings.Contains(src, "fmt.Sprint(") {
+		imports = append(imports, `"fmt"`)
+	}
 	if strings.Contains(src, "(math.M") {
 		imports = append(imports, `"math"`)
 	}
@@ -820,22 +823,77 @@ func (e *fileEmitter) goTest(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	if self != nil {
 		name = "Test" + self.GoName + info.GoName
 	}
-	if len(n.Child("params").List("params")) > 0 {
+	params := n.Child("params").List("params")
+	call := func(args string) {
+		switch {
+		case self == nil || info.Static:
+			e.w("\t%s(%s)\n", info.GoName, args)
+		default:
+			if ctor := e.m.zeroArgInit(self); ctor != "" {
+				e.w("\tsuite := %s()\n", ctor)
+			} else {
+				e.w("\tvar suite %s\n", self.GoName)
+			}
+			e.w("\tsuite.%s(%s)\n", info.GoName, args)
+		}
+	}
+	if len(params) == 0 {
+		e.w("func %s(t *testing.T) {\n\tdefer swiftrt.BindT(t)()\n", name)
+		call("")
+		e.w("}\n\n")
+		return
+	}
+	// @Test(arguments: xs) runs once per element; @Test(arguments: xs, ys) runs over every pair.
+	var argExprs []ast.Node
+	for _, a := range n.List("attrs") {
+		if a.Kind() == "custom_attr" {
+			for _, arg := range a.Child("args").List("args") {
+				if arg.Str("label") == "arguments" || len(argExprs) > 0 && arg.Str("label") == "" {
+					argExprs = append(argExprs, arg.Child("expr"))
+				}
+			}
+		}
+	}
+	if len(argExprs) == 0 || len(argExprs) > 1 && len(argExprs) != len(params) {
 		e.m.Unsup("parameterized-test", e.where, "")
 		e.w("func %s(t *testing.T) { t.Skip(\"swift2go: parameterized @Test\") }\n\n", name)
 		return
 	}
-	e.w("func %s(t *testing.T) {\n\tdefer swiftrt.BindT(t)()\n", name)
-	switch {
-	case self == nil || info.Static:
-		e.w("\t%s()\n", info.GoName)
-	default:
-		if ctor := e.m.zeroArgInit(self); ctor != "" {
-			e.w("\tsuite := %s()\n", ctor)
+	e.w("func %s(t *testing.T) {\n", name)
+	var names []string
+	for i, ax := range argExprs {
+		var et string
+		if len(argExprs) == 1 {
+			et = e.m.GoType(e.m.typeOf(params[0].Str("interface_type")), nil)
+			if len(params) > 1 {
+				if t := e.m.typeOf(ax.Type()); t != nil && len(t.Args) == 1 {
+					et = e.m.GoType(t.Args[0], nil)
+				}
+			}
 		} else {
-			e.w("\tvar suite %s\n", self.GoName)
+			et = e.m.GoType(e.m.typeOf(params[i].Str("interface_type")), nil)
 		}
-		e.w("\tsuite.%s()\n", info.GoName)
+		v := "arg" + itoa(i)
+		names = append(names, v)
+		e.w("for i%d, %s := range swiftrt.Iterate[%s](%s) {\n", i, v, et, e.expr(ax))
+	}
+	label := "fmt.Sprint(i0"
+	for i := 1; i < len(argExprs); i++ {
+		label += ", \"/\", i" + itoa(i)
+	}
+	e.w("t.Run(%s), func(t *testing.T) {\ndefer swiftrt.BindT(t)()\n", label)
+	args := strings.Join(names, ", ")
+	if len(argExprs) == 1 && len(params) > 1 {
+		var fs []string
+		for i := range params {
+			fs = append(fs, "arg0.F"+itoa(i))
+		}
+		args = strings.Join(fs, ", ")
+	}
+	call(args)
+	e.w("})\n")
+	for range argExprs {
+		e.w("}\n")
 	}
 	e.w("}\n\n")
 }

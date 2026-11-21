@@ -35,9 +35,15 @@ func InstantSub(a, b ContinuousClockInstant) Duration {
 }
 
 // SliceInitClosedRange is `Array(lo...hi)`.
-func SliceInitClosedRange[S ~[]int](r ClosedRange[int]) S {
+func SliceInitClosedRange[S ~[]T, T Integer](r ClosedRange[T]) S {
+	out := S{}
 	if r.Hi < r.Lo {
-		return S{}
+		return out
 	}
-	return S(rangeInts(r.Lo, r.Hi+1))
+	for v := r.Lo; ; v++ {
+		out = append(out, v)
+		if v == r.Hi {
+			return out
+		}
+	}
 }
