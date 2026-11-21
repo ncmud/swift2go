@@ -1005,6 +1005,10 @@ func (e *fileEmitter) closure(n ast.Node) string {
 	e.b = strings.Builder{}
 	e.w("func(%s) %s {\n", strings.Join(params, ", "), res)
 	body := n.Child("body")
+	e.paramNames = map[string]bool{}
+	for _, p := range n.Child("params").List("params") {
+		e.paramNames[goSafe(p.Name())] = true
+	}
 	e.stmts(body.List("elements"))
 	if res != "" && !endsWithReturn(body) {
 		e.w("panic(\"unreachable\")\n")
