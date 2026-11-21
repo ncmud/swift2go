@@ -246,7 +246,8 @@ func (m *Module) Recv(t *types.Type) string {
 	case types.Dict:
 		return "Map"
 	case types.Optional:
-		if len(t.Args) == 1 && m.isReferenceGo(t.Args[0], m.GoType(t.Args[0], nil)) {
+		// A type parameter's Optional is *T, so it maps like a value's, not a reference's.
+		if len(t.Args) == 1 && !isGenericParamType(t.Args[0]) && m.isReferenceGo(t.Args[0], m.GoType(t.Args[0], nil)) {
 			return "Ref"
 		}
 		return "Opt"
@@ -431,4 +432,8 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 		return k
 	}
 	return true
+}
+
+func isGenericParamType(t *types.Type) bool {
+	return t.Kind == types.Generic || t.Kind == types.Named && genericParamName.MatchString(t.Name)
 }
