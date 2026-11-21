@@ -67,7 +67,8 @@ func (e *fileEmitter) expr(n ast.Node) string {
 		}
 	}
 	if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && t.Args[0].Kind != types.Optional {
-		if e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
+		// C strings come back from the runtime as *any already.
+		if gt := e.m.GoType(t.Args[0], e.generics); gt != "*any" && e.m.isReferenceGo(t.Args[0], gt) {
 			return "swiftrt.Flat(" + out + ")"
 		}
 	}
