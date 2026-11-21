@@ -74,6 +74,15 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if n.Kind() == "collection_upcast_expr" || n.Kind() == "any_hashable_erasure_expr" {
 			return e.upcast(n)
 		}
+		if ac := n.Child("sub_expr"); n.Kind() == "function_conversion_expr" && ac.Kind() == "autoclosure_expr" && len(ac.Child("params").List("params")) == 0 {
+			// A method reference (`QuestRuntime.tick`) is an autoclosure around the call.
+			if ft := e.m.typeOf(ac.Type()); ft != nil && ft.Kind == types.Func {
+				if res := e.m.GoType(ft.Result, e.generics); res != "" && !isVoidGo(res) {
+					return "func() " + res + " { return " + e.expr(ac) + " }"
+				}
+				return "func() { " + e.expr(ac) + " }"
+			}
+		}
 		return e.expr(n.Child("sub_expr"))
 	case "coerce_expr":
 		sub := n.Child("sub_expr")
