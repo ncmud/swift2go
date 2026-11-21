@@ -110,7 +110,18 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			return "(&self." + strings.TrimPrefix(e.m.GoType(t, e.generics), "*") + ")"
 		}
 		return "self"
-	case "load_expr", "function_conversion_expr", "destructure_tuple_expr",
+	case "destructure_tuple_expr":
+		sub, res := n.Child("sub_expr"), n.Child("result_expr")
+		if res == nil || e.exprGoType(n) == e.exprGoType(sub) {
+			return e.expr(sub)
+		}
+		// A tuple conversion (`(String, R?)` returned as `(String?, R?)`) rebuilds the tuple element by element.
+		tmp := e.newTmp("tup")
+		for i, d := range n.List("destructured") {
+			e.opaque[d.Str("identity")] = tmp + ".F" + itoa(i)
+		}
+		return "func() " + e.exprGoType(n) + " {\n" + tmp + " := " + e.expr(sub) + "\nreturn " + e.expr(res) + "\n}()"
+	case "load_expr", "function_conversion_expr",
 		"covariant_return_conversion_expr", "underlying_to_opaque_expr", "abi_safe_conversion_expr", "unresolved_type_conversion_expr",
 		"collection_upcast_expr", "pointer_to_pointer", "metatype_conversion_expr", "existential_metatype_to_object",
 		"unevaluated_instance", "dot_self_expr", "await_expr", "unsafe_expr", "borrow_expr", "copy_expr", "consume_expr", "any_hashable_erasure_expr":
