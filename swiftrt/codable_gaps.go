@@ -38,11 +38,34 @@ func EncoderCodingPath(e *Encoder) []string { return []string{} }
 type CodingContext struct {
 	CodingPath       []string
 	DebugDescription string
+	UnderlyingError  error
 }
 
 // ContextInitCodingPathDebugDescription is `Context(codingPath:debugDescription:)`.
-func ContextInitCodingPathDebugDescription(path []string, desc string) CodingContext {
-	return CodingContext{path, desc}
+func ContextInitCodingPathDebugDescription(path any, desc string) CodingContext {
+	return CodingContext{CodingPath: codingPathStrings(path), DebugDescription: desc}
+}
+
+// ContextInitCodingPathDebugDescriptionUnderlyingError is `Context(codingPath:debugDescription:underlyingError:)`.
+func ContextInitCodingPathDebugDescriptionUnderlyingError(path any, desc string, underlying error) CodingContext {
+	return CodingContext{CodingPath: codingPathStrings(path), DebugDescription: desc, UnderlyingError: underlying}
+}
+
+// codingPathStrings renders a coding path, given as key strings or CodingKey values, as strings.
+func codingPathStrings(path any) []string {
+	switch p := path.(type) {
+	case nil:
+		return nil
+	case []string:
+		return p
+	case []any:
+		out := make([]string, len(p))
+		for i, k := range p {
+			out[i] = Str(k)
+		}
+		return out
+	}
+	return Iterate[string](path)
 }
 
 func (c CodingContext) error(kind string) CodingError {
@@ -59,7 +82,7 @@ func DecodingErrorDataCorruptedContext(c CodingContext) error { return c.error("
 // DecodingErrorDataCorruptedErrorForKeyInDebugDescription is `DecodingError.dataCorruptedError(forKey:in:debugDescription:)`.
 func DecodingErrorDataCorruptedErrorForKeyInDebugDescription(key any, c KeyedDecodingContainer, desc string) error {
 	path := append(append([]string{}, c.path...), keyString(key))
-	return CodingContext{path, desc}.error("dataCorrupted")
+	return CodingContext{CodingPath: path, DebugDescription: desc}.error("dataCorrupted")
 }
 
 // EncodingErrorInvalidValueAny is `EncodingError.invalidValue(_:_:)`.
