@@ -702,6 +702,13 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		if w := n.Child("where"); w != nil {
 			e.w("if !(%s) { continue }\n", e.expr(w))
 		}
+		// The loop's own bindings are in this scope: a body declaration of the same name shadows them.
+		e.paramNames = map[string]bool{}
+		ast.Walk(p, func(x ast.Node) {
+			if x.Kind() == "pattern_named" {
+				e.paramNames[goSafe(x.Child("name").Child("base_name").Str("name"))] = true
+			}
+		})
 		e.stmts(n.Child("body").List("elements"))
 	}
 	name := func(p ast.Node) string {
