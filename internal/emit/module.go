@@ -313,12 +313,31 @@ func (m *Module) indexLocalTypes(body ast.Node) {
 	if body == nil {
 		return
 	}
-	for _, el := range body.List("elements") {
-		switch el.Kind() {
-		case "struct_decl", "class_decl", "enum_decl":
-			m.index([]ast.Node{el}, "", "")
+	var visit func(n ast.Node)
+	visit = func(n ast.Node) {
+		for _, v := range n {
+			var kids []ast.Node
+			switch c := v.(type) {
+			case map[string]any:
+				kids = []ast.Node{ast.Node(c)}
+			case []any:
+				for _, cc := range c {
+					if mm, ok := cc.(map[string]any); ok {
+						kids = append(kids, ast.Node(mm))
+					}
+				}
+			}
+			for _, k := range kids {
+				switch k.Kind() {
+				case "struct_decl", "class_decl", "enum_decl":
+					m.index([]ast.Node{k}, "", "")
+				default:
+					visit(k)
+				}
+			}
 		}
 	}
+	visit(body)
 }
 
 // pendingInit records an initializer by owner+name; resolved to a usr after indexing.
