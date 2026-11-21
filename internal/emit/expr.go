@@ -66,7 +66,7 @@ func (e *fileEmitter) expr(n ast.Node) string {
 			return out
 		}
 	}
-	if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 {
+	if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && t.Args[0].Kind != types.Optional {
 		if e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
 			return "swiftrt.Flat(" + out + ")"
 		}
