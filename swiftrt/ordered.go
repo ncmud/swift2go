@@ -3,6 +3,7 @@ package swiftrt
 import (
 	"cmp"
 	"slices"
+	"sort"
 )
 
 // OrderedDictionary is swift-collections `OrderedDictionary`: a map that iterates in insertion order.
@@ -211,20 +212,39 @@ func OrderedSetInitSlice[S ~struct{ Items []T }, T comparable](xs []T) S {
 	return S(s)
 }
 
-// Heap is swift-collections `Heap` (a min-max heap; only min operations are provided).
-type Heap[T cmp.Ordered] struct{ Items []T }
+// Heap is swift-collections `Heap` (a min-max heap; only min operations are provided). Less orders
+// elements by the element type's own `<`; when nil, Go ordering is used.
+type Heap[T any] struct {
+	Items []T
+	Less  func(a, b T) bool
+}
 
-// HeapInit is `Heap()`.
-func HeapInit[H ~struct{ Items []T }, T cmp.Ordered]() H { return H{} }
+// HeapInit is `Heap()` for a Go-ordered element type.
+func HeapInit[H ~struct {
+	Items []T
+	Less  func(a, b T) bool
+}, T any]() H {
+	return H{}
+}
+
+// HeapInitLess is `Heap()` for an element type ordered by its own `<`.
+func HeapInitLess[T any](less func(a, b T) bool) Heap[T] { return Heap[T]{Less: less} }
+
+func (h *Heap[T]) less(a, b T) bool {
+	if h.Less != nil {
+		return h.Less(a, b)
+	}
+	return compareAny(a, b) < 0
+}
 
 // HeapInsert is `insert`.
-func HeapInsert[T cmp.Ordered](h *Heap[T], v T) {
-	i, _ := slices.BinarySearch(h.Items, v)
+func HeapInsert[T any](h *Heap[T], v T) {
+	i := sort.Search(len(h.Items), func(i int) bool { return h.less(v, h.Items[i]) })
 	h.Items = slices.Insert(h.Items, i, v)
 }
 
 // HeapPopMin is `popMin()`.
-func HeapPopMin[T cmp.Ordered](h *Heap[T]) *T {
+func HeapPopMin[T any](h *Heap[T]) *T {
 	if len(h.Items) == 0 {
 		return nil
 	}
@@ -234,10 +254,10 @@ func HeapPopMin[T cmp.Ordered](h *Heap[T]) *T {
 }
 
 // HeapMin is `min`.
-func HeapMin[T cmp.Ordered](h Heap[T]) *T { return SliceFirst(h.Items) }
+func HeapMin[T any](h Heap[T]) *T { return SliceFirst(h.Items) }
 
 // HeapCount is `count`.
-func HeapCount[T cmp.Ordered](h Heap[T]) int { return len(h.Items) }
+func HeapCount[T any](h Heap[T]) int { return len(h.Items) }
 
 // HeapIsEmpty is `isEmpty`.
-func HeapIsEmpty[T cmp.Ordered](h Heap[T]) bool { return len(h.Items) == 0 }
+func HeapIsEmpty[T any](h Heap[T]) bool { return len(h.Items) == 0 }
