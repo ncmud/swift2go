@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"unicode"
@@ -474,8 +475,46 @@ func SubstringTrimmingCharactersIn(s Substring, cs CharacterSet) string {
 	return strings.TrimFunc(s.String(), cs)
 }
 
-// StringComponentsSeparatedBy is Foundation `components(separatedBy:)` with a String separator.
-func StringComponentsSeparatedBy(s, sep string) []string { return strings.Split(s, sep) }
+// StringComponentsSeparatedBy is Foundation `components(separatedBy:)`. With a String separator it
+// splits at each occurrence, an empty separator leaving s whole; with a CharacterSet it splits at
+// every scalar in the set, so adjacent separators such as "\r\n" yield an empty component.
+func StringComponentsSeparatedBy[S ~string | CharacterSet](s string, sep S) []string {
+	switch sep := any(sep).(type) {
+	case CharacterSet:
+		parts := []string{}
+		start := 0
+		for i, r := range s {
+			if sep(r) {
+				parts = append(parts, s[start:i])
+				start = i + utf8.RuneLen(r)
+			}
+		}
+		return append(parts, s[start:])
+	}
+	str := reflect.ValueOf(sep).String()
+	if str == "" {
+		return []string{s}
+	}
+	return strings.Split(s, str)
+}
+
+// String is Foundation `NSString`, which bridges from a Swift String unchanged.
+type String = string
+
+// NSStringAppendingPathComponent is Foundation `NSString.appendingPathComponent(_:)` as on Linux:
+// the component joined with one `/` unless the path is empty or already ends in `/`; an empty
+// component leaves the path unchanged.
+func NSStringAppendingPathComponent(path, component string) string {
+	switch {
+	case component == "":
+		return path
+	case path == "":
+		return component
+	case strings.HasSuffix(path, "/"):
+		return path + component
+	}
+	return path + "/" + component
+}
 
 // StringInitDecodingAs is Swift `String(decoding:as: UTF8.self)`: each maximal ill-formed subpart of
 // the bytes becomes one U+FFFD, so `[0xE2, 0x82]` decodes to one replacement and `[0xFF, 0xFF]` to two.

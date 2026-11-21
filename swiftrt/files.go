@@ -1,9 +1,12 @@
 package swiftrt
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // FileManager is Foundation `FileManager`.
@@ -106,4 +109,80 @@ type FileHandle struct{ File *os.File }
 // The descriptor is closed when the handle is closed or garbage-collected.
 func NSFileHandleInitFileDescriptorCloseOnDealloc(fd int32, _ bool) FileHandle {
 	return FileHandle{os.NewFile(uintptr(fd), "")}
+}
+
+// NSFileHandleStandardError is Foundation `FileHandle.standardError`.
+var NSFileHandleStandardError = FileHandle{os.Stderr}
+
+// NSFileHandleWrite is Foundation `FileHandle.write(_:)`: it writes all of data and, like
+// `try! write(contentsOf:)` on Linux, traps when the write fails.
+func NSFileHandleWrite(h FileHandle, data []byte) {
+	if h.File == nil {
+		Trap("'try!' expression unexpectedly raised an error: the file handle is closed")
+	}
+	if _, err := h.File.Write(data); err != nil {
+		Trap("'try!' expression unexpectedly raised an error: " + err.Error())
+	}
+}
+
+// NSFileHandleClose is Foundation `FileHandle.close()`: it closes the descriptor, throwing when the
+// close fails.
+func NSFileHandleClose(h FileHandle) {
+	if h.File == nil {
+		return
+	}
+	if err := h.File.Close(); err != nil {
+		panic(Throw(err))
+	}
+}
+
+// NSFileManagerFileExistsAtPath is Foundation `FileManager.fileExists(atPath:)`: whether path names
+// an existing item, following a final symbolic link, so a dangling link does not exist.
+func NSFileManagerFileExistsAtPath(_ FileManager, path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// NSFileManagerContentsAtPath is Foundation `FileManager.contents(atPath:)`: the file's bytes, or nil
+// when it cannot be read, including when path is a directory.
+func NSFileManagerContentsAtPath(_ FileManager, path string) *[]byte {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return &b
+}
+
+// NSFileManagerContentsOfDirectoryAtPath is Foundation `FileManager.contentsOfDirectory(atPath:)`:
+// the directory's entry names, hidden ones included and `.` and `..` excluded, in the order the
+// file system lists them (unsorted, as on Linux). It throws NSCocoaErrorDomain 260 when the path
+// does not exist, 257 when permission is denied, and 256 otherwise.
+func NSFileManagerContentsOfDirectoryAtPath(_ FileManager, path string) []string {
+	f, err := os.Open(path)
+	var names []string
+	if err == nil {
+		names, err = f.Readdirnames(-1)
+		f.Close()
+	}
+	if err != nil {
+		panic(Throw(cocoaFileError(path, err)))
+	}
+	if names == nil {
+		names = []string{}
+	}
+	return names
+}
+
+// cocoaFileError is the NSError Foundation on Linux reports for a failed file-system read.
+func cocoaFileError(path string, err error) NSError {
+	switch {
+	case path == "" || errors.Is(err, fs.ErrNotExist):
+		return NSError{Domain: "NSCocoaErrorDomain", Code: 260, Msg: "The operation could not be completed. The file doesn’t exist."}
+	case errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EACCES):
+		return NSError{Domain: "NSCocoaErrorDomain", Code: 257, Msg: "The operation could not be completed. You don’t have permission."}
+	}
+	return NSError{Domain: "NSCocoaErrorDomain", Code: 256, Msg: "The operation could not be completed. (NSCocoaErrorDomain error 256.)"}
 }

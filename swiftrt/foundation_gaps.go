@@ -637,3 +637,35 @@ func OS_dispatch_queueSyncExecute[R any](q *DispatchQueue, f func() R) R {
 func OS_dispatch_queueCFDispatch_syncExecute[R any](q *DispatchQueue, f func() R) {
 	OS_dispatch_queueSyncExecute(q, f)
 }
+
+// ErrorLocalizedDescription is Foundation `Error.localizedDescription`: a LocalizedError's
+// `errorDescription` when it is non-nil, an NSError's message, and otherwise Linux Foundation's
+// "The operation could not be completed. (Module.Type error N.)". The generated Go type does not
+// record the Swift module or an enum case's error code, so that fallback names the bare type and
+// code 1, which is exact for structs and classes.
+func ErrorLocalizedDescription(err any) string {
+	v := err
+	if t, ok := v.(Thrown); ok {
+		v = t.Err
+	}
+	v = Dynamic(v)
+	if d, ok := v.(interface{ ErrorDescription() *string }); ok {
+		if p := d.ErrorDescription(); p != nil {
+			return *p
+		}
+	}
+	switch e := v.(type) {
+	case NSError:
+		return e.Msg
+	case CancellationError:
+		return "The operation could not be completed. (Swift.CancellationError error 1.)"
+	}
+	t := reflect.TypeOf(v)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if e, ok := v.(error); ok && (t == nil || !strings.Contains(t.PkgPath(), ".")) {
+		return "The operation could not be completed. " + e.Error()
+	}
+	return "The operation could not be completed. (" + typeName(t) + " error 1.)"
+}

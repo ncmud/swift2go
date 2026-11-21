@@ -73,3 +73,7 @@ func NSJSONSerializationDataWithJSONObjectOptions(obj any, options NSJSONWriting
 	}
 	return []byte(w.b.String())
 }
+
+// JSONWritingOptions is Foundation `JSONSerialization.WritingOptions` under the name the emitter
+// gives it in option-set array literals.
+type JSONWritingOptions = NSJSONWritingOptions
