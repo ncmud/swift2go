@@ -2,6 +2,7 @@ package emit
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
@@ -927,6 +928,10 @@ func (e *fileEmitter) closure(n ast.Node) string {
 				e.inoutParams = map[string]bool{}
 			}
 			e.inoutParams[p.Name()] = true
+		} else if e.inoutParams[p.Name()] {
+			// A parameter that shadows an outer inout one (`$0` in nested closures) is a plain value.
+			e.inoutParams = maps.Clone(e.inoutParams)
+			delete(e.inoutParams, p.Name())
 		}
 		params = append(params, name+" "+pt)
 	}
