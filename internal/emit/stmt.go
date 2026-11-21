@@ -409,6 +409,14 @@ func (e *fileEmitter) bindFromExpr(p ast.Node, src string) {
 		}
 	case "pattern_enum_element":
 		e.patternBind(p, src)
+	case "pattern_optional_some":
+		// The caller has tested src for nil; a class reference's Optional is the pointer itself.
+		sub := p.Child("sub_pattern")
+		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind != types.Optional && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+			e.bindFromExpr(sub, src)
+		} else {
+			e.bindFromExpr(sub, "(*"+derefParen(src)+")")
+		}
 	default:
 		e.w("_ = %s\n", e.m.Unsup("pattern:"+p.Kind(), e.where, ""))
 	}
@@ -505,6 +513,15 @@ func (e *fileEmitter) conds(cs []ast.Node, inner func()) {
 		e.conds(rest, inner)
 		e.w("}\n")
 	case "pattern_binding", "pattern_named", "pattern_typed":
+		if refutable(p) {
+			// `case let (a?, b?) = pair`: test the value once, then bind from it.
+			tmp := e.newTmp("subj")
+			e.w("{\n%s := %s\nif %s {\n", tmp, e.expr(init), e.patternTest(unwrapPatternKeepSome(p), tmp, e.m.typeOf(init.Type())))
+			e.bindFromExpr(p, tmp)
+			e.conds(rest, inner)
+			e.w("}\n}\n")
+			break
+		}
 		e.w("{\n")
 		e.bindFromExpr(p, e.expr(init))
 		e.conds(rest, inner)
@@ -633,6 +650,13 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 			elseBody()
 			e.bindFromExpr(p.Child("sub_pattern"), e.unwrap(tmp, init))
 		case "pattern_binding", "pattern_named", "pattern_typed":
+			if refutable(p) {
+				tmp := e.newTmp("subj")
+				e.w("%s := %s\nif !(%s) ", tmp, e.expr(init), e.patternTest(unwrapPatternKeepSome(p), tmp, e.m.typeOf(init.Type())))
+				elseBody()
+				e.bindFromExpr(p, tmp)
+				break
+			}
 			e.bindFromExpr(p, e.expr(init))
 		default:
 			tmp := e.newTmp("subj")
@@ -1648,4 +1672,16 @@ func whereExpr(item ast.Node) ast.Node {
 		return w
 	}
 	return item.Child("guard_expr")
+}
+
+// refutable reports whether a pattern can fail to match.
+func refutable(p ast.Node) bool {
+	r := false
+	ast.Walk(p, func(x ast.Node) {
+		switch x.Kind() {
+		case "pattern_optional_some", "pattern_enum_element", "pattern_expr", "pattern_is", "pattern_bool":
+			r = true
+		}
+	})
+	return r
 }

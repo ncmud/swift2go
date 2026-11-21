@@ -2,6 +2,7 @@
 package swiftrt
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"reflect"
@@ -284,15 +285,15 @@ func MustAs[T any](v any) T {
 }
 
 // Max is Swift's max(_:_:).
-func Max[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32 | uint64 | float32 | float64 | string](a, b T) T {
-	if b > a {
+func Max[T cmp.Ordered](a, b T) T {
+	if b >= a {
 		return b
 	}
 	return a
 }
 
 // Min is Swift's min(_:_:).
-func Min[T int | int8 | int16 | int32 | int64 | uint | uint8 | uint16 | uint32 | uint64 | float32 | float64 | string](a, b T) T {
+func Min[T cmp.Ordered](a, b T) T {
 	if b < a {
 		return b
 	}
