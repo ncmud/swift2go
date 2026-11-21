@@ -1568,6 +1568,9 @@ func lastComponent(s string) string {
 // nativeMethod renders a few stdlib calls as plain Go.
 func (e *fileEmitter) nativeMethod(recv, base string, self ast.Node, kept []arg, ss []string) (string, bool) {
 	switch {
+	case base == "append" && len(kept) == 1 && self.Kind() == "inout_expr" && isUnicodeScalarsOfString(self.Child("sub_expr")):
+		// s.unicodeScalars.append(x) appends to the String itself.
+		return e.lvalue(stripLoads(self.Child("sub_expr")).Child("base")) + " += string(" + ss[0] + ")", true
 	case recv == "Slice" && base == "append" && len(kept) == 1 && kept[0].label == "" && self.Kind() == "inout_expr":
 		lv := e.lvalue(self.Child("sub_expr"))
 		return lv + " = append(" + lv + ", " + ss[0] + ")", true
@@ -2477,4 +2480,10 @@ func (e *fileEmitter) returnsGenericOptional(call ast.Node) bool {
 
 func isGenericParam(t *types.Type) bool {
 	return t.Kind == types.Generic || t.Kind == types.Named && genericParamName.MatchString(t.Name)
+}
+
+// isUnicodeScalarsOfString reports whether n is `someString.unicodeScalars`.
+func isUnicodeScalarsOfString(n ast.Node) bool {
+	n = stripLoads(n)
+	return n.Kind() == "member_ref_expr" && n.Child("decl").Str("base_name") == "unicodeScalars" && strings.HasPrefix(n.Child("decl").Str("decl_usr"), "s:SS")
 }
