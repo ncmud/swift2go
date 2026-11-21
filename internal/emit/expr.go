@@ -1078,6 +1078,17 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 			continue
 		}
 		s := e.expr(a.node)
+		if i < len(params) && params[i].Bool("autoclosure") && !foreign {
+			if ac := stripConv(a.node); ac != nil && ac.Kind() == "autoclosure_expr" && len(ac.Child("params").List("params")) == 0 {
+				if ft := e.m.typeOf(ac.Type()); ft != nil && ft.Kind == types.Func {
+					if res := e.m.GoType(ft.Result, e.generics); res != "" && !isVoidGo(res) {
+						s = "func() " + res + " { return " + s + " }"
+					} else {
+						s = "func() { " + s + " }"
+					}
+				}
+			}
+		}
 		if ft := e.m.typeOf(a.node.Type()); foreign && ft != nil && ft.Kind == types.Func && len(ft.Args) == 1 && ft.Args[0].Kind == types.Tuple && len(ft.Args[0].Args) > 1 {
 			if cl := stripConv(a.node); cl != nil && cl.Kind() == "closure_expr" && len(cl.Child("params").List("params")) == len(ft.Args[0].Args) {
 				suffix := ""
