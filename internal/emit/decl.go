@@ -509,6 +509,9 @@ func (e *fileEmitter) protocolDecl(n ast.Node) {
 				continue
 			}
 			e.w("\tGet%s() %s\n", mi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), nil))
+			if mem.Str("writeImpl") == "setter" {
+				e.w("\tSet%s(%s)\n", mi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), nil))
+			}
 		}
 	}
 	e.w("}\n\n")
@@ -1169,6 +1172,7 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 		name := r.Name()
 		res := e.m.GoType(e.m.typeOf(r.Str("interface_type")), nil)
 		body := ""
+		stored := ""
 		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
 			for _, d := range mod.decls {
 				if d.Kind != "var_decl" || d.Node == nil || d.Node.Name() != name {
@@ -1180,6 +1184,9 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 						body = "self." + d.GoName + "()"
 					} else {
 						body = "self." + d.GoName
+						if !d.Observed {
+							stored = "self." + d.GoName
+						}
 					}
 				case d.Owner == q && d.FreeSelf() && body == "":
 					body = d.GoName + "(self)"
@@ -1199,6 +1206,11 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 			continue
 		}
 		e.w("func (self %s) Get%s() %s { return %s }\n\n", recv, req.GoName, res, body)
+		// A settable requirement met by a stored property of a class gets a setter; computed and
+		// observed properties already have one.
+		if r.Str("writeImpl") == "setter" && stored != "" && strings.HasPrefix(recv, "*") {
+			e.w("func (self %s) Set%s(newValue %s) { %s = newValue }\n\n", recv, req.GoName, res, stored)
+		}
 	}
 }
 
