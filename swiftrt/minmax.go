@@ -10,7 +10,7 @@ func MaxOf[T cmp.Ordered](xs []T, rest []T) T {
 	all := append(append([]T(nil), xs...), rest...)
 	m := all[0]
 	for _, x := range all[1:] {
-		if !(x < m) {
+		if x >= m {
 			m = x
 		}
 	}
