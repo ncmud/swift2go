@@ -926,6 +926,7 @@ func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 			e.w("%s := newValue\n_ = %s\n", p, p)
 		}
 		if b := set.Child("body"); b != nil {
+			e.paramNames = map[string]bool{"newValue": true, accessorParam(set, "newValue"): true}
 			e.stmts(b.List("elements"))
 		}
 		e.w("}\n\n")
@@ -944,6 +945,7 @@ func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 			e.w("%s := newValue\n_ = %s\n", p, p)
 		}
 		if b := will.Child("body"); b != nil {
+			e.paramNames = map[string]bool{"newValue": true, accessorParam(will, "newValue"): true}
 			e.stmts(b.List("elements"))
 		}
 		e.w("}()\n")
@@ -958,6 +960,7 @@ func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 			e.w("%s := oldValue\n_ = %s\n", p, p)
 		}
 		if b := did.Child("body"); b != nil {
+			e.paramNames = map[string]bool{"newValue": true, "oldValue": true, accessorParam(did, "oldValue"): true}
 			e.stmts(b.List("elements"))
 		}
 		e.w("}()\n")

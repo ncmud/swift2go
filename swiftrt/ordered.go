@@ -70,8 +70,8 @@ func OrderedDictionaryIsEmpty[K comparable, V any](d OrderedDictionary[K, V]) bo
 }
 
 // OrderedDictionaryKeys is `keys`.
-func OrderedDictionaryKeys[K comparable, V any](d OrderedDictionary[K, V]) []K {
-	return slices.Clone(d.Keys_)
+func OrderedDictionaryKeys[K comparable, V any](d OrderedDictionary[K, V]) OrderedSet[K] {
+	return OrderedSet[K]{Items: slices.Clone(d.Keys_)}
 }
 
 // OrderedDictionaryValues is `values`.
