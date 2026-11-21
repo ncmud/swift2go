@@ -158,7 +158,7 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	case "discard_assignment_expr":
 	case "optional_evaluation_expr":
 		s := e.expr(n)
-		if strings.HasPrefix(s, "func() {") || e.exprGoType(n) == "" && strings.HasSuffix(s, ")") {
+		if strings.HasPrefix(s, "func() {") || isVoidGo(e.exprGoType(n)) && strings.HasSuffix(s, ")") {
 			e.w("%s\n", s)
 		} else {
 			e.w("_ = %s\n", s)
@@ -168,7 +168,7 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	default:
 		if strings.HasSuffix(n.Kind(), "_expr") {
 			s := e.expr(n)
-			if e.isCallLike(n) || e.exprGoType(n) == "" && (strings.HasSuffix(s, ")") || strings.HasSuffix(s, "}()")) {
+			if e.isCallLike(n) || isVoidGo(e.exprGoType(n)) && (strings.HasSuffix(s, ")") || strings.HasSuffix(s, "}()")) {
 				e.w("%s\n", s)
 			} else {
 				e.w("_ = %s\n", s)
@@ -552,7 +552,11 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		inner := unwrapPattern(p)
 		if inner.Kind() == "pattern_tuple" {
 			els := inner.List("elements")
-			e.w("for %s, %s := range %s {\n", name(els[0]), name(els[1]), base)
+			if a, b := name(els[0]), name(els[1]); a == "_" && b == "_" {
+				e.w("for range %s {\n", base)
+			} else {
+				e.w("for %s, %s := range %s {\n", a, b, base)
+			}
 		} else {
 			tmp := e.newTmp("en")
 			e.w("for %si, %sv := range %s {\n%s := struct{ F0 int; F1 %s }{%si, %sv}\n", tmp, tmp, base, name(p), e.m.GoType(st, e.generics), tmp, tmp)
@@ -743,12 +747,18 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			if r := e.m.Recv(lt); r == "Range" || r == "ClosedRange" || r == "PartialRangeFrom" || r == "PartialRangeUpTo" || r == "PartialRangeThrough" {
 				return e.expr(lit) + ".Contains(" + subj + ")"
 			}
+			if st != nil && e.m.Recv(st) == "Substring" && e.m.Recv(lt) == "String" {
+				return derefParen(subj) + ".String() == " + e.expr(lit)
+			}
 			return subj + " == " + e.expr(lit)
 		}
 		return e.m.Unsup("pattern_expr-shape", e.where, "bool")
 	case "pattern_enum_element":
 		el := e.enumElement(p, st)
 		if el == nil {
+			if t, ok := e.resultCase(p, subj); ok {
+				return t
+			}
 			return e.m.Unsup("enum-pattern-foreign", e.where, "bool")
 		}
 		if e.isPayloadCase(el) || e.m.IsPayloadEnum(el.Owner) {
@@ -860,6 +870,12 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 	case "pattern_enum_element":
 		el := e.enumElement(p, e.m.typeOf(p.Type()))
 		sub := p.Child("sub_pattern")
+		if el == nil && sub != nil && patternBinds(sub) {
+			if val, ok := e.resultPayload(p, subj); ok {
+				e.patternBind(unwrapSinglePattern(sub), val)
+			}
+			return
+		}
 		if el == nil || sub == nil || !patternBinds(sub) {
 			return
 		}
@@ -1052,4 +1068,57 @@ func derefParen(s string) string {
 		return "(" + s + ")"
 	}
 	return s
+}
+
+// resultCase tests a `.success`/`.failure` pattern against a swiftrt.Result, including any payload pattern.
+func (e *fileEmitter) resultCase(p ast.Node, subj string) (string, bool) {
+	val, ok := e.resultPayload(p, subj)
+	if !ok {
+		return "", false
+	}
+	test := derefParen(subj) + ".Ok"
+	if p.Child("element").Child("base_name").Str("name") == "failure" {
+		test = "!" + test
+	}
+	if sub := p.Child("sub_pattern"); sub != nil {
+		inner := unwrapSinglePattern(sub)
+		if t := e.patternTest(inner, val, e.m.typeOf(inner.Type())); t != "true" {
+			test += " && " + t
+		}
+	}
+	return test, true
+}
+
+// resultPayload is the Go expression for a Result pattern's payload: the success value, or the failure
+// asserted to its Swift type.
+func (e *fileEmitter) resultPayload(p ast.Node, subj string) (string, bool) {
+	t := e.m.typeOf(p.Type())
+	if t == nil || t.Kind != types.Named || t.Name != "Swift.Result" {
+		return "", false
+	}
+	switch p.Child("element").Child("base_name").Str("name") {
+	case "success":
+		return derefParen(subj) + ".Value", true
+	case "failure":
+		ft := "any"
+		if len(t.Args) == 2 {
+			ft = e.m.GoType(t.Args[1], e.generics)
+		}
+		return "swiftrt.MustAs[" + ft + "](" + derefParen(subj) + ".Err)", true
+	}
+	return "", false
+}
+
+// unwrapSinglePattern strips the one-element tuple Swift wraps around an enum payload pattern.
+func unwrapSinglePattern(p ast.Node) ast.Node {
+	p = unwrapPatternKeepSome(p)
+	if p.Kind() == "pattern_tuple" && len(p.List("elements")) == 1 {
+		return unwrapPatternKeepSome(p.List("elements")[0])
+	}
+	return p
+}
+
+// isVoidGo reports a Go type that stands for Swift Void or Void?.
+func isVoidGo(gt string) bool {
+	return gt == "" || gt == "*" || gt == "struct{}" || gt == "*struct{}"
 }

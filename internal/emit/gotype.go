@@ -150,7 +150,14 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	}
 	if g, ok := foreignTypes[name]; ok {
 		if strings.Contains(g, "%s") {
-			return strings.ReplaceAll(strings.ReplaceAll(g, "%s", arg(0)), "%t", arg(1))
+			a0, a1 := arg(0), arg(1)
+			if a0 == "" {
+				a0 = "struct{}"
+			}
+			if a1 == "" {
+				a1 = "struct{}"
+			}
+			return strings.ReplaceAll(strings.ReplaceAll(g, "%s", a0), "%t", a1)
 		}
 		return g
 	}
@@ -276,6 +283,7 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 
 // foreignTypes maps Foundation and other Apple-module types to their Go runtime equivalents.
 var foreignTypes = map[string]string{
+	"Swift.Result":                            "swiftrt.Result[%s]",
 	"OrderedCollections.OrderedDictionary":    "swiftrt.OrderedDictionary[%s, %t]",
 	"OrderedCollections.OrderedSet":           "swiftrt.OrderedSet[%s]",
 	"DequeModule.Deque":                       "[]%s",
