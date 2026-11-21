@@ -84,8 +84,9 @@ func EncoderSingleValueContainer(e *Encoder) SingleValueEncodingContainer {
 }
 
 // SingleValueEncodingContainerEncode is `container.encode(_:)`.
-func SingleValueEncodingContainerEncode[T any](c *SingleValueEncodingContainer, v T) {
+func SingleValueEncodingContainerEncode[T any](c *SingleValueEncodingContainer, v T) struct{} {
 	c.e.Value = EncodeValue(v)
+	return struct{}{}
 }
 
 // UnkeyedEncodingContainer is Swift `UnkeyedEncodingContainer`.
