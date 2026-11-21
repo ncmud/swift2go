@@ -1374,6 +1374,12 @@ func (e *fileEmitter) suffix(sig declSig, kept []arg, global bool) string {
 }
 
 func (e *fileEmitter) unappliedDot(n ast.Node) string {
+	if fn := stripConv(n.Child("fn")); fn.Kind() == "autoclosure_expr" {
+		// Swift 6 curry thunk: an autoclosure taking self that returns the method as a function.
+		if args := n.Child("args").List("args"); len(args) == 1 {
+			return "(" + e.expr(fn) + ")(" + e.expr(args[0].Child("expr")) + ")"
+		}
+	}
 	d := stripConv(n.Child("fn")).Child("decl")
 	info, pfx := e.lookup(d.Str("decl_usr"))
 	if info != nil && info.Kind == "enum_element_decl" {
@@ -1415,10 +1421,14 @@ func (e *fileEmitter) unappliedDot(n ast.Node) string {
 			}
 			return "swiftrt." + e.m.Recv(t) + name
 		}
-		if base != nil && sig.base != "" {
+		method := d.Str("base_name")
+		if method == "" {
+			method = sig.base
+		}
+		if base != nil && method != "" {
 			recv := e.m.Recv(e.m.typeOf(base.Type()))
 			return e.boundMethod(n, base, func(r string, ps []string) string {
-				return "swiftrt." + recv + capitalize(sig.base) + "(" + strings.Join(append([]string{r}, ps...), ", ") + ")"
+				return "swiftrt." + recv + capitalize(method) + "(" + strings.Join(append([]string{r}, ps...), ", ") + ")"
 			})
 		}
 	}
