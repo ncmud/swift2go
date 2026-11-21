@@ -852,7 +852,7 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 				continue
 			}
 			t := e.patternTest(p, tmp, st)
-			if g := item.Child("guard_expr"); g != nil {
+			if g := whereExpr(item); g != nil {
 				bindPat = p
 				t = "(" + t + ") && " + e.withBindings(p, tmp, e.expr(g))
 			}
@@ -1176,32 +1176,47 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 		items := c.List("case_label_items")
 		var tests []string
 		var bind ast.Node
+		bindSrc := func(b ast.Node) string {
+			// A typed throw (`do throws(ArgFailure)`) binds error at the concrete type.
+			if gt := e.m.GoType(e.m.typeOf(b.Type()), e.generics); b.Kind() != "pattern_is" && gt != "" && gt != "error" && gt != "any" && !strings.HasPrefix(gt, "any ") {
+				return "swiftrt.MustAs[" + gt + "](err)"
+			}
+			return "err"
+		}
 		for _, it := range items {
 			p := it.Child("pattern")
 			up := unwrapPattern(p)
-			if up == nil || up.Kind() == "pattern_any" || up.Kind() == "pattern_named" {
-				tests = append(tests, "true")
-				bind = p
-				continue
+			var t string
+			var b ast.Node
+			switch {
+			case up == nil || up.Kind() == "pattern_any" || up.Kind() == "pattern_named":
+				t, b = "true", p
+			case up.Kind() == "pattern_is" || up.Kind() == "pattern_enum_element":
+				if up.Kind() == "pattern_is" {
+					if ct := e.m.typeOf(up.Str("cast_to")); ct != nil && strings.HasPrefix(e.m.GoType(ct, e.generics), "any") {
+						t = e.m.Unsup("catch-unmapped-error-type", e.where, "bool")
+						break
+					}
+				}
+				t, b = e.patternTest(up, "err", e.m.typeOf(p.Type())), up
+			default:
+				t = e.m.Unsup("catch-pattern:"+up.Kind(), e.where, "bool")
 			}
-			if up.Kind() == "pattern_is" || up.Kind() == "pattern_enum_element" {
-				tests = append(tests, e.patternTest(up, "err", e.m.typeOf(p.Type())))
-				bind = up
-				continue
+			if g := whereExpr(it); g != nil && b != nil {
+				// `catch … where cond`: the clause matches only when cond holds for its bindings.
+				t = "(" + t + ") && " + e.withBindings(b, bindSrc(b), e.expr(g))
 			}
-			tests = append(tests, e.m.Unsup("catch-pattern:"+up.Kind(), e.where, "bool"))
+			if b != nil {
+				bind = b
+			}
+			tests = append(tests, t)
 		}
 		if len(tests) == 0 {
 			tests = []string{"true"}
 		}
 		e.w("if !%s && (%s) {\n%s = true\n", matched, strings.Join(tests, " || "), matched)
 		if bind != nil {
-			src := "err"
-			// A typed throw (`do throws(ArgFailure)`) binds error at the concrete type.
-			if gt := e.m.GoType(e.m.typeOf(bind.Type()), e.generics); bind.Kind() != "pattern_is" && gt != "" && gt != "error" && gt != "any" && !strings.HasPrefix(gt, "any ") {
-				src = "swiftrt.MustAs[" + gt + "](err)"
-			}
-			e.patternBind(bind, src)
+			e.patternBind(bind, bindSrc(bind))
 		} else {
 			e.w("error := err\n_ = error\n")
 		}
@@ -1625,4 +1640,12 @@ func (e *fileEmitter) hoistGenericLocal(n ast.Node, name, params, res string) {
 		e.localGenerics = map[string]localGeneric{}
 	}
 	e.localGenerics[n.Name()] = localGeneric{goName: goName, captures: caps}
+}
+
+// whereExpr is a case item's `where` clause. Swift 6.4 dumps it as where_expr.
+func whereExpr(item ast.Node) ast.Node {
+	if w := item.Child("where_expr"); w != nil {
+		return w
+	}
+	return item.Child("guard_expr")
 }
