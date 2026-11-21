@@ -3,8 +3,9 @@
 import collections, re, subprocess, sys
 
 pkg = sys.argv[1]
-out = subprocess.run(["go", "run", "./cmd/gocheck", "./out/" + pkg], capture_output=True, text=True).stdout
-lines = [l for l in out.splitlines() if re.match(r"^\S+\.go:\d+:\d+: ", l) and f"/out/{pkg}/" in l]
+outdir = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else "out"
+out = subprocess.run(["go", "run", "./cmd/gocheck", f"./{outdir}/" + pkg], capture_output=True, text=True).stdout
+lines = [l for l in out.splitlines() if re.match(r"^\S+\.go:\d+:\d+: ", l) and f"/{outdir}/{pkg}/" in l]
 missing_rt = collections.Counter()
 missing_dep = collections.Counter()
 shapes = collections.Counter()
