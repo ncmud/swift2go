@@ -225,7 +225,7 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 					m.typeKinds[q+"#OptionSet"] = "yes"
 				}
 			}
-			m.decls[n.Str("usr")] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind}
+			m.decls[declKey(n)] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind}
 			for _, c := range n.Child("inherits").List("conformances") {
 				if p := c.Str("protocol"); p != "" {
 					pn := m.demangle(p)
@@ -886,3 +886,16 @@ func mergeTypeParams(a, b string) string {
 
 // extensionInPrefix strips the demangler's "(extension in Foundation):" qualifier from type names.
 var extensionInPrefix = regexp.MustCompile(`\(extension in [^)]*\):`)
+
+// declKey indexes a declaration by its USR, or by kind, name and source position for the few the
+// compiler dumps without one (types local to some static functions).
+func declKey(n ast.Node) string {
+	if usr := n.Str("usr"); usr != "" {
+		return usr
+	}
+	start := ""
+	if r := n.Child("range"); r != nil {
+		start = fmt.Sprint(r["start"])
+	}
+	return "nousr:" + n.Kind() + ":" + n.Name() + "@" + start
+}

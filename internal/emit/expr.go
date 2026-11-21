@@ -1292,6 +1292,12 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		}
 	}
 	refSuffix := ""
+	if base != nil && e.m.Recv(e.m.typeOf(base.Type())) == "Set" && len(as) == 1 && as[0].label == "" && e.m.Recv(e.m.typeOf(as[0].node.Type())) == "Set" {
+		switch d.Str("base_name") {
+		case "union", "formUnion", "intersection", "subtracting", "subtract", "isSubset", "isSuperset", "isDisjoint", "symmetricDifference", "formIntersection":
+			refSuffix = "Set"
+		}
+	}
 	if d.Str("base_name") == "compactMap" && len(as) == 1 {
 		if ft := e.m.typeOf(as[0].node.Type()); ft != nil && ft.Kind == types.Func && ft.Result != nil && ft.Result.Kind == types.Optional && len(ft.Result.Args) == 1 {
 			if e.m.isReferenceGo(ft.Result.Args[0], e.m.GoType(ft.Result.Args[0], e.generics)) {
@@ -1333,6 +1339,13 @@ func (e *fileEmitter) nativeMethod(recv, base string, self ast.Node, kept []arg,
 	case recv == "Slice" && base == "append" && len(kept) == 1 && kept[0].label == "contentsOf" && self.Kind() == "inout_expr" && e.m.Recv(e.m.typeOf(kept[0].node.Type())) == "Slice":
 		lv := e.lvalue(self.Child("sub_expr"))
 		return lv + " = append(" + lv + ", " + ss[0] + "...)", true
+	case recv == "Slice" && base == "append" && len(kept) == 1 && kept[0].label == "contentsOf" && self.Kind() == "inout_expr":
+		lv := e.lvalue(self.Child("sub_expr"))
+		elem := "any"
+		if t := e.m.typeOf(self.Child("sub_expr").Type()); t != nil && len(t.Args) == 1 {
+			elem = e.m.GoType(t.Args[0], e.generics)
+		}
+		return lv + " = append(" + lv + ", swiftrt.Iterate[" + elem + "](" + ss[0] + ")...)", true
 	case recv == "String" && base == "append" && len(kept) == 1 && self.Kind() == "inout_expr" && kept[0].label == "":
 		lv := e.lvalue(self.Child("sub_expr"))
 		return lv + " += " + ss[0], true
