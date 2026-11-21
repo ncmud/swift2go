@@ -17,6 +17,10 @@ func Iterate[T any](seq any) []T {
 		return any(rangeInts(s.Lo, s.Hi+1)).([]T)
 	case interface{ Elements() []T }:
 		return s.Elements()
+	case string:
+		return any(StringChars(s)).([]T)
+	case Substring:
+		return any(StringChars(s.String())).([]T)
 	}
 	rv := reflect.ValueOf(seq)
 	switch rv.Kind() {

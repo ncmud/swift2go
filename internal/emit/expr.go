@@ -2058,7 +2058,11 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			return "swiftrt.InstantSub(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
 		if op == "+" && (e.m.Recv(lt) == "String" || e.m.Recv(lt) == "Substring") {
-			return e.stringish(l) + " + " + e.stringish(r)
+			cat := e.stringish(l) + " + " + e.stringish(r)
+			if e.m.Recv(e.m.typeOf(n.Type())) == "Substring" {
+				return "swiftrt.SubstringInitString(" + cat + ")"
+			}
+			return cat
 		}
 		if lt.Kind == types.Named && isIntegerName(lt.Name) {
 			fn := map[string]string{"+": "Add", "-": "Sub", "*": "Mul"}[op]

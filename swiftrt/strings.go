@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"reflect"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -118,7 +119,17 @@ func StringContains(s string, c Character) bool {
 func StringContainsString(s, sub string) bool { return strings.Contains(s, sub) }
 
 // StringHasPrefix is String.hasPrefix(_:).
-func StringHasPrefix(s, p string) bool { return strings.HasPrefix(s, p) }
+func StringHasPrefix[P ~string | Substring](s string, p P) bool {
+	return strings.HasPrefix(s, stringOf(p))
+}
+
+// stringOf is a String or Substring argument as a Go string.
+func stringOf[P ~string | Substring](p P) string {
+	if sub, ok := any(p).(Substring); ok {
+		return sub.String()
+	}
+	return reflect.ValueOf(p).String()
+}
 
 // StringHasSuffix is String.hasSuffix(_:).
 func StringHasSuffix(s, p string) bool { return strings.HasSuffix(s, p) }
@@ -139,10 +150,12 @@ func StringAppendCharacter(s *string, c Character) { *s += c }
 func StringAppendString(s *string, t string) { *s += t }
 
 // StringAppendContentsOf is String.append(contentsOf:).
-func StringAppendContentsOf[T []Character | string](s *string, cs T) {
+func StringAppendContentsOf[T []Character | string | Substring](s *string, cs T) {
 	switch v := any(cs).(type) {
 	case string:
 		*s += v
+	case Substring:
+		*s += v.String()
 	case []Character:
 		*s += strings.Join(v, "")
 	}
