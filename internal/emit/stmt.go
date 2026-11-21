@@ -282,7 +282,9 @@ func (e *fileEmitter) localFunc(n ast.Node) {
 		key = "local:" + n.Name()
 	}
 	e.m.localFuncs[key] = n
-	saveG := e.generics
+	saveG, saveIO := e.generics, e.inoutParams
+	e.inoutParams = maps.Clone(e.inoutParams)
+	defer func() { e.inoutParams = saveIO }()
 	e.generics = e.genericScope(n)
 	params, _ := e.paramList(n)
 	res := e.resultGo(n)
