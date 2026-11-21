@@ -98,7 +98,12 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	case "fail_stmt":
 		e.w("return nil\n")
 	case "then_stmt":
-		e.w("return %s\n", e.expr(n.Child("result")))
+		if r := n.Child("result"); isVoidGo(e.exprGoType(r)) {
+			e.stmt(r)
+			e.w("return\n")
+		} else {
+			e.w("return %s\n", e.expr(r))
+		}
 	case "if_stmt":
 		e.ifStmt(n)
 		e.w("\n")
