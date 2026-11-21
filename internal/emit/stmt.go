@@ -865,9 +865,9 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			if st == nil {
 				caseT = el.GoName + e.enumTypeArgs(el, e.m.typeOf(p.Type()))
 			}
-			test := "func() bool { _, ok := " + subj + ".(" + caseT + "); return ok }()"
+			test := "func() bool { _, ok := " + assertable(subj) + ".(" + caseT + "); return ok }()"
 			if sub := p.Child("sub_pattern"); sub != nil {
-				inner := e.payloadSubTests(sub, "func() "+caseT+" { v, _ := "+subj+".("+caseT+"); return v }()", el)
+				inner := e.payloadSubTests(sub, "func() "+caseT+" { v, _ := "+assertable(subj)+".("+caseT+"); return v }()", el)
 				if inner != "true" {
 					test += " && " + inner
 				}
@@ -992,7 +992,7 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 			return
 		}
 		v := e.newTmp("payload")
-		e.w("%s, _ := %s.(%s)\n", v, subj, el.GoName+e.enumTypeArgs(el, e.m.typeOf(p.Type())))
+		e.w("%s, _ := %s.(%s)\n", v, assertable(subj), el.GoName+e.enumTypeArgs(el, e.m.typeOf(p.Type())))
 		sub = unwrapPatternKeepSome(sub)
 		if sub.Kind() == "pattern_tuple" {
 			for i, s := range sub.List("elements") {
@@ -1340,4 +1340,12 @@ func containsKind(n ast.Node, kind string) bool {
 		}
 	})
 	return found
+}
+
+// assertable parenthesizes a dereferenced subject so a type assertion applies to the pointee.
+func assertable(subj string) string {
+	if strings.HasPrefix(subj, "*") {
+		return "(" + subj + ")"
+	}
+	return subj
 }
