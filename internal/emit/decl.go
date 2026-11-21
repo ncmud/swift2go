@@ -29,6 +29,7 @@ type fileEmitter struct {
 	localGenerics map[string]localGeneric // generic local functions, by Swift name
 	renames       map[string]string       // local names that refer to another Go variable here
 	observing     *DeclInfo               // the property whose setter or observers are being emitted
+	emittingFree  bool                    // the function being scoped is emitted as a free function
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
@@ -667,6 +668,14 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			}
 			continue
 		}
+		switch proto {
+		case "Swift.BinaryInteger", "Swift.FixedWidthInteger", "Swift.SignedInteger", "Swift.UnsignedInteger":
+			if own[param] {
+				// Integer protocols become the runtime's integer constraint, so operators work.
+				e.typeBounds[g[param]] = "swiftrt.Integer"
+			}
+			continue
+		}
 		if strings.HasPrefix(proto, e.m.Name+".") {
 			if own[param] && e.m.HasStaticRequirements(proto) {
 				e.typeBounds[g[param]] = e.m.LocalTypeName(proto)
@@ -697,7 +706,7 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 		}
 		e.typeParams = slices.DeleteFunc(e.typeParams, func(p string) bool { return p == tp })
 	}
-	if (fn.Child("implicit_self_decl") != nil || fn.Kind() == "subscript_decl") && !fn.Bool("static") && len(e.typeParams) > 0 && !e.freeSelfFunc(fn) {
+	if (fn.Child("implicit_self_decl") != nil || fn.Kind() == "subscript_decl") && !fn.Bool("static") && len(e.typeParams) > 0 && !e.freeSelfFunc(fn) && !e.foreignOwner(fn) && !e.emittingFree {
 		for k, v := range g {
 			for _, tp := range e.typeParams {
 				bound := "any"
@@ -991,7 +1000,9 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		tps := ""
 		if (self.Kind == "foreign" || info.ProtoExt) && !e.m.isLocalProtocol(info.Owner) {
 			saveG := e.generics
+			e.emittingFree = true
 			e.generics = e.genericScope(getter)
+			e.emittingFree = false
 			tps = e.typeParamList()
 			defer func() { e.generics = saveG }()
 			res = e.m.GoType(e.m.typeOf(n.Str("interface_type")), e.generics)
@@ -1403,6 +1414,13 @@ func prefixCommaTail(params, last string) string {
 		return last
 	}
 	return params + ", " + last
+}
+
+// foreignOwner reports whether fn extends a type from another module, so it is emitted as a free
+// function that can keep type parameters.
+func (e *fileEmitter) foreignOwner(fn ast.Node) bool {
+	info := e.m.decls[fn.Str("usr")]
+	return info != nil && info.Owner != "" && e.m.typeKinds[info.Owner] == "" && !e.m.IsPayloadEnum(info.Owner)
 }
 
 func (e *fileEmitter) freeSelfFunc(fn ast.Node) bool {

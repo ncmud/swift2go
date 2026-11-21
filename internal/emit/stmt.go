@@ -622,8 +622,21 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 			declaredInside[x.Name()] = true
 		}
 	})
+	// `if let made` inside the else body reads the outer `made` before declaring its own.
+	shorthand := map[string]bool{}
+	ast.Walk(n.Child("body"), func(x ast.Node) {
+		if x.Kind() != "pattern" || x.Child("initializer") == nil {
+			return
+		}
+		init := stripLoads(x.Child("initializer"))
+		if init.Kind() == "declref_expr" && init.Child("decl").Str("decl_usr") == "" {
+			shorthand[init.Child("decl").Str("base_name")] = true
+		}
+	})
 	for name := range declaredInside {
-		delete(referenced, name)
+		if !shorthand[name] {
+			delete(referenced, name)
+		}
 	}
 	for _, name := range declaredNames(n) {
 		if referenced[name] {
