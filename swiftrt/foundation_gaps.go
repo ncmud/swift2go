@@ -87,9 +87,11 @@ func DateComponentsSecond(d DateComponents) *int { return d.Second }
 // DateComponentsWeekday is `DateComponents.weekday`.
 func DateComponentsWeekday(d DateComponents) *int { return d.Weekday }
 
-func dateOf(t time.Time) Date { return Date(float64(t.UnixNano()) / 1e9) }
+func dateOf(t time.Time) Date { return Date(float64(t.Unix()) + float64(t.Nanosecond())/1e9) }
 
-// CalendarDateFrom is Foundation `Calendar.date(from:)`; missing fields take their smallest value.
+// CalendarDateFrom is Foundation `Calendar.date(from:)` for the Gregorian calendar; missing fields take their smallest
+// value. Like Foundation, dates before 1582-10-15 are read in the Julian calendar. Other Calendar helpers here
+// are proleptic Gregorian.
 func CalendarDateFrom(c Calendar, dc DateComponents) *Date {
 	get := func(p *int, d int) int {
 		if p == nil {
@@ -97,35 +99,46 @@ func CalendarDateFrom(c Calendar, dc DateComponents) *Date {
 		}
 		return *p
 	}
-	t := time.Date(get(dc.Year, 1), time.Month(get(dc.Month, 1)), get(dc.Day, 1), get(dc.Hour, 0),
+	first := time.Date(get(dc.Year, 1), time.Month(get(dc.Month, 1)), 1, get(dc.Hour, 0),
 		get(dc.Minute, 0), get(dc.Second, 0), get(dc.Nanosecond, 0), c.TimeZone.Loc)
+	y, m := first.Year(), int(first.Month())
+	day := get(dc.Day, 1)
+	t := first.AddDate(0, 0, day-1)
+	if y < 1582 || (y == 1582 && (m < 10 || (m == 10 && day < 15))) {
+		a := (14 - m) / 12
+		yy := y + 4800 - a
+		gregorianMinusJulian := -yy/100 + yy/400 + 38
+		t = first.AddDate(0, 0, day-1-gregorianMinusJulian)
+	}
 	d := dateOf(t)
 	return &d
 }
 
 func calendarAdd(t time.Time, k CalendarComponent, n int) time.Time {
+	shift := func(unit int64) time.Time {
+		return time.Unix(Add(t.Unix(), Mul(int64(n), unit)), int64(t.Nanosecond())).In(t.Location())
+	}
 	switch k {
 	case CalendarComponentYear, CalendarComponentMonth:
 		months := n
 		if k == CalendarComponentYear {
-			months = n * 12
+			months = Mul(n, 12)
 		}
 		y, m, d := t.Date()
 		first := time.Date(y, m+time.Month(months), 1, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 		last := first.AddDate(0, 1, -1).Day()
 		return first.AddDate(0, 0, min(d, last)-1)
-	case CalendarComponentDay:
-		return t.AddDate(0, 0, n)
-	case CalendarComponentWeekday:
+	case CalendarComponentDay, CalendarComponentWeekday:
 		return t.AddDate(0, 0, n)
 	case CalendarComponentHour:
-		return t.Add(time.Duration(n) * time.Hour)
+		return shift(3600)
 	case CalendarComponentMinute:
-		return t.Add(time.Duration(n) * time.Minute)
+		return shift(60)
 	case CalendarComponentSecond:
-		return t.Add(time.Duration(n) * time.Second)
+		return shift(1)
 	case CalendarComponentNanosecond:
-		return t.Add(time.Duration(n))
+		sec, ns := int64(n)/1e9, int64(n)%1e9
+		return time.Unix(Add(t.Unix(), sec), int64(t.Nanosecond())+ns).In(t.Location())
 	}
 	panic("swiftrt: unsupported calendar component")
 }
@@ -136,7 +149,8 @@ func CalendarDateByAddingValueTo(c Calendar, k CalendarComponent, n int, d Date)
 	return &r
 }
 
-// CalendarDateComponentsFromTo is Foundation `Calendar.dateComponents(_:from:to:)`.
+// CalendarDateComponentsFromTo is Foundation `Calendar.dateComponents(_:from:to:)`: each requested unit, largest first,
+// is the most whole units that can be added without passing the end date.
 func CalendarDateComponentsFromTo(c Calendar, comps map[CalendarComponent]struct{}, from, to Date) DateComponents {
 	cur := from.Time().In(c.TimeZone.Loc)
 	end := to.Time().In(c.TimeZone.Loc)
@@ -163,7 +177,27 @@ func CalendarDateComponentsFromTo(c Calendar, comps map[CalendarComponent]struct
 			}
 			return !t.Before(end)
 		}
-		n := 0
+		secs := float64(end.Unix()-cur.Unix()) + float64(end.Nanosecond()-cur.Nanosecond())/1e9
+		var n int
+		switch o.k {
+		case CalendarComponentYear:
+			n = end.Year() - cur.Year()
+		case CalendarComponentMonth:
+			n = (end.Year()-cur.Year())*12 + int(end.Month()) - int(cur.Month())
+		case CalendarComponentDay:
+			n = int(secs / 86400)
+		case CalendarComponentHour:
+			n = int(secs / 3600)
+		case CalendarComponentMinute:
+			n = int(secs / 60)
+		case CalendarComponentSecond:
+			n = int(secs)
+		default:
+			n = int((end.Unix()-cur.Unix())*1e9) + end.Nanosecond() - cur.Nanosecond()
+		}
+		for n != 0 && !within(calendarAdd(cur, o.k, n)) {
+			n -= step
+		}
 		for within(calendarAdd(cur, o.k, n+step)) {
 			n += step
 		}
@@ -231,15 +265,38 @@ func IntegerFormatStyleLocale(s IntegerFormatStyle, l Locale) IntegerFormatStyle
 // IntegerFormatStyleInitLocale is `IntegerFormatStyle(locale:)`.
 func IntegerFormatStyleInitLocale(l Locale) IntegerFormatStyle { return IntegerFormatStyle{&l} }
 
-func groupDigits(digits, sep string) string {
-	var b strings.Builder
-	for i, c := range digits {
-		if i > 0 && (len(digits)-i)%3 == 0 {
-			b.WriteString(sep)
-		}
-		b.WriteRune(c)
+type groupingRule struct {
+	sep         string
+	indian      bool
+	minGrouping int
+}
+
+// groupingRules lists the locales whose IntegerFormatStyle output was checked against Foundation.
+var groupingRules = map[string]groupingRule{
+	"en_US": {",", false, 1}, "en_GB": {",", false, 1}, "ja_JP": {",", false, 1}, "zh_CN": {",", false, 1},
+	"ko_KR": {",", false, 1}, "en_IN": {",", true, 1},
+	"de_DE": {".", false, 1}, "pt_BR": {".", false, 1}, "nl_NL": {".", false, 1}, "da_DK": {".", false, 1},
+	"tr_TR": {".", false, 1}, "id_ID": {".", false, 1}, "el_GR": {".", false, 1},
+	"es_ES": {".", false, 2}, "it_IT": {".", false, 2}, "pt_PT": {"\u00a0", false, 2},
+	"de_CH": {"'", false, 1}, "fr_FR": {"\u202f", false, 1}, "en_US_POSIX": {"", false, 1},
+}
+
+func groupDigits(digits string, r groupingRule) string {
+	if r.sep == "" || len(digits) < 4 || len(digits) < 3+r.minGrouping {
+		return digits
 	}
-	return b.String()
+	head, tail := digits[:len(digits)-3], digits[len(digits)-3:]
+	size := 3
+	if r.indian {
+		size = 2
+	}
+	var groups []string
+	for len(head) > size {
+		groups = append([]string{head[len(head)-size:]}, groups...)
+		head = head[:len(head)-size]
+	}
+	groups = append([]string{head}, groups...)
+	return strings.Join(append(groups, tail), r.sep)
 }
 
 func (s IntegerFormatStyle) format(neg bool, digits string) string {
@@ -247,20 +304,11 @@ func (s IntegerFormatStyle) format(neg bool, digits string) string {
 	if s.Locale != nil {
 		id = s.Locale.Identifier
 	}
-	lang := strings.SplitN(strings.SplitN(id, "_", 2)[0], "-", 2)[0]
-	var sep string
-	switch lang {
-	case "en", "ja", "zh", "ko", "he", "th":
-		sep = ","
-	case "de", "es", "it", "nl", "pt", "da", "id", "tr", "el":
-		sep = "."
-	default:
-		panic("swiftrt: IntegerFormatStyle has no grouping rule for locale " + id)
+	r, ok := groupingRules[id]
+	if !ok {
+		panic("swiftrt: IntegerFormatStyle grouping is unverified for locale " + id)
 	}
-	if id == "en_US_POSIX" {
-		sep = ""
-	}
-	out := groupDigits(digits, sep)
+	out := groupDigits(digits, r)
 	if neg {
 		return "-" + out
 	}
@@ -465,49 +513,63 @@ var AtomicLoadOrderingRelaxed any = "relaxed"
 // AtomicStoreOrderingRelaxed is `AtomicStoreOrdering.relaxed`.
 var AtomicStoreOrderingRelaxed any = "relaxed"
 
-// DispatchQueue is Dispatch `DispatchQueue`: a serial queue drained by one goroutine.
+// DispatchQueue is Dispatch `DispatchQueue`: a serial queue whose unbounded FIFO is drained by one goroutine.
 type DispatchQueue struct {
-	Label string
-	once  sync.Once
-	jobs  chan func()
+	Label   string
+	mu      sync.Mutex
+	jobs    []func()
+	running bool
 }
 
 // OS_dispatch_queue is the Objective-C class name the emitter uses for `DispatchQueue`.
 type OS_dispatch_queue = *DispatchQueue
 
-func (q *DispatchQueue) start() {
-	q.once.Do(func() {
-		q.jobs = make(chan func(), 1024)
-		go func() {
-			for job := range q.jobs {
-				job()
-			}
-		}()
-	})
+// enqueue appends a job without blocking, starting the worker when the queue was idle.
+func (q *DispatchQueue) enqueue(f func()) {
+	q.mu.Lock()
+	q.jobs = append(q.jobs, f)
+	start := !q.running
+	q.running = true
+	q.mu.Unlock()
+	if start {
+		go q.drain()
+	}
+}
+
+func (q *DispatchQueue) drain() {
+	for {
+		q.mu.Lock()
+		if len(q.jobs) == 0 {
+			q.running = false
+			q.mu.Unlock()
+			return
+		}
+		job := q.jobs[0]
+		q.jobs[0] = nil
+		q.jobs = q.jobs[1:]
+		q.mu.Unlock()
+		job()
+	}
 }
 
 // OS_dispatch_queueInitLabel is Dispatch `DispatchQueue(label:)`.
 func OS_dispatch_queueInitLabel(label string) *DispatchQueue { return &DispatchQueue{Label: label} }
 
 // OS_dispatch_queueAsyncExecute is Dispatch `DispatchQueue.async(execute:)`.
-func OS_dispatch_queueAsyncExecute(q *DispatchQueue, f func()) {
-	q.start()
-	q.jobs <- f
-}
+func OS_dispatch_queueAsyncExecute(q *DispatchQueue, f func()) { q.enqueue(f) }
 
 // OS_dispatch_queueSyncExecute is Dispatch `DispatchQueue.sync(execute:)` returning a value.
 func OS_dispatch_queueSyncExecute[R any](q *DispatchQueue, f func() R) R {
-	q.start()
 	done := make(chan struct{})
 	var out R
 	var panicked any
-	q.jobs <- func() {
+	q.enqueue(func() {
 		defer func() {
 			panicked = recover()
 			close(done)
 		}()
 		out = f()
-	}
+	})
 	<-done
 	if panicked != nil {
 		panic(panicked)

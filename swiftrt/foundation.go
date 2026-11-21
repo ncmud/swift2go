@@ -258,7 +258,7 @@ func NSDateFormatterDateFrom(f *DateFormatter, s string) *Date {
 	if err != nil {
 		return nil
 	}
-	d := Date(float64(t.UnixNano()) / 1e9)
+	d := dateOf(t)
 	return &d
 }
 
@@ -273,7 +273,7 @@ func NSISO8601DateFormatterInit() *ISO8601DateFormatter {
 // NSISO8601DateFormatterCObjcFrom is `ISO8601DateFormatter.string(from:)` for internet date-time, optionally with fractional seconds.
 func NSISO8601DateFormatterCObjcFrom(f *ISO8601DateFormatter, d Date) string {
 	if f.FormatOptions.RawValue&NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithFractionalSeconds != 0 {
-		return d.Time().UTC().Format("2006-01-02T15:04:05.000Z")
+		return d.Time().UTC().Round(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
 	}
 	return d.Time().UTC().Format("2006-01-02T15:04:05Z")
 }
@@ -284,7 +284,7 @@ func NSISO8601DateFormatterDateFrom(f *ISO8601DateFormatter, s string) *Date {
 	if err != nil {
 		return nil
 	}
-	d := Date(float64(t.UnixNano()) / 1e9)
+	d := dateOf(t)
 	return &d
 }
 
