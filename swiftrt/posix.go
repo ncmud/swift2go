@@ -25,6 +25,9 @@ func cStringResult(s string) *any {
 	return &v
 }
 
+// CStringOf is a String passed where C expects a `const char *`.
+func CStringOf(s string) *any { return cStringResult(s) }
+
 // CFGetenv is C `getenv(_:)`: the variable's value as a C string, or nil when it is unset.
 func CFGetenv(name *any) *any {
 	v, ok := os.LookupEnv(cStringArg(name))

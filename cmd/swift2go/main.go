@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -16,7 +17,7 @@ import (
 const rtPath = "github.com/ncmud/swift2go/swiftrt"
 
 func main() {
-	pkgDir := flag.String("pkg", os.ExpandEnv("$HOME/dev/nc/ncmud"), "SwiftPM package directory")
+	pkgDir := flag.String("pkg", ".", "SwiftPM package directory")
 	outDir := flag.String("out", "out", "output directory")
 	modules := flag.String("modules", "", "directory of built .swiftmodule files for dependencies")
 	flag.Usage = func() {
@@ -37,6 +38,10 @@ func main() {
 func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 	targets, err := swiftmod.Describe(pkgDir)
 	if err != nil {
+		return err
+	}
+	goModule, err := currentModule()
+	if err != nil && cmd == "transpile" {
 		return err
 	}
 	prebuilt := swiftmod.PrebuiltFlags(pkgDir)
@@ -87,7 +92,7 @@ func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 			m.SetTarget(under.Pkg)
 			pkgOut = filepath.Join(outDir, under.Pkg)
 		}
-		m.ImportPath = "github.com/ncmud/swift2go/" + filepath.ToSlash(pkgOut)
+		m.ImportPath = path.Join(goModule, filepath.ToSlash(pkgOut))
 		if _, err := m.WriteGo(pkgOut); err != nil {
 			return err
 		}
@@ -106,4 +111,19 @@ func absPath(p string) string {
 		return p
 	}
 	return a
+}
+
+// currentModule is the module path in ./go.mod: generated packages are written inside the Go
+// module the command runs in, and import one another by paths under it.
+func currentModule() (string, error) {
+	data, err := os.ReadFile("go.mod")
+	if err != nil {
+		return "", fmt.Errorf("run swift2go from the root of the Go module that will hold the output: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if mod, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			return strings.Trim(strings.TrimSpace(mod), `"`), nil
+		}
+	}
+	return "", fmt.Errorf("go.mod has no module line")
 }

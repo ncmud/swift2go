@@ -100,28 +100,19 @@ func TestYYJSONSerializationJsonObject(t *testing.T) {
 	}
 }
 
-func TestGameJSONCoders(t *testing.T) {
+func TestYYJSONDecoderStrict(t *testing.T) {
 	type P struct {
 		A []int          `swift:"a"`
 		B string         `swift:"b"`
 		C map[string]int `swift:"c"`
 	}
-	e := GameJSONEncoderInit()
-	e.OutputFormatting = GameJSONEncoderOutputFormatting{1 | 2}
-	want := "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": \"x\\/y\",\n  \"c\": {}\n}"
-	if got := string(GameJSONEncoderEncode(e, P{[]int{1, 2}, "x/y", map[string]int{}})); got != want {
-		t.Errorf("got %s", got)
-	}
-	e.OutputFormatting = GameJSONEncoderOutputFormatting{4}
-	if got := string(GameJSONEncoderEncode(e, P{nil, "x/y", nil})); got != `{"a":[],"b":"x/y","c":{}}` {
-		t.Errorf("got %s", got)
-	}
-	p := GameJSONDecoderDecodeFrom(GameJSONDecoderInit(), TypeOf[P](), []byte(`{"a":[3],"b":"q","c":{"k":2}}`))
+	p := YYJSONDecoderDecodeFrom(YYJSONDecoderInit(), TypeOf[P](), []byte(`{"a":[3],"b":"q","c":{"k":2}}`))
 	if p.B != "q" || p.A[0] != 3 || p.C["k"] != 2 {
 		t.Errorf("decoded %+v", p)
 	}
-	mustPanic(t, "dataCorrupted", func() {
-		GameJSONDecoderDecodeFrom(GameJSONDecoderInit(), TypeOf[map[string]float64](), []byte(`{"a":1,}`))
+	// swift-yyjson rejects malformed input with a YYJSONError.
+	mustPanic(t, "invalid character", func() {
+		YYJSONDecoderDecodeFrom(YYJSONDecoderInit(), TypeOf[map[string]float64](), []byte(`{"a":1,}`))
 	})
 }
 

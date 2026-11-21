@@ -7,36 +7,83 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Swift 6.4.2 AST](https://img.shields.io/badge/swift_AST-6.4.2-F05138?logo=swift&logoColor=white)
 
-Transpiles ncmud's Swift targets to Go by reading the compiler's typed AST
-(`swiftc -dump-ast -dump-ast-format json`, Swift 6.4.2).
+swift2go translates the targets of a Swift package into Go packages. It reads the Swift compiler's
+type-checked AST (`swiftc -dump-ast -dump-ast-format json`), so every expression arrives with its
+resolved type, overload and conformances. The Go it writes calls a small runtime, `swiftrt`, for the
+parts of Swift's standard library and Foundation that Go lacks. Swift test targets written with
+swift-testing come out as `go test` tests, so a translated package can be checked against its own
+test suite.
 
-- `cmd/swift2go` — CLI: `swift2go transpile <Target> [<TestTarget> ...]`, targets in dependency order.
-- `internal/swiftmod` — `swift package describe`, `-emit-module`, AST dumps (with swift-testing macros).
-- `internal/ast` — loader for the concatenated per-file JSON documents.
-- `internal/types` — batch `swift-demangle` and a parser for demangled types.
-- `internal/emit` — declaration, statement and expression emitters.
-- `swiftrt` — runtime the generated code calls: checked arithmetic, grapheme-aware strings,
-  optionals as pointers, stdlib collection methods, swift-testing `#expect`/`#require`.
+The project is driven by one large server codebase, so coverage follows what that code uses. It
+contains nothing specific to that codebase, and it should work on other packages written in a
+similar style.
 
-Generated Go goes to `out/` (gitignored). Unsupported constructs compile to
-`swiftrt.Unsupported[T]("kind")` and are counted in the transpile report.
+## Requirements
 
+- macOS with the Swift 6.4.2 toolchain (`swiftc`, `swift-demangle`)
+- Go 1.27.4 or newer
+- A SwiftPM package that builds
+
+## Usage
+
+Run swift2go from the root of the Go module that should hold the output. Generated packages are
+written under `out/` and import one another by paths inside that module.
+
+```sh
+go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage transpile Core App AppTests
 ```
-just termcore        # transpile TermCore + TermCoreTests, vet, go test
-just errors termcore # compile errors by message
-```
 
-## Mappings
+- List targets in dependency order. A target's dependencies must be transpiled first, or in the same run.
+- A test target joins the package of the target it tests, as `_test.go` files.
+- Each target prints a report of constructs it could not translate. Those compile to
+  `swiftrt.Unsupported[T]("kind")`, which panics if it runs.
+
+From a checkout, `just check <Target> <TestTarget>` transpiles a target and its tests and runs them
+with `go test`. Set `SWIFT_PKG` to the package directory.
+
+## What it translates
 
 | Swift | Go |
 |---|---|
-| struct / class | struct / `*struct` |
-| enum without payload | `int` type + consts |
-| enum with payload | sealed interface + case structs |
-| protocol + extension defaults | interface + `ProtoMethod(self, …)` + forwarding methods on conformers |
-| `T?` | `*T` (reference types stay bare) |
-| `throws` / `try` / `do-catch` | panic with `swiftrt.Thrown`, `swiftrt.DoCatch` |
-| `Int` `+ - *` | `swiftrt.Add/Sub/Mul` (trap on overflow) |
-| `String.Index` | byte offset; `Character` = grapheme string; `Substring` = base + range |
-| stdlib member `x.foo(bar:)` | `swiftrt.<Kind>FooBar(x, …)` |
-| `@Test` func | `func TestSuiteMethod(t *testing.T)` |
+| struct / class | struct (value semantics through copies) / `*struct` |
+| class inheritance and `override` | embedding, upcast methods, dynamic dispatch hooks |
+| enum without associated values | named integer type and constants |
+| enum with associated values | sealed interface and one struct per case, generic when the enum is |
+| protocol, extensions, default implementations | interface, forwarding methods, package functions taking `self` |
+| static protocol requirements, `Self` | type parameters and `(*new(T)).StaticX()` |
+| generics, constrained extensions | Go generics, with pinned parameters dropped |
+| `T?` | `*T`, with class references kept as the pointer itself |
+| `throws`, `do`/`catch`, typed throws | panics carrying the error, caught by `swiftrt.Catch` |
+| `Int` arithmetic | `swiftrt.Add`/`Sub`/`Mul`, which trap on overflow as Swift does |
+| `Int128` | `swiftrt.Int128`, checked big-integer arithmetic |
+| `String`, `Character`, `Substring`, `String.Index` | Go strings, grapheme clusters, a base with a range, byte offsets |
+| `Array`, `Dictionary`, `Set` | slices, maps, `map[T]struct{}` (or `swiftrt.HSet` for elements Go can't key on) |
+| `inout`, mutating methods, `didSet`/`willSet` | pointers, pointer receivers, setters that run observers |
+| `switch` with patterns, `if case`, `guard`, labeled loops | Go control flow with pattern tests and bindings |
+| closures, method references, `@autoclosure` | function literals |
+| `Codable` (synthesized or hand-written) | a JSON-shaped tree in `swiftrt`, Foundation-compatible output |
+| `Regex` literals | RE2 with Swift's Unicode word boundaries emulated |
+| `async`/`await`, `Task`, `AsyncStream`, `for await` | goroutines and channels in `swiftrt` |
+| swift-testing `@Test`, `#expect`, `#require`, `arguments:` | `func TestX(t *testing.T)` and subtests |
+| freestanding expression macros | the compiler's recorded expansion |
+
+The runtime also covers the parts of Foundation, Dispatch, Synchronization, swift-collections,
+swift-log, CryptoKit and a few C library calls that the driving codebase uses.
+
+## Limits
+
+- Matching for Swift `Regex` is scalar-based, apart from the trailing `\b` handled above.
+- Values in an `HSet` are keyed by a canonical rendering of their fields, not by a custom `hash(into:)`.
+- Pointers and C interop cover what the code needs (`gettimeofday`, `clock_gettime`, C strings), not `UnsafePointer` in general.
+- Every untranslated construct is reported, never silently dropped. `swift2go stats` and the
+  per-target report list them by kind.
+
+## Layout
+
+- `cmd/swift2go`: the CLI (`transpile`, `dump`, `stats`)
+- `cmd/gocheck`: type-checks generated packages and lists errors even when imports fail
+- `internal/swiftmod`: `swift package describe`, module emission, per-file AST dumps
+- `internal/ast`: the JSON AST loader
+- `internal/types`: batched demangling and a parser for demangled types
+- `internal/emit`: declaration, statement and expression emitters
+- `swiftrt`: the runtime the generated code calls

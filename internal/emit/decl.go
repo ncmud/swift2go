@@ -1512,7 +1512,7 @@ func (e *fileEmitter) selfTypeArgs(self *DeclInfo) string {
 }
 
 // selfTypeDecl is "[A any, B any]" for a static member or init of a generic type, leaving out
-// parameters a same-type requirement (`where Target == ObjectInstance`) has pinned.
+// parameters a same-type requirement (`where Element == Item`) has pinned.
 func (e *fileEmitter) selfTypeDecl(self *DeclInfo) string {
 	if self == nil || self.Kind == "foreign" {
 		return ""
