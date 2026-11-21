@@ -464,7 +464,7 @@ func (e *fileEmitter) conds(cs []ast.Node, inner func()) {
 		i++
 	}
 	if len(bools) > 0 {
-		e.w("if %s {\n", strings.Join(bools, " && "))
+		e.w("if %s {\n", andJoin(bools))
 		e.conds(cs[i:], inner)
 		e.w("}\n")
 		return
@@ -538,7 +538,7 @@ func (e *fileEmitter) ifStmt(n ast.Node) {
 		for _, c := range cs {
 			parts = append(parts, e.expr(c))
 		}
-		e.w("if %s ", strings.Join(parts, " && "))
+		e.w("if %s ", andJoin(parts))
 		e.block(n.Child("then_stmt"))
 		if els != nil {
 			e.w(" else ")
@@ -611,7 +611,7 @@ func (e *fileEmitter) whileStmt(n ast.Node) {
 		for _, c := range cs {
 			parts = append(parts, e.expr(c))
 		}
-		e.w("for %s ", strings.Join(parts, " && "))
+		e.w("for %s ", andJoin(parts))
 		e.block(n.Child("body"))
 		e.w("\n")
 		return
@@ -894,7 +894,7 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		test := "swiftrt.Is[" + target + "](" + subj + ")"
 		if sub := p.Child("sub_pattern"); sub != nil {
 			if t := e.patternTest(unwrapPattern(sub), "swiftrt.MustAs["+target+"]("+subj+")", e.m.typeOf(p.Str("cast_to"))); t != "true" {
-				test += " && " + t
+				test = andJoin([]string{test, t})
 			}
 		}
 		return test
@@ -918,7 +918,7 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			if sub := p.Child("sub_pattern"); sub != nil {
 				inner := e.payloadSubTests(sub, "func() "+caseT+" { v, _ := "+assertable(subj)+".("+caseT+"); return v }()", el)
 				if inner != "true" {
-					test += " && " + inner
+					test = andJoin([]string{test, inner})
 				}
 			}
 			return test
@@ -946,7 +946,7 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		if len(parts) == 0 {
 			return "true"
 		}
-		return strings.Join(parts, " && ")
+		return andJoin(parts)
 	}
 	return e.m.Unsup("pattern:"+p.Kind(), e.where, "bool")
 }
@@ -1000,7 +1000,7 @@ func (e *fileEmitter) payloadSubTests(sub ast.Node, val string, el *DeclInfo) st
 		if len(parts) == 0 {
 			return "true"
 		}
-		return strings.Join(parts, " && ")
+		return andJoin(parts)
 	}
 	return e.patternTest(sub, val+".F0", nil)
 }
@@ -1291,7 +1291,7 @@ func (e *fileEmitter) resultCase(p ast.Node, subj string) (string, bool) {
 	if sub := p.Child("sub_pattern"); sub != nil {
 		inner := unwrapSinglePattern(sub)
 		if t := e.patternTest(inner, val, e.m.typeOf(inner.Type())); t != "true" {
-			test += " && " + t
+			test = andJoin([]string{test, t})
 		}
 	}
 	return test, true
@@ -1364,7 +1364,7 @@ func (e *fileEmitter) optionalCase(p ast.Node, subj string, st *types.Type) (str
 		test := ptr + " != nil"
 		if sub := p.Child("sub_pattern"); sub != nil {
 			if inner := e.patternTest(unwrapSinglePattern(sub), val, t.Args[0]); inner != "true" {
-				test += " && " + inner
+				test = andJoin([]string{test, inner})
 			}
 		}
 		return test, true
@@ -1508,4 +1508,34 @@ func (e *fileEmitter) labelUsed(n ast.Node, label string) bool {
 		}
 	})
 	return used
+}
+
+// andJoin joins a Swift condition list with &&, parenthesizing conditions that contain ||, which
+// binds looser than && in Go.
+func andJoin(conds []string) string {
+	out := make([]string, len(conds))
+	for i, c := range conds {
+		if strings.Contains(c, "||") && !(strings.HasPrefix(c, "(") && strings.HasSuffix(c, ")") && balancedParens(c[1:len(c)-1])) {
+			c = "(" + c + ")"
+		}
+		out[i] = c
+	}
+	return strings.Join(out, " && ")
+}
+
+// balancedParens reports whether s never closes a parenthesis it did not open.
+func balancedParens(s string) bool {
+	depth := 0
+	for _, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0
 }
