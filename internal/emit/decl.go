@@ -717,6 +717,11 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 		selfT := self.GoName
 		if info.ProtoExt {
 			selfT = e.m.LocalTypeName(info.Owner)
+			// When Self is a type parameter (the protocol has static requirements), type self by it so
+			// callers infer it from the receiver.
+			if st := e.m.GoType(e.m.typeOf(n.Child("implicit_self_decl").Str("interface_type")), e.generics); slices.Contains(e.typeParams, st) && !info.Mutating {
+				selfT = st
+			}
 		}
 		if (self.Kind == "foreign" || info.ProtoExt) && !e.m.isLocalProtocol(info.Owner) {
 			if st := e.m.GoType(e.m.typeOf(n.Child("implicit_self_decl").Str("interface_type")), e.generics); st != "" && !strings.HasPrefix(st, "any") {
