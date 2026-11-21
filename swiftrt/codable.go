@@ -245,6 +245,9 @@ func EncodeValue(v any) any {
 			return e.Value
 		}
 	}
+	if c, ok := payloadCaseFor(rv.Type()); ok {
+		return encodePayloadCase(c, rv)
+	}
 	switch x := v.(type) {
 	case interface{ RawValue() string }:
 		return x.RawValue()
@@ -329,6 +332,10 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 	decodersMu.RUnlock()
 	if f != nil {
 		dst.Set(reflect.ValueOf(f(&Decoder{Value: raw, CodingPath: path})))
+		return
+	}
+	if cases, ok := payloadCasesFor(t); ok {
+		decodePayloadEnum(dst, cases, raw, path)
 		return
 	}
 	if t == reflect.TypeFor[UUID]() {
