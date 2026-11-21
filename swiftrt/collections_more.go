@@ -382,9 +382,13 @@ func SetSubtracting[T comparable](a map[T]struct{}, b []T) map[T]struct{} {
 }
 
 // SetIsSubsetOf is Swift `Set.isSubset(of:)`.
-func SetIsSubsetOf[T comparable](a map[T]struct{}, b map[T]struct{}) bool {
+func SetIsSubsetOf[T comparable](a map[T]struct{}, b any) bool {
+	other, ok := b.(map[T]struct{})
+	if !ok {
+		other = SetInitSlice[map[T]struct{}](Iterate[T](b))
+	}
 	for k := range a {
-		if _, ok := b[k]; !ok {
+		if _, ok := other[k]; !ok {
 			return false
 		}
 	}
@@ -557,4 +561,14 @@ func OffsetIndex(i *int, lo int) *int {
 	}
 	v := *i + lo
 	return &v
+}
+
+// SliceFlatMapSet is Swift `Array.flatMap(_:)` whose closure returns a Set; each set's elements
+// are taken in Iterate's order.
+func SliceFlatMapSet[T any, U comparable](xs []T, f func(T) map[U]struct{}) []U {
+	out := []U{}
+	for _, x := range xs {
+		out = append(out, Iterate[U](f(x))...)
+	}
+	return out
 }
