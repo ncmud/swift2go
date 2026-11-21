@@ -676,6 +676,14 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 				e.typeBounds[g[param]] = "swiftrt.Integer"
 			}
 			continue
+		case "Swift.Hashable", "Swift.Equatable":
+			// Map keys and == need Go's comparable; a stronger bound (Integer) already implies it.
+			if own[param] {
+				if _, set := e.typeBounds[g[param]]; !set {
+					e.typeBounds[g[param]] = "comparable"
+				}
+			}
+			continue
 		}
 		if strings.HasPrefix(proto, e.m.Name+".") {
 			if own[param] && e.m.HasStaticRequirements(proto) {

@@ -147,6 +147,10 @@ type TextCheckingResult struct{ Ranges []Range[int] }
 // NSTextCheckingResultRange is Foundation `NSTextCheckingResult.range`: the whole match's range.
 func NSTextCheckingResultRange(m TextCheckingResult) Range[int] { return m.Ranges[0] }
 
+// NSTextCheckingResultRangeAt is Foundation `NSTextCheckingResult.range(at:)`: capture group i's
+// range, 0 being the whole match.
+func NSTextCheckingResultRangeAt(m TextCheckingResult, i int) Range[int] { return m.Ranges[i] }
+
 // NSRegularExpressionMatchesInRange is Foundation `NSRegularExpression.matches(in:range:)`: the
 // non-overlapping matches inside the UTF-16 range r of s, which bounds anchors and lookaround as
 // the default (non-transparent, anchoring) bounds do. A range outside s traps. Unlike ICU, an empty
