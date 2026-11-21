@@ -995,7 +995,11 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		}
 		return subj + " == " + el.GoName
 	case "pattern_optional_some":
-		inner := e.patternTest(p.Child("sub_pattern"), "(*"+subj+")", st)
+		val := "(*" + subj + ")"
+		if t := e.m.typeOf(p.Child("sub_pattern").Type()); t != nil && t.Kind != types.Optional && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+			val = subj
+		}
+		inner := e.patternTest(p.Child("sub_pattern"), val, st)
 		if inner == "true" {
 			return subj + " != nil"
 		}
@@ -1082,7 +1086,13 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 	case "pattern_named":
 		e.w("%s := %s\n_ = %s\n", goSafe(p.Name()), subj, goSafe(p.Name()))
 	case "pattern_optional_some":
-		e.patternBind(p.Child("sub_pattern"), "(*"+subj+")")
+		sub := p.Child("sub_pattern")
+		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind != types.Optional && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+			// A class reference's Optional is the pointer itself.
+			e.patternBind(sub, subj)
+		} else {
+			e.patternBind(sub, "(*"+subj+")")
+		}
 	case "pattern_tuple":
 		for i, el := range p.List("elements") {
 			e.patternBind(el, derefParen(subj)+".F"+itoa(i))

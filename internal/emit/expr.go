@@ -1126,8 +1126,15 @@ func (e *fileEmitter) keyPathSetter(n ast.Node, root, val string) string {
 func (e *fileEmitter) autoclosureFunc(n ast.Node, ps []ast.Node) string {
 	ft := e.m.typeOf(n.Type())
 	var params []string
+	saveIO := e.inoutParams
+	defer func() { e.inoutParams = saveIO }()
 	for _, p := range ps {
 		params = append(params, goSafe(p.Name())+" "+e.m.GoType(e.m.typeOf(p.Str("interface_type")), e.generics))
+		if e.inoutParams[p.Name()] {
+			// The parameter (a curry thunk's self) shadows an outer inout one.
+			e.inoutParams = maps.Clone(e.inoutParams)
+			delete(e.inoutParams, p.Name())
+		}
 	}
 	res := ""
 	if ft.Kind == types.Func {
