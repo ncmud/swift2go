@@ -1099,6 +1099,9 @@ func isSelfRef(n ast.Node) bool {
 func (e *fileEmitter) enumElement(p ast.Node, st *types.Type) *DeclInfo {
 	el, pfx := e.lookup(p.Child("element_decl").Str("decl_usr"))
 	if el == nil {
+		if st == nil || st.Kind == types.Unknown {
+			st = e.m.typeOf(p.Type())
+		}
 		return e.enumElementByName(st, p)
 	}
 	if pfx != "" {
