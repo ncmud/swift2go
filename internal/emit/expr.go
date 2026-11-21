@@ -82,7 +82,16 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		}
 		return e.expr(sub)
 	case "inout_expr":
-		return "&" + e.lvalue(n.Child("sub_expr"))
+		sub := n.Child("sub_expr")
+		lv := e.lvalue(sub)
+		if ds := stripLoads(sub); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "Map" && strings.HasSuffix(lv, "]") {
+			// Go map elements are not addressable: mutate a copy, then store it back.
+			tmp := e.newTmp("slot")
+			e.w("%s := %s\n", tmp, lv)
+			e.post = append(e.post, lv+" = "+tmp)
+			return "&" + tmp
+		}
+		return "&" + lv
 	case "string_literal_expr":
 		if e.m.Recv(e.m.typeOf(n.Type())) == "Substring" {
 			return "swiftrt.SubstringInitString(" + e.stringLiteral(n) + ")"
