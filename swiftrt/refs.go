@@ -148,3 +148,14 @@ const (
 	NSComparisonResultOrderedSame       = 0
 	NSComparisonResultOrderedDescending = 1
 )
+
+// OrderedSetCompactMapRef is `OrderedSet.compactMap` returning optional references.
+func OrderedSetCompactMapRef[T comparable, U any](s OrderedSet[T], f func(T) U) []U {
+	return compactRef(s.Items, f)
+}
+
+// LazyFilterSequenceCompactMapRef is `lazy.filter(_:).compactMap(_:)` returning optional references.
+func LazyFilterSequenceCompactMapRef[T, U any](xs []T, f func(T) U) []U { return compactRef(xs, f) }
+
+// Zip2SequenceCompactMapRef is `zip(_:_:).compactMap` returning optional references.
+func Zip2SequenceCompactMapRef[T, U any](xs []T, f func(T) U) []U { return compactRef(xs, f) }

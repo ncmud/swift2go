@@ -241,7 +241,10 @@ func Is[T any](v any) bool {
 	if _, ok := derefAs[T](v); ok {
 		return true
 	}
-	_, ok := Dynamic(v).(T)
+	if _, ok := Dynamic(v).(T); ok {
+		return true
+	}
+	_, ok := bridgeAs[T](v)
 	return ok
 }
 
@@ -256,6 +259,9 @@ func As[T any](v any) *T {
 	if t, ok := derefAs[T](v); ok {
 		return &t
 	}
+	if t, ok := bridgeAs[T](v); ok {
+		return &t
+	}
 	return nil
 }
 
@@ -267,6 +273,9 @@ func MustAs[T any](v any) T {
 	}
 	if !ok {
 		t, ok = derefAs[T](v)
+	}
+	if !ok {
+		t, ok = bridgeAs[T](v)
 	}
 	if !ok {
 		Trap(fmt.Sprintf("could not cast value of type %T", v))
