@@ -469,6 +469,11 @@ func (e *fileEmitter) upcast(n ast.Node) string {
 		// Set<Concrete> as Set<AnyHashable>.
 		return "swiftrt.SetUpcast[" + dst + "](" + e.expr(sub) + ")"
 	}
+	if st, dt := e.m.typeOf(sub.Type()), e.m.typeOf(n.Type()); src != dst && e.m.Recv(st) == "Map" && e.m.Recv(dt) == "Map" && len(st.Args) == 2 && len(dt.Args) == 2 && e.m.GoType(st.Args[0], e.generics) == e.m.GoType(dt.Args[0], e.generics) {
+		// [K: Concrete] as [K: Any]: convert value by value.
+		sv, dv := e.m.GoType(st.Args[1], e.generics), e.m.GoType(dt.Args[1], e.generics)
+		return "swiftrt.MapMapValues(" + e.expr(sub) + ", func(v " + sv + ") " + dv + " { return v })"
+	}
 	return e.expr(sub)
 }
 
