@@ -159,3 +159,11 @@ func LazyFilterSequenceCompactMapRef[T, U any](xs []T, f func(T) U) []U { return
 
 // Zip2SequenceCompactMapRef is `zip(_:_:).compactMap` returning optional references.
 func Zip2SequenceCompactMapRef[T, U any](xs []T, f func(T) U) []U { return compactRef(xs, f) }
+
+// OrderedDictionarySubscriptDefault is `dict[key, default: d]` as an rvalue.
+func OrderedDictionarySubscriptDefault[K comparable, V any](d OrderedDictionary[K, V], k K, def V) V {
+	if v, ok := d.M[k]; ok {
+		return v
+	}
+	return def
+}

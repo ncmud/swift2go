@@ -569,6 +569,12 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" && isZeroLiteral(args[1].Child("expr")) {
 			return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "]"
 		}
+		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" {
+			m := e.lvalue(n.Child("base"))
+			k := e.newTmp("key")
+			e.w("%s := %s\nif _, ok := %s[%s]; !ok {\n%s[%s] = %s\n}\n", k, e.expr(args[0].Child("expr")), m, k, m, k, e.defaultValue(args[1].Child("expr")))
+			return m + "[" + k + "]"
+		}
 		var labels []string
 		for _, a := range args {
 			labels = append(labels, a.Str("label")+":"+e.m.Recv(e.m.typeOf(a.Child("expr").Type())))
@@ -638,6 +644,13 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 	}
 	bt := e.m.typeOf(base.Type())
 	recv := e.m.Recv(bt)
+	if len(args) == 2 && args[1].Str("label") == "default" && (recv == "Map" || recv == "OrderedDictionary") {
+		fn := "swiftrt.MapSubscriptDefault"
+		if recv == "OrderedDictionary" {
+			fn = "swiftrt.OrderedDictionarySubscriptDefault"
+		}
+		return fn + "(" + e.expr(base) + ", " + e.expr(args[0].Child("expr")) + ", " + e.defaultValue(args[1].Child("expr")) + ")"
+	}
 	if len(args) != 1 {
 		return e.m.Unsup("subscript-multi-arg", e.where, e.exprGoType(n))
 	}
@@ -2004,4 +2017,16 @@ func (e *fileEmitter) ctorWithLabels(owner string, labels ...string) (*DeclInfo,
 		}
 	}
 	return nil, ""
+}
+
+// defaultValue renders a subscript's `default:` argument, which Swift passes as an autoclosure.
+func (e *fileEmitter) defaultValue(n ast.Node) string {
+	for n != nil && (n.Kind() == "autoclosure_expr" || n.Kind() == "paren_expr") {
+		if n.Kind() == "autoclosure_expr" {
+			n = n.Child("single_expr_body")
+		} else {
+			n = n.Child("sub_expr")
+		}
+	}
+	return e.expr(n)
 }
