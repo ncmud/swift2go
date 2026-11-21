@@ -220,6 +220,8 @@ type DateFormatter struct {
 	TimeZone   *TimeZone
 	DateStyle  int
 	TimeStyle  int
+	AmSymbol   *string
+	PmSymbol   *string
 }
 
 // NSDateFormatterInit is Foundation `DateFormatter()`.
@@ -244,7 +246,46 @@ func (f *DateFormatter) loc() *time.Location {
 
 // NSDateFormatterStringFrom is Foundation `DateFormatter.string(from:)`.
 func NSDateFormatterStringFrom(f *DateFormatter, d Date) string {
-	return d.Time().In(f.loc()).Format(f.layout())
+	t := d.Time().In(f.loc())
+	if f.DateFormat == nil || (f.AmSymbol == nil && f.PmSymbol == nil) {
+		return t.Format(f.layout())
+	}
+	// Custom AM/PM symbols: format a placeholder where each unquoted `a` is, then substitute.
+	sym := "AM"
+	if f.AmSymbol != nil {
+		sym = *f.AmSymbol
+	}
+	if t.Hour() >= 12 {
+		sym = "PM"
+		if f.PmSymbol != nil {
+			sym = *f.PmSymbol
+		}
+	}
+	const mark = "\x01"
+	saved := *f.DateFormat
+	marked := replaceUnquoted(saved, 'a', "'"+mark+"'")
+	f.DateFormat = &marked
+	out := t.Format(f.layout())
+	f.DateFormat = &saved
+	return strings.ReplaceAll(out, mark, sym)
+}
+
+// replaceUnquoted replaces each occurrence of c outside '…' literal text in a date format.
+func replaceUnquoted(format string, c rune, repl string) string {
+	var b strings.Builder
+	quoted := false
+	for _, r := range format {
+		switch {
+		case r == '\'':
+			quoted = !quoted
+			b.WriteRune(r)
+		case r == c && !quoted:
+			b.WriteString(repl)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // NSDateFormatterDateFrom is Foundation `DateFormatter.date(from:)`.
