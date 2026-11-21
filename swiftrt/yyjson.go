@@ -308,11 +308,12 @@ type yyjsonWriter struct {
 	b             strings.Builder
 	pretty        bool
 	escapeSlashes bool
-	// integralDoubles writes doubles with no fractional part as integers, for trees in which
-	// Codable integers have already become float64.
-	integralDoubles bool
 	// fourSpaces indents pretty output by four spaces per level instead of two.
 	fourSpaces bool
+	// foundation writes as Foundation's JSONSerialization does: doubles by their Swift description
+	// without a trailing ".0", control characters as lowercase `\u` escapes, and `" : "` between
+	// keys and values when pretty-printing.
+	foundation bool
 }
 
 func (w *yyjsonWriter) str(s string) {
@@ -342,7 +343,11 @@ func (w *yyjsonWriter) str(s string) {
 		default:
 			if r < 0x20 {
 				w.b.WriteString(`\u00`)
-				w.b.WriteString(strings.ToUpper(strconv.FormatInt(int64(r)>>4, 16) + strconv.FormatInt(int64(r)&15, 16)))
+				hex := strconv.FormatInt(int64(r)>>4, 16) + strconv.FormatInt(int64(r)&15, 16)
+				if !w.foundation {
+					hex = strings.ToUpper(hex)
+				}
+				w.b.WriteString(hex)
 			} else {
 				w.b.WriteRune(r)
 			}
@@ -365,8 +370,8 @@ func (w *yyjsonWriter) double(f float64) {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		yyjsonThrow("NaN or Infinity not allowed in JSON")
 	}
-	if w.integralDoubles && f == math.Trunc(f) && f >= -0x1p63 && f < 0x1p63 {
-		w.b.WriteString(strconv.FormatInt(int64(f), 10))
+	if w.foundation {
+		w.b.WriteString(strings.TrimSuffix(swiftFloatDescription(f, 64), ".0"))
 		return
 	}
 	w.b.WriteString(yyjsonDouble(f))
@@ -385,6 +390,9 @@ func (w *yyjsonWriter) value(v any, level int) {
 		return
 	case bool:
 		w.b.WriteString(strconv.FormatBool(x))
+		return
+	case json.Number:
+		w.b.WriteString(string(x))
 		return
 	case NSNumber:
 		switch x.kind {
@@ -445,6 +453,9 @@ func (w *yyjsonWriter) value(v any, level int) {
 			}
 			w.indent(level + 1)
 			w.str(k.String())
+			if w.pretty && w.foundation {
+				w.b.WriteByte(' ')
+			}
 			w.b.WriteByte(':')
 			if w.pretty {
 				w.b.WriteByte(' ')
@@ -495,14 +506,12 @@ func GameJSONEncoderInit() GameJSONEncoder { return GameJSONEncoder{} }
 
 // GameJSONEncoderEncode is JSONCoding `GameJSONEncoder.encode(_:)`: yyjson output with two-space
 // indentation for `.prettyPrinted` and `/` escaped unless `.withoutEscapingSlashes`. Object keys are
-// always sorted, and doubles without a fractional part are written as integers, because the Codable
-// tree no longer distinguishes them from Int. NaN and infinity throw EncodingError.invalidValue.
+// always sorted, because the Codable tree does not keep the encoding order. NaN and infinity throw EncodingError.invalidValue.
 func GameJSONEncoderEncode[T any](e GameJSONEncoder, value T) []byte {
 	tree := EncodeValue(value)
 	w := &yyjsonWriter{
-		pretty:          e.OutputFormatting.RawValue&1 != 0,
-		escapeSlashes:   e.OutputFormatting.RawValue&4 == 0,
-		integralDoubles: true,
+		pretty:        e.OutputFormatting.RawValue&1 != 0,
+		escapeSlashes: e.OutputFormatting.RawValue&4 == 0,
 	}
 	if err := Catch(func() { w.value(tree, 0) }); err != nil {
 		panic(Throw(CodingError{"invalidValue: " + err.Error()}))
@@ -649,17 +658,15 @@ func YYJSONEncoderInit() YYJSONEncoder { return YYJSONEncoder{} }
 
 // YYJSONEncoderEncode is swift-yyjson `YYJSONEncoder.encode(_:)`. `.prettyPrinted` indents by four
 // spaces, or two with `.indentationTwoSpaces` (which alone also pretty-prints); `/` is escaped only
-// with `.escapeSlashes`; `.newlineAtEnd` appends a newline. Object keys are always sorted, and doubles
-// without a fractional part are written as integers, because the Codable tree keeps neither the
-// encoding order nor the Int/Double distinction. NaN and infinity throw YYJSONError.
+// with `.escapeSlashes`; `.newlineAtEnd` appends a newline. Object keys are always sorted, because
+// the Codable tree does not keep the encoding order. NaN and infinity throw YYJSONError.
 func YYJSONEncoderEncode[T any](e YYJSONEncoder, value T) []byte {
 	has := func(o YYJSONWriteOptions) bool { return e.WriteOptions.RawValue&o.RawValue != 0 }
 	tree := EncodeValue(value)
 	w := &yyjsonWriter{
-		pretty:          has(YYJSONWriteOptionsPrettyPrinted) || has(YYJSONWriteOptionsIndentationTwoSpaces),
-		fourSpaces:      !has(YYJSONWriteOptionsIndentationTwoSpaces),
-		escapeSlashes:   has(YYJSONWriteOptionsEscapeSlashes),
-		integralDoubles: true,
+		pretty:        has(YYJSONWriteOptionsPrettyPrinted) || has(YYJSONWriteOptionsIndentationTwoSpaces),
+		fourSpaces:    !has(YYJSONWriteOptionsIndentationTwoSpaces),
+		escapeSlashes: has(YYJSONWriteOptionsEscapeSlashes),
 	}
 	w.value(tree, 0)
 	if has(YYJSONWriteOptionsNewlineAtEnd) {

@@ -1,9 +1,15 @@
 package swiftrt
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -208,19 +214,23 @@ func EncodeValue(v any) any {
 	case interface{ RawValue() string }:
 		return x.RawValue()
 	case interface{ RawValue() int }:
-		return float64(x.RawValue())
+		return json.Number(strconv.Itoa(x.RawValue()))
 	case UUID:
 		return UUIDUuidString(x)
 	case Date:
 		return float64(x) - 978307200
+	case Decimal:
+		return json.Number(x.Description())
+	case []byte:
+		return base64.StdEncoding.EncodeToString(x)
 	}
 	switch rv.Kind() {
 	case reflect.Bool, reflect.String:
 		return rv.Interface()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(rv.Int())
+		return json.Number(strconv.FormatInt(rv.Int(), 10))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return float64(rv.Uint())
+		return json.Number(strconv.FormatUint(rv.Uint(), 10))
 	case reflect.Float32, reflect.Float64:
 		return rv.Float()
 	case reflect.Pointer:
@@ -235,6 +245,13 @@ func EncodeValue(v any) any {
 		}
 		return out
 	case reflect.Map:
+		if isSetType(rv.Type()) {
+			out := make([]any, 0, rv.Len())
+			for _, k := range rv.MapKeys() {
+				out = append(out, EncodeValue(k.Interface()))
+			}
+			return out
+		}
 		out := map[string]any{}
 		for _, k := range rv.MapKeys() {
 			out[keyString(k.Interface())] = EncodeValue(rv.MapIndex(k).Interface())
@@ -289,9 +306,28 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		return
 	}
 	if t == reflect.TypeFor[Date]() {
-		n, _ := raw.(float64)
+		n, _ := rawFloat(raw)
 		dst.Set(reflect.ValueOf(Date(n + 978307200)))
 		return
+	}
+	if t == reflect.TypeFor[Decimal]() {
+		text, ok := rawNumberText(raw)
+		d := NSDecimalOptInitString(text)
+		if !ok || d == nil {
+			codingFail("Expected to decode Decimal but found %s instead at %s", rawKind(raw), strings.Join(path, "."))
+		}
+		dst.Set(reflect.ValueOf(*d))
+		return
+	}
+	if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 {
+		if s, ok := raw.(string); ok {
+			b, err := base64.StdEncoding.DecodeString(s)
+			if err != nil {
+				codingFail("Encountered Data is not valid Base64 at %s", strings.Join(path, "."))
+			}
+			dst.Set(reflect.ValueOf(b).Convert(t))
+			return
+		}
 	}
 	switch t.Kind() {
 	case reflect.Pointer:
@@ -315,22 +351,31 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		}
 		dst.SetString(s)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, ok := raw.(float64)
-		if !ok {
+		if _, isNum := rawNumberText(raw); !isNum {
 			if s, isStr := raw.(string); isStr && decodeRawString(dst, s) {
 				return
 			}
 			codingFail("expected a number at %s", strings.Join(path, "."))
 		}
+		n, ok := rawInt(raw)
+		if !ok || dst.OverflowInt(n) {
+			codingFail("Number %s is not representable in Swift at %s", Str(raw), strings.Join(path, "."))
+		}
 		if decodeRawInt(dst, int(n)) {
 			return
 		}
-		dst.SetInt(int64(n))
+		dst.SetInt(n)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		n, _ := raw.(float64)
-		dst.SetUint(uint64(n))
+		n, ok := rawUint(raw)
+		if !ok || dst.OverflowUint(n) {
+			codingFail("Number %s is not representable in Swift at %s", Str(raw), strings.Join(path, "."))
+		}
+		dst.SetUint(n)
 	case reflect.Float32, reflect.Float64:
-		n, _ := raw.(float64)
+		n, ok := rawFloat(raw)
+		if !ok {
+			codingFail("expected a number at %s", strings.Join(path, "."))
+		}
 		dst.SetFloat(n)
 	case reflect.Slice:
 		xs, ok := raw.([]any)
@@ -343,6 +388,20 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		}
 		dst.Set(out)
 	case reflect.Map:
+		if isSetType(t) {
+			xs, ok := raw.([]any)
+			if !ok {
+				codingFail("expected an array at %s", strings.Join(path, "."))
+			}
+			out := reflect.MakeMapWithSize(t, len(xs))
+			for i, x := range xs {
+				kv := reflect.New(t.Key()).Elem()
+				decodeInto(kv, x, append(path, "Index "+strconv.Itoa(i)))
+				out.SetMapIndex(kv, reflect.Zero(t.Elem()))
+			}
+			dst.Set(out)
+			return
+		}
 		m, ok := raw.(map[string]any)
 		if !ok {
 			codingFail("expected a dictionary at %s", strings.Join(path, "."))
@@ -350,7 +409,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		out := reflect.MakeMapWithSize(t, len(m))
 		for k, x := range m {
 			kv := reflect.New(t.Key()).Elem()
-			decodeInto(kv, k, path)
+			decodeMapKey(kv, k, path)
 			vv := reflect.New(t.Elem()).Elem()
 			decodeInto(vv, x, append(path, k))
 			out.SetMapIndex(kv, vv)
@@ -463,9 +522,116 @@ func JSONDecoderInit() *JSONDecoder { return &JSONDecoder{} }
 
 // JSONDecoderDecodeFrom is `JSONDecoder.decode(_:from:)`.
 func JSONDecoderDecodeFrom[T any](d *JSONDecoder, _ TypeT[T], data []byte) T {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var tree any
-	if err := json.Unmarshal(data, &tree); err != nil {
+	if err := dec.Decode(&tree); err != nil {
 		codingFail("The data couldn't be read because it isn't in the correct format: %v", err)
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		codingFail("The data couldn't be read because it isn't in the correct format: unexpected content at the end of the document")
+	}
 	return DecodeValue[T](tree, nil)
+}
+
+// isSetType reports whether t is the Go form of a Swift `Set`, a map to struct{}.
+func isSetType(t reflect.Type) bool {
+	return t.Kind() == reflect.Map && t.Elem().Kind() == reflect.Struct && t.Elem().NumField() == 0
+}
+
+// rawNumberText returns the literal text of a JSON number in a Codable tree.
+func rawNumberText(raw any) (string, bool) {
+	switch n := raw.(type) {
+	case json.Number:
+		return string(n), true
+	case float64:
+		return strconv.FormatFloat(n, 'g', -1, 64), true
+	}
+	return "", false
+}
+
+func rawKind(raw any) string {
+	switch raw.(type) {
+	case nil:
+		return "null"
+	case string:
+		return "a string"
+	case bool:
+		return "a bool"
+	case []any:
+		return "an array"
+	case map[string]any:
+		return "a dictionary"
+	}
+	return "a number"
+}
+
+// rawFloat reads a JSON number as a Double.
+func rawFloat(raw any) (float64, bool) {
+	text, ok := rawNumberText(raw)
+	if !ok {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return 0, false
+	}
+	return f, true
+}
+
+// rawInt reads a JSON number as an Int64, accepting a fractional spelling of an integer such as
+// `1.0` or `1e2`, as Foundation's JSONDecoder does.
+func rawInt(raw any) (int64, bool) {
+	text, ok := rawNumberText(raw)
+	if !ok {
+		return 0, false
+	}
+	if i, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return i, true
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil || f != math.Trunc(f) || f < -0x1p63 || f >= 0x1p63 {
+		return 0, false
+	}
+	return int64(f), true
+}
+
+// rawUint reads a JSON number as a UInt64, as rawInt does for signed integers.
+func rawUint(raw any) (uint64, bool) {
+	text, ok := rawNumberText(raw)
+	if !ok {
+		return 0, false
+	}
+	if u, err := strconv.ParseUint(text, 10, 64); err == nil {
+		return u, true
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil || f != math.Trunc(f) || f < 0 || f >= 0x1p64 {
+		return 0, false
+	}
+	return uint64(f), true
+}
+
+// decodeMapKey sets a dictionary key from its JSON object key: integer keys are parsed from their
+// decimal text, as Swift does for `Int`-keyed dictionaries; other keys decode as strings.
+func decodeMapKey(dst reflect.Value, k string, path []string) {
+	if _, isRaw := dst.Interface().(interface{ RawValue() string }); !isRaw {
+		switch dst.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			n, err := strconv.ParseInt(k, 10, 64)
+			if err != nil || dst.OverflowInt(n) {
+				codingFail("Expected Int key but found %q at %s", k, strings.Join(path, "."))
+			}
+			dst.SetInt(n)
+			return
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			n, err := strconv.ParseUint(k, 10, 64)
+			if err != nil || dst.OverflowUint(n) {
+				codingFail("Expected UInt key but found %q at %s", k, strings.Join(path, "."))
+			}
+			dst.SetUint(n)
+			return
+		}
+	}
+	decodeInto(dst, k, path)
 }
