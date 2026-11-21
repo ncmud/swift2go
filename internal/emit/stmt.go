@@ -211,7 +211,10 @@ func (e *fileEmitter) localFunc(n ast.Node) {
 		sig += " " + res
 	}
 	e.w("var %s %s\n%s = %s ", name, sig, name, sig)
+	saveInit := e.inInit
+	e.inInit = false
 	e.body(n, res)
+	e.inInit = saveInit
 	e.w("\n")
 	e.generics = saveG
 }
@@ -634,6 +637,12 @@ func (e *fileEmitter) forEach(n ast.Node) {
 			e.w("for _, %s := range %s {\n", name(p), src)
 		}
 	default:
+		if inner := unwrapPattern(p); inner != nil && inner.Kind() == "pattern_tuple" {
+			tmp := e.newTmp("el")
+			e.w("for _, %s := range swiftrt.Iterate[%s](%s) {\n", tmp, e.m.GoType(e.m.typeOf(p.Type()), e.generics), e.expr(seq))
+			e.bindFromExpr(inner, tmp)
+			break
+		}
 		e.w("for _, %s := range swiftrt.Iterate[%s](%s) {\n", name(p), e.m.GoType(e.m.typeOf(p.Type()), e.generics), e.expr(seq))
 	}
 	body()
