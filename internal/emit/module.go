@@ -677,7 +677,7 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 	}
 	var paths []string
 	for _, f := range m.Files {
-		fe := &fileEmitter{m: m, file: f}
+		fe := &fileEmitter{m: m, file: f, lvSubst: map[string]string{}}
 		src := fe.emitFile()
 		base := strings.TrimSuffix(filepath.Base(f.Filename), ".swift")
 		suffix := ".go"

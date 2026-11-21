@@ -160,6 +160,23 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 				return "&" + tmp
 			}
 		}
+		if root := mapElementRoot(e, stripLoads(sub)); root != nil {
+			// A member of a Go map element: copy the element out, mutate it, store it back.
+			saved := e.b
+			e.b = strings.Builder{}
+			rlv := e.lvalue(root)
+			if strings.HasSuffix(rlv, "]") {
+				tmp := e.newTmp("slot")
+				e.lvSubst[fmt.Sprintf("%p", root)] = tmp
+				lv := e.lvalue(sub)
+				delete(e.lvSubst, fmt.Sprintf("%p", root))
+				pre := e.b.String()
+				e.b = saved
+				e.slots = append(e.slots, slot{pre: pre + tmp + " := " + rlv + "\n", writeBack: rlv + " = " + tmp + "\n"})
+				return "&" + lv
+			}
+			e.b = saved
+		}
 		saved := e.b
 		e.b = strings.Builder{}
 		lv := e.lvalue(sub)
@@ -684,6 +701,9 @@ func (e *fileEmitter) recvArg(base ast.Node) string {
 }
 
 func (e *fileEmitter) lvalue(n ast.Node) string {
+	if v, ok := e.lvSubst[fmt.Sprintf("%p", n)]; ok {
+		return v
+	}
 	switch n.Kind() {
 	case "declref_expr":
 		d := n.Child("decl")
@@ -2663,4 +2683,20 @@ func protocolBoundOf(m *Module, fn ast.Node, t *types.Type) string {
 		}
 	}
 	return ""
+}
+
+// mapElementRoot is the Dictionary subscript a stored-property chain like `d[k].a.b` is rooted at,
+// or nil. It stops at classes, whose members are addressable through their pointer.
+func mapElementRoot(e *fileEmitter, n ast.Node) ast.Node {
+	for n.Kind() == "member_ref_expr" {
+		base := stripLoads(n.Child("base"))
+		if t := e.m.typeOf(base.Type()); t == nil || e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+			return nil
+		}
+		if base.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(base.Child("base").Type())) == "Map" {
+			return base
+		}
+		n = base
+	}
+	return nil
 }

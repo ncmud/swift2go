@@ -31,6 +31,7 @@ type fileEmitter struct {
 	observing     *DeclInfo               // the property whose setter or observers are being emitted
 	emittingFree  bool                    // the function being scoped is emitted as a free function
 	pendingOpens  int                     // scopes a statement opened that the enclosing block must close
+	lvSubst       map[string]string       // lvalue overrides by node identity while a parent chain is emitted
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
