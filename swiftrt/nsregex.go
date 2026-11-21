@@ -16,9 +16,9 @@ type NSError struct {
 
 func (e NSError) Error() string { return e.Msg }
 
-// NSRegularExpressionCObjcFor is Foundation `NSRegularExpression.escapedPattern(for:)`: each of
+// NSRegularExpressionEscapedPatternFor is Foundation `NSRegularExpression.escapedPattern(for:)`: each of
 // `*?+[(){}^$|\./` gets a backslash, so the result matches s literally.
-func NSRegularExpressionCObjcFor(s string) string {
+func NSRegularExpressionEscapedPatternFor(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		if strings.ContainsRune(`*?+[(){}^$|\./`, r) {

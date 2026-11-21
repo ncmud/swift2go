@@ -242,14 +242,9 @@ func (f *DateFormatter) loc() *time.Location {
 	return time.Local
 }
 
-// NSDateFormatterCObjcFrom is Foundation `DateFormatter.string(from:)`.
-func NSDateFormatterCObjcFrom(f *DateFormatter, d Date) string {
-	return d.Time().In(f.loc()).Format(f.layout())
-}
-
 // NSDateFormatterStringFrom is Foundation `DateFormatter.string(from:)`.
 func NSDateFormatterStringFrom(f *DateFormatter, d Date) string {
-	return NSDateFormatterCObjcFrom(f, d)
+	return d.Time().In(f.loc()).Format(f.layout())
 }
 
 // NSDateFormatterDateFrom is Foundation `DateFormatter.date(from:)`.
@@ -270,8 +265,8 @@ func NSISO8601DateFormatterInit() *ISO8601DateFormatter {
 	return &ISO8601DateFormatter{ISO8601DateFormatOptions{NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithInternetDateTime}}
 }
 
-// NSISO8601DateFormatterCObjcFrom is `ISO8601DateFormatter.string(from:)` for internet date-time, optionally with fractional seconds.
-func NSISO8601DateFormatterCObjcFrom(f *ISO8601DateFormatter, d Date) string {
+// NSISO8601DateFormatterStringFrom is `ISO8601DateFormatter.string(from:)` for internet date-time, optionally with fractional seconds.
+func NSISO8601DateFormatterStringFrom(f *ISO8601DateFormatter, d Date) string {
 	if f.FormatOptions.RawValue&NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithFractionalSeconds != 0 {
 		return d.Time().UTC().Round(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
 	}

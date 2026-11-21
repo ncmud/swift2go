@@ -27,11 +27,11 @@ func jsonSerializationThrow(code int, msg string) {
 	panic(Throw(NSError{Domain: "NSCocoaErrorDomain", Code: code, Msg: msg}))
 }
 
-// NSJSONSerializationCObjcWith is Foundation `JSONSerialization.jsonObject(with:)`: it parses JSON
+// NSJSONSerializationJsonObjectWith is Foundation `JSONSerialization.jsonObject(with:)`: it parses JSON
 // whose top level is an array or object into `[Any]`, `[String: Any]`, String, NSNumber (Bool,
 // Int64, UInt64, or Double for fractional and out-of-range values) and NSNull, throwing
 // NSCocoaErrorDomain 3840 on invalid input or a top-level fragment.
-func NSJSONSerializationCObjcWith(data []byte) any {
+func NSJSONSerializationJsonObjectWith(data []byte) any {
 	v, err := parseJSONStrict(data)
 	if err != nil {
 		jsonSerializationThrow(3840, "The data couldn't be read because it isn't in the correct format.")
@@ -44,14 +44,14 @@ func NSJSONSerializationCObjcWith(data []byte) any {
 	return foundationObject(v)
 }
 
-// NSJSONSerializationCObjcWithJSONObjectOptions is Foundation
+// NSJSONSerializationDataWithJSONObjectOptions is Foundation
 // `JSONSerialization.data(withJSONObject:options:)` as swift-corelibs-foundation writes it: `/`
 // escaped as `\/` unless `.withoutEscapingSlashes`, doubles by their Swift description with a
 // trailing ".0" dropped, and two-space indentation with `" : "` separators for `.prettyPrinted`.
 // Keys are always written sorted, one of the orders an unsorted dictionary may produce. A top-level
 // value other than an array or dictionary needs `.fragmentsAllowed`; it, NaN, infinity, non-string
 // keys and non-JSON values throw NSCocoaErrorDomain 3851.
-func NSJSONSerializationCObjcWithJSONObjectOptions(obj any, options NSJSONWritingOptions) []byte {
+func NSJSONSerializationDataWithJSONObjectOptions(obj any, options NSJSONWritingOptions) []byte {
 	has := func(o NSJSONWritingOptions) bool { return options.RawValue&o.RawValue != 0 }
 	rv := reflect.ValueOf(obj)
 	for rv.IsValid() && (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && !rv.IsNil() {

@@ -110,28 +110,28 @@ func TestCodableKeepsIntegersDecimalsDataAndSets(t *testing.T) {
 
 func TestJSONSerializationFoundationValues(t *testing.T) {
 	text := []byte(`{"true":true,"zero":0,"large":9223372036854775807,"null":null,"array":[1,true,"a"]}`)
-	a := MustAs[Dictionary](NSJSONSerializationCObjcWith(text))
+	a := MustAs[Dictionary](NSJSONSerializationJsonObjectWith(text))
 	b := MustAs[Dictionary](YYJSONSerializationJsonObjectWith(text))
 	if !Equal(a, b) {
 		t.Errorf("Foundation %v != yyjson %v", a, b)
 	}
 	var ns NSError
-	if err := Catch(func() { NSJSONSerializationCObjcWith([]byte("5")) }); !errors.As(err, &ns) || ns.Code != 3840 {
+	if err := Catch(func() { NSJSONSerializationJsonObjectWith([]byte("5")) }); !errors.As(err, &ns) || ns.Code != 3840 {
 		t.Errorf("top-level fragment: %v", err)
 	}
 	obj := map[string]any{"a": 1.0, "b": 0.1, "c": 1e21, "e": "x/y", "f": true, "h": []int{1, 2}, "m": "\u0001é"}
-	got := string(NSJSONSerializationCObjcWithJSONObjectOptions(obj, NSJSONWritingOptionsCENSJSONWritingOptionsNSJSONWritingSortedKeys))
+	got := string(NSJSONSerializationDataWithJSONObjectOptions(obj, NSJSONWritingOptionsCENSJSONWritingOptionsNSJSONWritingSortedKeys))
 	want := `{"a":1,"b":0.1,"c":1e+21,"e":"x\/y","f":true,"h":[1,2],"m":"\u0001é"}`
 	if got != want {
 		t.Errorf("data(withJSONObject:) = %s\nwant %s", got, want)
 	}
-	pretty := string(NSJSONSerializationCObjcWithJSONObjectOptions(map[string]any{"a": []any{1}, "b": 2},
+	pretty := string(NSJSONSerializationDataWithJSONObjectOptions(map[string]any{"a": []any{1}, "b": 2},
 		NSJSONWritingOptions{NSJSONWritingOptionsCENSJSONWritingOptionsNSJSONWritingSortedKeys.RawValue | NSJSONWritingOptionsCENSJSONWritingOptionsNSJSONWritingPrettyPrinted.RawValue}))
 	if pretty != "{\n  \"a\" : [\n    1\n  ],\n  \"b\" : 2\n}" {
 		t.Errorf("pretty = %q", pretty)
 	}
 	if err := Catch(func() {
-		NSJSONSerializationCObjcWithJSONObjectOptions(map[string]any{"a": FloatNan}, NSJSONWritingOptions{})
+		NSJSONSerializationDataWithJSONObjectOptions(map[string]any{"a": FloatNan}, NSJSONWritingOptions{})
 	}); !errors.As(err, &ns) {
 		t.Errorf("NaN write: %v", err)
 	}
@@ -188,12 +188,16 @@ func TestClosedRangeFilterAndDisjointSequences(t *testing.T) {
 
 func TestCreateDirectoryAtPath(t *testing.T) {
 	dir := t.TempDir() + "/a/b"
-	if err := Catch(func() { NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, false) }); err == nil {
+	if err := Catch(func() {
+		NSFileManagerCreateDirectoryAtPathWithIntermediateDirectories(NSFileManagerDefault, dir, false)
+	}); err == nil {
 		t.Error("created a directory with a missing parent")
 	}
-	NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, true)
-	NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, true)
-	if err := Catch(func() { NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, false) }); err == nil {
+	NSFileManagerCreateDirectoryAtPathWithIntermediateDirectories(NSFileManagerDefault, dir, true)
+	NSFileManagerCreateDirectoryAtPathWithIntermediateDirectories(NSFileManagerDefault, dir, true)
+	if err := Catch(func() {
+		NSFileManagerCreateDirectoryAtPathWithIntermediateDirectories(NSFileManagerDefault, dir, false)
+	}); err == nil {
 		t.Error("created an existing directory without intermediates")
 	}
 }
@@ -204,7 +208,7 @@ func TestEscapedPatternAndCopyItem(t *testing.T) {
 		all.WriteByte(c)
 	}
 	want := ` !"#\$%&'\(\)\*\+,-\.\/0123456789:;<=>\?@ABCDEFGHIJKLMNOPQRSTUVWXYZ\[\\]\^_` + "`" + `abcdefghijklmnopqrstuvwxyz\{\|\}~`
-	if got := NSRegularExpressionCObjcFor(all.String()); got != want {
+	if got := NSRegularExpressionEscapedPatternFor(all.String()); got != want {
 		t.Errorf("escapedPattern = %s\nwant %s", got, want)
 	}
 	dir := t.TempDir()
@@ -214,19 +218,19 @@ func TestEscapedPatternAndCopyItem(t *testing.T) {
 	if err := os.WriteFile(dir+"/src/sub/f", []byte("y"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	NSFileManagerCObjcAtTo(NSFileManagerCObjc, URLInitFileURLWithPath(dir+"/src"), URLInitFileURLWithPath(dir+"/dst"))
+	NSFileManagerCopyItemAtTo(NSFileManagerDefault, URLInitFileURLWithPath(dir+"/src"), URLInitFileURLWithPath(dir+"/dst"))
 	if b, err := os.ReadFile(dir + "/dst/sub/f"); err != nil || string(b) != "y" {
 		t.Errorf("copied file = %q, %v", b, err)
 	}
 	var ns NSError
 	err := Catch(func() {
-		NSFileManagerCObjcAtTo(NSFileManagerCObjc, URLInitFileURLWithPath(dir+"/src"), URLInitFileURLWithPath(dir+"/dst"))
+		NSFileManagerCopyItemAtTo(NSFileManagerDefault, URLInitFileURLWithPath(dir+"/src"), URLInitFileURLWithPath(dir+"/dst"))
 	})
 	if !errors.As(err, &ns) || ns.Code != 516 {
 		t.Errorf("existing destination: %v", err)
 	}
 	err = Catch(func() {
-		NSFileManagerCObjcAtTo(NSFileManagerCObjc, URLInitFileURLWithPath(dir+"/none"), URLInitFileURLWithPath(dir+"/x"))
+		NSFileManagerCopyItemAtTo(NSFileManagerDefault, URLInitFileURLWithPath(dir+"/none"), URLInitFileURLWithPath(dir+"/x"))
 	})
 	if !errors.As(err, &ns) || ns.Code != 260 {
 		t.Errorf("missing source: %v", err)
