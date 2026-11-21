@@ -213,7 +213,7 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 		case "struct_decl", "class_decl", "enum_decl", "protocol":
 			q := m.qualify(owner, n.Name())
 			m.typeKinds[q] = n.Kind()
-			if n.Kind() == "struct_decl" || n.Kind() == "class_decl" {
+			if n.Kind() == "struct_decl" || n.Kind() == "class_decl" || n.Kind() == "enum_decl" && hasPayloadCase(n) {
 				for _, gp := range n.Child("generic_signature").Strings("generic_params") {
 					if name := m.demangle(gp); name != "" {
 						m.typeParamNames[q] = append(m.typeParamNames[q], name)
@@ -898,4 +898,16 @@ func declKey(n ast.Node) string {
 		start = fmt.Sprint(r["start"])
 	}
 	return "nousr:" + n.Kind() + ":" + n.Name() + "@" + start
+}
+
+func hasPayloadCase(n ast.Node) bool {
+	payload := false
+	ast.Walk(n, func(x ast.Node) {
+		if x.Kind() == "enum_element_decl" {
+			if ps := x.Child("params"); ps != nil && len(ps.List("params")) > 0 {
+				payload = true
+			}
+		}
+	})
+	return payload
 }

@@ -807,9 +807,13 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			return e.m.Unsup("enum-pattern-foreign", e.where, "bool")
 		}
 		if e.isPayloadCase(el) || e.m.IsPayloadEnum(el.Owner) {
-			test := "func() bool { _, ok := " + subj + ".(" + el.GoName + "); return ok }()"
+			caseT := el.GoName + e.enumTypeArgs(el, st)
+			if st == nil {
+				caseT = el.GoName + e.enumTypeArgs(el, e.m.typeOf(p.Type()))
+			}
+			test := "func() bool { _, ok := " + subj + ".(" + caseT + "); return ok }()"
 			if sub := p.Child("sub_pattern"); sub != nil {
-				inner := e.payloadSubTests(sub, "func() "+el.GoName+" { v, _ := "+subj+".("+el.GoName+"); return v }()", el)
+				inner := e.payloadSubTests(sub, "func() "+caseT+" { v, _ := "+subj+".("+caseT+"); return v }()", el)
 				if inner != "true" {
 					test += " && " + inner
 				}
@@ -934,7 +938,7 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 			return
 		}
 		v := e.newTmp("payload")
-		e.w("%s, _ := %s.(%s)\n", v, subj, el.GoName)
+		e.w("%s, _ := %s.(%s)\n", v, subj, el.GoName+e.enumTypeArgs(el, e.m.typeOf(p.Type())))
 		sub = unwrapPatternKeepSome(sub)
 		if sub.Kind() == "pattern_tuple" {
 			for i, s := range sub.List("elements") {
