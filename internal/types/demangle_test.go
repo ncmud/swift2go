@@ -8,6 +8,7 @@ func TestNormalizeLocal(t *testing.T) {
 		"Entry #1 in static World.DirectionsEngine.findShortestPaths(from: Swift.Int, wm: World.WorldManager) -> [Swift.Int : Swift.Int]":                                                "World.Entry",
 		"[Swift.String : [Appearance #1 in static CombatModel.LoadoutSearch.droppingSurplusCopies([CombatModel.LoadoutSearchProblem.Slot]) -> [CombatModel.LoadoutSearchProblem.Slot]]]": "[Swift.String : [CombatModel.Appearance]]",
 		"Swift.Int": "Swift.Int",
+		"[GroupKey #1 in World.MMPExporter.ExportResult.auditReport() -> Swift.String : [World.MMPExporter.DroppedExit]]": "[World.GroupKey : [World.MMPExporter.DroppedExit]]",
 	}
 	for in, want := range cases {
 		if got := normalizeLocal(in); got != want {

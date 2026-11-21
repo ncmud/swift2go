@@ -109,7 +109,8 @@ func normalizeLocal(s string) string {
 							break
 						}
 						depth--
-					} else if c == ',' && depth == 0 {
+					} else if c == ',' && depth == 0 || c == ' ' && depth == 0 && strings.HasPrefix(s[i:], " : ") {
+						// The return type ends at a dictionary's key-value separator too.
 						break
 					}
 					i++
