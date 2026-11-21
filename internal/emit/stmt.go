@@ -622,7 +622,12 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		if inner.Kind() == "pattern_tuple" {
 			els := inner.List("elements")
 			e.w("for %s, %s := range swiftrt.MapOrdered(%s) {\n", "_", "kv", e.expr(seq))
-			e.w("%s, %s := kv.F0, kv.F1\n_, _ = %s, %s\n", name(els[0]), name(els[1]), name(els[0]), name(els[1]))
+			e.w("%s, %s := kv.F0, kv.F1\n", name(els[0]), name(els[1]))
+			for _, el := range els[:2] {
+				if nm := name(el); nm != "_" {
+					e.w("_ = %s\n", nm)
+				}
+			}
 		} else {
 			e.w("for _, %s := range swiftrt.MapOrdered(%s) {\n", name(p), e.expr(seq))
 		}
