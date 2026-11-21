@@ -207,6 +207,9 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.magicLiteral(n)
 	case "declref_expr":
 		return e.declRef(n.Child("decl"), n)
+	case "string_to_pointer":
+		// A String passed for a C string parameter.
+		return "swiftrt.CStringOf(" + e.expr(n.Child("sub_expr")) + ")"
 	case "inout_to_pointer":
 		return "&" + e.lvalue(stripLoads(n.Child("sub_expr")))
 	case "member_ref_expr":
@@ -1040,7 +1043,7 @@ func (e *fileEmitter) captureList(n ast.Node) string {
 	return "func() " + e.exprGoType(body) + " {\n" + binds + "return " + b + "\n}()"
 }
 
-// methodRef renders a method reference (`QuestRuntime.tick`, `tick`), which Swift represents as a
+// methodRef renders a method reference (`Clock.tick`, `tick`), which Swift represents as a
 // zero-parameter autoclosure around the call, as a function value.
 func (e *fileEmitter) methodRef(ac ast.Node) (string, bool) {
 	if ac.Kind() != "autoclosure_expr" || len(ac.Child("params").List("params")) != 0 {
@@ -1233,13 +1236,6 @@ func (e *fileEmitter) macro(n ast.Node) string {
 	name := n.Str("name")
 	as := e.args(n.Child("args"))
 	switch name {
-	case "dice":
-		// #dice(count, size, bonus) expands to Dice(count:size:bonus:)!, validated at compile time.
-		t := e.m.typeOf(n.Type())
-		if ctor, pfx := e.ctorWithLabels(t.Name, "count", "size", "bonus"); ctor != nil && len(as) == 3 {
-			ss, _ := e.argStrings(as, false)
-			return "(*swiftrt.Force(" + pfx + ctor.GoName + "(" + strings.Join(ss, ", ") + ")))"
-		}
 	case "expect", "require":
 		if len(as) == 0 {
 			break
@@ -1269,6 +1265,10 @@ func (e *fileEmitter) macro(n ast.Node) string {
 			}
 		}
 		return fmt.Sprintf("swiftrt.Expect(%s, %q, %t, %s)", e.expr(cond), "", fatal, msg)
+	}
+	// Any other expression macro is emitted from the expansion the compiler recorded.
+	if r := n.Child("rewritten"); r != nil {
+		return e.expr(r)
 	}
 	return e.m.Unsup("macro:"+name, e.where, e.exprGoType(n))
 }
@@ -2440,40 +2440,6 @@ func (e *fileEmitter) lessFunc(t *types.Type) string {
 		}
 	}
 	return ""
-}
-
-// ctorWithLabels finds a type's init with exactly these argument labels.
-func (e *fileEmitter) ctorWithLabels(owner string, labels ...string) (*DeclInfo, string) {
-	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-		for _, d := range mod.sortedDecls() {
-			if d.Kind != "constructor_decl" || d.Owner != owner || d.Node == nil {
-				continue
-			}
-			ps := d.Node.Child("params").List("params")
-			if len(ps) != len(labels) {
-				continue
-			}
-			ok := true
-			for i, p := range ps {
-				l := p.Str("apiName")
-				if l == "" {
-					l = p.Name()
-				}
-				if l != labels[i] {
-					ok = false
-				}
-			}
-			if ok {
-				pfx := ""
-				if mod.Pkg != e.m.Pkg {
-					e.m.importPkgs[mod.Pkg] = mod.ImportPath
-					pfx = mod.Pkg + "."
-				}
-				return d, pfx
-			}
-		}
-	}
-	return nil, ""
 }
 
 // defaultValue renders a subscript's `default:` argument, which Swift passes as an autoclosure.

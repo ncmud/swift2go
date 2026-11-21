@@ -1,4 +1,5 @@
-ncmud := env_var_or_default("NCMUD", env_var("HOME") + "/dev/nc/ncmud")
+# The SwiftPM package to transpile; set SWIFT_PKG to its directory.
+swift_pkg := env_var_or_default("SWIFT_PKG", ".")
 
 build:
     go build ./cmd/... ./internal/... ./swiftrt/...
@@ -16,14 +17,14 @@ precommit:
     golangci-lint run ./cmd/... ./internal/... ./swiftrt/...
     go test ./internal/... ./swiftrt/...
 
-# Transpile targets in dependency order, e.g. `just transpile TermCore TermCoreTests`
+# Transpile targets in dependency order, e.g. `just transpile MyLib MyLibTests`
 transpile +targets:
-    go run ./cmd/swift2go -pkg {{ncmud}} transpile {{targets}}
+    go run ./cmd/swift2go -pkg {{swift_pkg}} transpile {{targets}}
 
-# Transpile TermCore and its tests, then build and run them as Go
-termcore:
-    go run ./cmd/swift2go -pkg {{ncmud}} transpile TermCore TermCoreTests
-    cd out/termcore && go vet . && go test -count=1 .
+# Transpile a target and its test target, then vet and run the tests as Go, e.g. `just check MyLib MyLibTests`
+check target tests:
+    go run ./cmd/swift2go -pkg {{swift_pkg}} transpile {{target}} {{tests}}
+    cd out/{{lowercase(target)}} && go vet . && go test -count=1 .
 
 # Count Go compile errors in a transpiled package
 errors pkg:

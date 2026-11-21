@@ -186,6 +186,10 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 			return g
 		}
 	}
+	if (name == "Swift.UnsafePointer" || name == "Swift.UnsafeMutablePointer") && len(args) == 1 && args[0].Kind == types.Named && args[0].Name == "Swift.Int8" {
+		// C strings are the runtime's NUL-terminated byte values.
+		return "any"
+	}
 	if g, ok := foreignTypes[name]; ok {
 		if strings.Contains(g, "%s") {
 			a0, a1 := arg(0), arg(1)

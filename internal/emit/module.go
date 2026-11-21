@@ -556,7 +556,7 @@ func (m *Module) dedupePackageNames() {
 			info.GoName += m.paramTypeSuffix(info)
 		}
 	}
-	// A method such as `setFightingId(_:)` collides with the generated setter of `fightingId`.
+	// A method such as `setTarget(_:)` collides with the generated setter of `target`.
 	setters := map[string]bool{}
 	for _, usr := range usrs {
 		info := m.decls[usr]
@@ -973,7 +973,6 @@ var foreignOptionSets = map[string]bool{
 	"YYJSON.YYJSONSerialization.ReadingOptions": true,
 	"YYJSON.YYJSONSerialization.WritingOptions": true,
 	"YYJSON.YYJSONWriteOptions":                 true,
-	"YYJSON.GameJSONEncoder.OutputFormatting":   true,
 	"__C.NSJSONWritingOptions":                  true,
 	"__C.NSJSONReadingOptions":                  true,
 }

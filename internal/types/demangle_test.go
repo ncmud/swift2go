@@ -5,10 +5,10 @@ import "testing"
 func TestNormalizeLocal(t *testing.T) {
 	cases := map[string]string{
 		"Foo #1 in Mod.Type.fn() -> ()": "Mod.Foo",
-		"Entry #1 in static World.DirectionsEngine.findShortestPaths(from: Swift.Int, wm: World.WorldManager) -> [Swift.Int : Swift.Int]":                                                "World.Entry",
-		"[Swift.String : [Appearance #1 in static CombatModel.LoadoutSearch.droppingSurplusCopies([CombatModel.LoadoutSearchProblem.Slot]) -> [CombatModel.LoadoutSearchProblem.Slot]]]": "[Swift.String : [CombatModel.Appearance]]",
+		"Entry #1 in static Mod.Router.shortestPaths(from: Swift.Int, map: Mod.Map) -> [Swift.Int : Swift.Int]":        "Mod.Entry",
+		"[Swift.String : [Appearance #1 in static Mod.Search.dropDuplicates([Mod.Search.Slot]) -> [Mod.Search.Slot]]]": "[Swift.String : [Mod.Appearance]]",
 		"Swift.Int": "Swift.Int",
-		"[GroupKey #1 in World.MMPExporter.ExportResult.auditReport() -> Swift.String : [World.MMPExporter.DroppedExit]]": "[World.GroupKey : [World.MMPExporter.DroppedExit]]",
+		"[GroupKey #1 in Mod.Exporter.Result.report() -> Swift.String : [Mod.Exporter.Item]]": "[Mod.GroupKey : [Mod.Exporter.Item]]",
 	}
 	for in, want := range cases {
 		if got := normalizeLocal(in); got != want {

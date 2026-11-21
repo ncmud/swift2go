@@ -1218,7 +1218,7 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 		var tests []string
 		var bind ast.Node
 		bindSrc := func(b ast.Node) string {
-			// A typed throw (`do throws(ArgFailure)`) binds error at the concrete type.
+			// A typed throw (`do throws(ParseError)`) binds error at the concrete type.
 			if gt := e.m.GoType(e.m.typeOf(b.Type()), e.generics); b.Kind() != "pattern_is" && gt != "" && gt != "error" && gt != "any" && !strings.HasPrefix(gt, "any ") {
 				return "swiftrt.MustAs[" + gt + "](err)"
 			}

@@ -83,12 +83,12 @@ func TestCodableKeepsIntegersDecimalsDataAndSets(t *testing.T) {
 	if got := string(JSONEncoderEncode(enc, r)); got != want {
 		t.Errorf("JSONEncoder = %s\nwant %s", got, want)
 	}
-	ge := GameJSONEncoderInit()
-	ge.OutputFormatting = GameJSONEncoderOutputFormattingSortedKeys
+	ge := YYJSONEncoderInit()
+	ge.WriteOptions = YYJSONWriteOptionsSortedKeys
 	wantYY := `{"counts":{"-3":4,"1":2},"data":"AP8q","id":-9223372036854775808,"number":-500,"ratio":3.0,"tags":["a"],"unsigned":18446744073709551615}`
-	yy := GameJSONEncoderEncode(ge, r)
+	yy := YYJSONEncoderEncode(ge, r)
 	if string(yy) != wantYY {
-		t.Errorf("GameJSONEncoder = %s\nwant %s", yy, wantYY)
+		t.Errorf("YYJSONEncoder = %s\nwant %s", yy, wantYY)
 	}
 	back := JSONDecoderDecodeFrom(JSONDecoderInit(), TypeOf[codableExactRecord](), yy)
 	if !Equal(back, r) {

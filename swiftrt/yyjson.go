@@ -486,54 +486,6 @@ func YYJSONSerializationDataWithJSONObject(obj any) []byte {
 	return []byte(w.b.String())
 }
 
-// GameJSONEncoderOutputFormatting is JSONCoding `GameJSONEncoder.OutputFormatting`.
-type GameJSONEncoderOutputFormatting struct{ RawValue int }
-
-// GameJSONEncoderOutputFormatting options.
-var (
-	GameJSONEncoderOutputFormattingPrettyPrinted          = GameJSONEncoderOutputFormatting{1}
-	GameJSONEncoderOutputFormattingSortedKeys             = GameJSONEncoderOutputFormatting{2}
-	GameJSONEncoderOutputFormattingWithoutEscapingSlashes = GameJSONEncoderOutputFormatting{4}
-)
-
-// GameJSONEncoder is JSONCoding `GameJSONEncoder`.
-type GameJSONEncoder struct {
-	OutputFormatting GameJSONEncoderOutputFormatting
-}
-
-// GameJSONEncoderInit is JSONCoding `GameJSONEncoder()`.
-func GameJSONEncoderInit() GameJSONEncoder { return GameJSONEncoder{} }
-
-// GameJSONEncoderEncode is JSONCoding `GameJSONEncoder.encode(_:)`: yyjson output with two-space
-// indentation for `.prettyPrinted` and `/` escaped unless `.withoutEscapingSlashes`. Object keys are
-// always sorted, because the Codable tree does not keep the encoding order. NaN and infinity throw EncodingError.invalidValue.
-func GameJSONEncoderEncode[T any](e GameJSONEncoder, value T) []byte {
-	tree := EncodeValue(value)
-	w := &yyjsonWriter{
-		pretty:        e.OutputFormatting.RawValue&1 != 0,
-		escapeSlashes: e.OutputFormatting.RawValue&4 == 0,
-	}
-	if err := Catch(func() { w.value(tree, 0) }); err != nil {
-		panic(Throw(CodingError{"invalidValue: " + err.Error()}))
-	}
-	return []byte(w.b.String())
-}
-
-// GameJSONDecoder is JSONCoding `GameJSONDecoder`.
-type GameJSONDecoder struct{}
-
-// GameJSONDecoderInit is JSONCoding `GameJSONDecoder()`.
-func GameJSONDecoderInit() GameJSONDecoder { return GameJSONDecoder{} }
-
-// GameJSONDecoderDecodeFrom is JSONCoding `GameJSONDecoder.decode(_:from:)`: strict JSON decoded with
-// Codable semantics, throwing DecodingError.dataCorrupted on malformed input.
-func GameJSONDecoderDecodeFrom[T any](_ GameJSONDecoder, t TypeT[T], data []byte) T {
-	if _, err := parseJSONStrict(data); err != nil {
-		panic(Throw(CodingError{"dataCorrupted: " + err.Error()}))
-	}
-	return JSONDecoderDecodeFrom(JSONDecoderInit(), t, data)
-}
-
 // YYJSONSerializationReadingOptions is swift-yyjson `YYJSONSerialization.ReadingOptions`.
 type YYJSONSerializationReadingOptions struct{ RawValue uint }
 
