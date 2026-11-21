@@ -177,7 +177,7 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 }
 
 func (m *Module) isReferenceGo(t *types.Type, goType string) bool {
-	if strings.HasPrefix(goType, "*") || strings.HasPrefix(goType, "func(") || goType == "error" {
+	if strings.HasPrefix(goType, "*") || strings.HasPrefix(goType, "func(") || goType == "error" || goType == "any" {
 		return true
 	}
 	if t.Kind == types.Existential {
@@ -283,6 +283,7 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 
 // foreignTypes maps Foundation and other Apple-module types to their Go runtime equivalents.
 var foreignTypes = map[string]string{
+	"Swift.AnyObject":                         "any",
 	"Swift.Result":                            "swiftrt.Result[%s]",
 	"OrderedCollections.OrderedDictionary":    "swiftrt.OrderedDictionary[%s, %t]",
 	"OrderedCollections.OrderedSet":           "swiftrt.OrderedSet[%s]",
