@@ -1,9 +1,10 @@
 package swiftrt
 
 import (
+	crand "crypto/rand"
+	"encoding/binary"
 	"math"
 	"math/bits"
-	mrand "math/rand/v2"
 	"reflect"
 )
 
@@ -14,7 +15,13 @@ type RandomNumberGenerator interface{ Next() uint64 }
 type SystemRandomNumberGenerator struct{}
 
 // Next is `SystemRandomNumberGenerator.next()`.
-func (*SystemRandomNumberGenerator) Next() uint64 { return mrand.Uint64() }
+func (*SystemRandomNumberGenerator) Next() uint64 {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		Trap("SystemRandomNumberGenerator: " + err.Error())
+	}
+	return binary.LittleEndian.Uint64(b[:])
+}
 
 // rng accepts a generator the emitter passes as an unconstrained generic `inout some RandomNumberGenerator`.
 func rng(g any) RandomNumberGenerator { return g.(RandomNumberGenerator) }

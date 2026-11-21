@@ -231,12 +231,7 @@ func debugStr(v any) string {
 	return Str(v)
 }
 
-func formatDouble(f float64) string {
-	if f == math.Trunc(f) && math.Abs(f) < 1e16 {
-		return strconv.FormatFloat(f, 'f', 1, 64)
-	}
-	return strconv.FormatFloat(f, 'g', -1, 64)
-}
+func formatDouble(f float64) string { return swiftFloatDescription(f, 64) }
 
 // Is is Swift's `is`.
 func Is[T any](v any) bool {
