@@ -902,6 +902,10 @@ func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 			did = a
 		}
 	}
+	if set != nil && set.Bool("implicit") && (will != nil || did != nil) {
+		// The synthesized setter of an observed property calls its observers; emit them directly.
+		set = nil
+	}
 	if info.Settable && set == nil || info.Observed && will == nil && did == nil {
 		return
 	}
