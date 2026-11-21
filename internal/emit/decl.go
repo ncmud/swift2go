@@ -367,6 +367,9 @@ func (e *fileEmitter) enumDecl(n ast.Node) {
 		}
 	}
 	if payload {
+		saveG := e.generics
+		e.generics = e.typeGenerics(e.m.qualify(info.Owner, n.Name()))
+		defer func() { e.generics = saveG }()
 		e.payloadEnum(n, info, cases)
 	} else if len(cases) > 0 {
 		e.w("type %s int\n\nconst (\n", info.GoName)
@@ -457,14 +460,17 @@ func (e *fileEmitter) rawValue(n ast.Node, info *DeclInfo, cases []ast.Node) {
 }
 
 func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) {
-	e.w("type %s interface{ is%s() }\n\n", info.GoName, info.GoName)
+	q := e.m.qualify(info.Owner, n.Name())
+	decl, use := e.m.typeParamDecl(q), e.m.typeParamUse(q)
+	g := e.typeGenerics(q)
+	e.w("type %s%s interface{ is%s() }\n\n", info.GoName, decl, info.GoName)
 	for _, c := range cases {
 		ci := e.info(c)
-		e.w("type %s struct {\n", ci.GoName)
+		e.w("type %s%s struct {\n", ci.GoName, decl)
 		for i, p := range c.Child("params").List("params") {
-			e.w("\tF%d %s\n", i, e.m.GoType(e.m.typeOf(p.Str("interface_type")), nil))
+			e.w("\tF%d %s\n", i, e.m.GoType(e.m.typeOf(p.Str("interface_type")), g))
 		}
-		e.w("}\n\nfunc (%s) is%s() {}\n\n", ci.GoName, info.GoName)
+		e.w("}\n\nfunc (%s%s) is%s() {}\n\n", ci.GoName, use, info.GoName)
 	}
 }
 

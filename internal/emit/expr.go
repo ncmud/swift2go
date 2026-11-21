@@ -416,7 +416,8 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 		return goSafe(name)
 	case "enum_element_decl":
 		if e.m.IsPayloadEnum(info.Owner) && !e.isPayloadCase(info) {
-			return e.asEnum(info, pfx, pfx+info.GoName+"{}")
+			targs := e.enumTypeArgs(info, e.m.typeOf(n.Type()))
+			return e.asEnum(info, pfx, pfx+info.GoName+targs+"{}", targs)
 		}
 		return pfx + info.GoName
 	case "func_decl":
@@ -1127,7 +1128,7 @@ func (e *fileEmitter) call(n ast.Node) string {
 		}
 		info, pfx := e.lookup(usr)
 		if info != nil && info.Kind == "enum_element_decl" {
-			return e.payloadCtor(info, pfx, as)
+			return e.payloadCtor(n, info, pfx, as)
 		}
 		if info != nil || usr == "" {
 			e.callee = info
@@ -1156,18 +1157,37 @@ func (e *fileEmitter) call(n ast.Node) string {
 	return f + "(" + strings.Join(ss, ", ") + ")"
 }
 
-func (e *fileEmitter) payloadCtor(info *DeclInfo, pfx string, as []arg) string {
+func (e *fileEmitter) payloadCtor(n ast.Node, info *DeclInfo, pfx string, as []arg) string {
 	ss, _ := e.argStrings(as, false)
-	return e.asEnum(info, pfx, pfx+info.GoName+"{"+strings.Join(ss, ", ")+"}")
+	targs := e.enumTypeArgs(info, e.m.typeOf(n.Type()))
+	return e.asEnum(info, pfx, pfx+info.GoName+targs+"{"+strings.Join(ss, ", ")+"}", targs)
 }
 
 // asEnum converts a payload enum case literal to its enum's interface type, so generic calls infer the
 // enum rather than the case struct.
-func (e *fileEmitter) asEnum(info *DeclInfo, pfx, lit string) string {
+func (e *fileEmitter) asEnum(info *DeclInfo, pfx, lit, targs string) string {
 	if owner := e.enumGoType(info); owner != "" {
-		return pfx + owner + "(" + lit + ")"
+		return pfx + owner + targs + "(" + lit + ")"
 	}
 	return "(" + lit + ")"
+}
+
+// enumTypeArgs is "[X, Y]" for a case of a generic payload enum instantiated as t, or "".
+func (e *fileEmitter) enumTypeArgs(info *DeclInfo, t *types.Type) string {
+	if info == nil || len(e.m.TypeParams(info.Owner)) == 0 || t == nil {
+		return ""
+	}
+	for t.Kind == types.Func && t.Result != nil {
+		t = t.Result
+	}
+	for t.Kind == types.Optional && len(t.Args) == 1 {
+		t = t.Args[0]
+	}
+	gt := e.m.GoType(t, e.generics)
+	if i := strings.Index(gt, "["); i >= 0 && strings.HasSuffix(gt, "]") && !strings.HasPrefix(gt, "[") {
+		return gt[i:]
+	}
+	return ""
 }
 
 func (e *fileEmitter) enumGoType(info *DeclInfo) string {
@@ -1204,7 +1224,7 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 		ss, _ := e.argStrings(as, false)
 		switch {
 		case info.Kind == "enum_element_decl":
-			return e.payloadCtor(info, pfx, as)
+			return e.payloadCtor(n, info, pfx, as)
 		case info.Static && info.OwnerKind == "protocol":
 			call := e.metaReceiver(base) + "." + staticReqName(info) + "(" + strings.Join(ss, ", ") + ")"
 			declared := e.m.GoType(e.m.typeOf(info.Node.Str("result")), nil)
@@ -1449,7 +1469,8 @@ func (e *fileEmitter) unappliedDot(n ast.Node) string {
 			return e.m.Unsup("payload-case-as-function", e.where, e.exprGoType(n))
 		}
 		if e.m.IsPayloadEnum(info.Owner) {
-			return e.asEnum(info, pfx, pfx+info.GoName+"{}")
+			targs := e.enumTypeArgs(info, e.m.typeOf(n.Type()))
+			return e.asEnum(info, pfx, pfx+info.GoName+targs+"{}", targs)
 		}
 		return pfx + info.GoName
 	}
