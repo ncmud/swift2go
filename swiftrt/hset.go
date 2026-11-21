@@ -1,13 +1,76 @@
 package swiftrt
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+)
 
 // HSet is a Swift `Set` whose element type cannot be a Go map key (an array, a set, or a struct
 // holding one). Elements are keyed by a canonical rendering of their value, so equal values
 // collapse as Swift's Hashable equality would.
 type HSet[T any] struct{ m map[string]T }
 
-func hkey(v any) string { return fmt.Sprintf("%#v", v) }
+func hkey(v any) string {
+	var b strings.Builder
+	writeKey(&b, reflect.ValueOf(v))
+	return b.String()
+}
+
+// writeKey renders v canonically: equal Swift values render alike, so a nil and an empty
+// collection, and -0.0 and 0.0, share a key. Pointers render by address, as class identity does.
+func writeKey(b *strings.Builder, v reflect.Value) {
+	if !v.IsValid() {
+		b.WriteString("nil")
+		return
+	}
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		b.WriteString("[")
+		for i := 0; i < v.Len(); i++ {
+			writeKey(b, v.Index(i))
+			b.WriteString(",")
+		}
+		b.WriteString("]")
+	case reflect.Map:
+		keys := make([]string, 0, v.Len())
+		for _, k := range v.MapKeys() {
+			var kb strings.Builder
+			writeKey(&kb, k)
+			kb.WriteString(":")
+			writeKey(&kb, v.MapIndex(k))
+			keys = append(keys, kb.String())
+		}
+		sort.Strings(keys)
+		b.WriteString("{" + strings.Join(keys, ",") + "}")
+	case reflect.Struct:
+		b.WriteString(v.Type().String() + "{")
+		for i := 0; i < v.NumField(); i++ {
+			writeKey(b, v.Field(i))
+			b.WriteString(",")
+		}
+		b.WriteString("}")
+	case reflect.Float32, reflect.Float64:
+		f := v.Float()
+		if f == 0 {
+			f = 0
+		}
+		fmt.Fprintf(b, "%v", f)
+	case reflect.Interface:
+		if v.IsNil() {
+			b.WriteString("nil")
+			return
+		}
+		writeKey(b, v.Elem())
+	case reflect.Pointer:
+		fmt.Fprintf(b, "0x%x", v.Pointer())
+	case reflect.String:
+		fmt.Fprintf(b, "%q", v.String())
+	default:
+		fmt.Fprintf(b, "%v", v)
+	}
+}
 
 // HSetOf is a set literal.
 func HSetOf[T any](xs ...T) HSet[T] {
