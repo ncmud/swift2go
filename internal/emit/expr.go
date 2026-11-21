@@ -581,8 +581,15 @@ func (e *fileEmitter) subscriptAssign(dest, src ast.Node) (string, bool) {
 	args := dest.Child("args").List("args")
 	if e.m.Recv(bt) == "OrderedDictionary" && len(args) == 1 {
 		v := e.expr(src)
-		if src.Kind() == "nil_literal_expr" {
+		switch {
+		case src.Kind() == "nil_literal_expr":
 			v = "nil"
+		case src.Kind() == "inject_into_optional":
+			v = "swiftrt.Some(" + e.expr(src.Child("sub_expr")) + ")"
+		default:
+			if t := e.m.typeOf(src.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
+				v = "swiftrt.SomeRef(" + v + ")"
+			}
 		}
 		return "swiftrt.OrderedDictionarySet(&" + e.lvalue(dest.Child("base")) + ", " + e.expr(args[0].Child("expr")) + ", " + v + ")", true
 	}
@@ -813,6 +820,8 @@ func (e *fileEmitter) keyPath(n ast.Node) string {
 			return e.m.Unsup("keypath-foreign", e.where, "func("+root+") "+val)
 		}
 		switch {
+		case info.OwnerKind == "protocol":
+			acc = acc + ".Get" + info.GoName + "()"
 		case info.FreeSelf():
 			acc = pfx + info.GoName + "(" + acc + ")"
 		case info.Computed:
@@ -1167,6 +1176,16 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 	sig := parseDeclSig(dem)
 	if b := d.Str("base_name"); strings.HasPrefix(b, "withLock") || strings.HasPrefix(b, "withValue") || b == "sync" || b == "withCriticalRegion" {
 		e.unitCallee = true
+	}
+	if d.Str("base_name") == "joined" && len(as) == 0 && base != nil {
+		if bt := e.m.typeOf(base.Type()); bt != nil && (bt.Kind == types.Array || e.m.Recv(bt) == "Slice") && len(bt.Args) == 1 {
+			switch e.m.Recv(bt.Args[0]) {
+			case "Slice":
+				return "swiftrt.SliceFlatten(" + e.expr(base) + ")"
+			case "Map":
+				return "swiftrt.SliceFlattenMaps(" + e.expr(base) + ")"
+			}
+		}
 	}
 	refSuffix := ""
 	if d.Str("base_name") == "compactMap" && len(as) == 1 {

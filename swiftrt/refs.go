@@ -103,3 +103,35 @@ func SingleValueDecodingContainerDecodeAny[T any](c SingleValueDecodingContainer
 func KeyedDecodingContainerDecodeAnyForKey[T any](c KeyedDecodingContainer, t TypeT[T], key any) T {
 	return KeyedDecodingContainerDecodeForKey(c, t, key)
 }
+
+// SomeRef boxes an optional class reference for runtime APIs that take *V; nil stays nil.
+func SomeRef[T any](v T) *T {
+	if isNil(v) {
+		return nil
+	}
+	return &v
+}
+
+// SliceFlatten is `joined()` over an array of arrays.
+func SliceFlatten[T any](xss [][]T) []T {
+	out := []T{}
+	for _, xs := range xss {
+		out = append(out, xs...)
+	}
+	return out
+}
+
+// SliceFlattenMaps is `joined()` over an array of dictionaries: every key-value pair, in order.
+func SliceFlattenMaps[K comparable, V any](ms []map[K]V) []struct {
+	F0 K
+	F1 V
+} {
+	out := []struct {
+		F0 K
+		F1 V
+	}{}
+	for _, m := range ms {
+		out = append(out, MapOrdered(m)...)
+	}
+	return out
+}

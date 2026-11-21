@@ -168,6 +168,11 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	default:
 		if strings.HasSuffix(n.Kind(), "_expr") {
 			s := e.expr(n)
+			for _, never := range []string{"swiftrt.FatalError(", "swiftrt.PreconditionFailure("} {
+				if strings.HasPrefix(s, never) {
+					s = "swiftrt.FatalError[struct{}](" + strings.TrimPrefix(s, never)
+				}
+			}
 			if e.isCallLike(n) || isVoidGo(e.exprGoType(n)) && (strings.HasSuffix(s, ")") || strings.HasSuffix(s, "}()")) {
 				e.w("%s\n", s)
 			} else {
@@ -543,6 +548,20 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		return "_"
 	}
 	st := e.m.typeOf(seq.Type())
+	if inner := unwrapPattern(p); inner != nil && (inner.Kind() == "pattern_is" || inner.Kind() == "pattern_enum_element" || inner.Kind() == "pattern_optional_some" || inner.Kind() == "pattern_expr") {
+		et := e.m.typeOf(p.Type())
+		src := e.expr(seq)
+		if e.m.Recv(st) != "Slice" {
+			src = "swiftrt.Iterate[" + e.m.GoType(et, e.generics) + "](" + src + ")"
+		}
+		tmp := e.newTmp("el")
+		e.w("for _, %s := range %s {\n", tmp, src)
+		e.w("if !(%s) { continue }\n", e.patternTest(inner, tmp, et))
+		e.patternBind(inner, tmp)
+		body()
+		e.w("}\n")
+		return
+	}
 	// enumerated(): for (i, x) in xs.enumerated()
 	if call := callOf(seq); call != nil && call.method == "enumerated" {
 		base := e.expr(call.base)
@@ -753,6 +772,15 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			return subj + " == " + e.expr(lit)
 		}
 		return e.m.Unsup("pattern_expr-shape", e.where, "bool")
+	case "pattern_is":
+		target := e.m.GoType(e.m.typeOf(p.Str("cast_to")), e.generics)
+		test := "swiftrt.Is[" + target + "](" + subj + ")"
+		if sub := p.Child("sub_pattern"); sub != nil {
+			if t := e.patternTest(unwrapPattern(sub), "swiftrt.MustAs["+target+"]("+subj+")", e.m.typeOf(p.Str("cast_to"))); t != "true" {
+				test += " && " + t
+			}
+		}
+		return test
 	case "pattern_enum_element":
 		el := e.enumElement(p, st)
 		if el == nil {
@@ -795,8 +823,6 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			return "true"
 		}
 		return strings.Join(parts, " && ")
-	case "pattern_is":
-		return e.m.Unsup("pattern:is", e.where, "bool")
 	}
 	return e.m.Unsup("pattern:"+p.Kind(), e.where, "bool")
 }
@@ -866,6 +892,11 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 	case "pattern_tuple":
 		for i, el := range p.List("elements") {
 			e.patternBind(el, derefParen(subj)+".F"+itoa(i))
+		}
+	case "pattern_is":
+		if sub := p.Child("sub_pattern"); sub != nil && patternBinds(sub) {
+			target := e.m.GoType(e.m.typeOf(p.Str("cast_to")), e.generics)
+			e.patternBind(unwrapPattern(sub), "swiftrt.MustAs["+target+"]("+subj+")")
 		}
 	case "pattern_enum_element":
 		el := e.enumElement(p, e.m.typeOf(p.Type()))
