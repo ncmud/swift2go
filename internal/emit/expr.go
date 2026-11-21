@@ -1368,6 +1368,14 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 				}
 			}
 		}
+		if i < len(params) && !foreign && callee != nil && callee.Node != nil {
+			// A Set passed to a generic Sequence parameter, which is a slice here.
+			if pt := e.m.typeOf(params[i].Str("interface_type")); isGenericParam(pt) && sequenceParam(e.m, callee.Node, pt) {
+				if at := e.m.typeOf(a.node.Type()); at != nil && e.m.Recv(at) == "Set" && len(at.Args) == 1 {
+					s = "swiftrt.Iterate[" + e.m.GoType(at.Args[0], e.generics) + "](" + s + ")"
+				}
+			}
+		}
 		if ft := e.m.typeOf(a.node.Type()); foreign && ft != nil && ft.Kind == types.Func && len(ft.Args) == 1 && ft.Args[0].Kind == types.Tuple && len(ft.Args[0].Args) > 1 {
 			if cl := stripConv(a.node); cl != nil && cl.Kind() == "closure_expr" && len(cl.Child("params").List("params")) == len(ft.Args[0].Args) {
 				suffix := ""
@@ -2593,4 +2601,19 @@ func isGenericParam(t *types.Type) bool {
 func isUnicodeScalarsOfString(n ast.Node) bool {
 	n = stripLoads(n)
 	return n.Kind() == "member_ref_expr" && n.Child("decl").Str("base_name") == "unicodeScalars" && strings.HasPrefix(n.Child("decl").Str("decl_usr"), "s:SS")
+}
+
+// sequenceParam reports whether generic parameter t of fn is constrained to Sequence or Collection,
+// which the emitter represents as a slice.
+func sequenceParam(m *Module, fn ast.Node, t *types.Type) bool {
+	for _, r := range fn.Child("generic_signature").List("generic_reqs") {
+		if r.Str("kind") != "conforms_to" || m.typeOf(r.Str("first_type")).Name != t.Name {
+			continue
+		}
+		switch m.demangle(r.Str("protocol")) {
+		case "Swift.Sequence", "Swift.Collection", "Swift.BidirectionalCollection", "Swift.RandomAccessCollection":
+			return true
+		}
+	}
+	return false
 }
