@@ -118,6 +118,16 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.expr(sub)
 	case "inout_expr":
 		sub := n.Child("sub_expr")
+		if ds := stripLoads(sub); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "OrderedDictionary" {
+			if args := ds.Child("args").List("args"); len(args) == 2 && args[1].Str("label") == "default" {
+				// An ordered dictionary element mutated in place: copy it out, then store it back.
+				d := e.lvalue(stripLoads(ds.Child("base")))
+				k, tmp := e.newTmp("key"), e.newTmp("slot")
+				pre := k + " := " + e.expr(args[0].Child("expr")) + "\n" + tmp + " := swiftrt.OrderedDictionarySubscriptDefault(" + d + ", " + k + ", " + e.defaultValue(args[1].Child("expr")) + ")\n"
+				e.slots = append(e.slots, slot{pre: pre, writeBack: "swiftrt.OrderedDictionarySet(&" + d + ", " + k + ", &" + tmp + ")\n"})
+				return "&" + tmp
+			}
+		}
 		saved := e.b
 		e.b = strings.Builder{}
 		lv := e.lvalue(sub)
@@ -667,6 +677,19 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 			k := e.newTmp("key")
 			e.w("%s := %s\nif _, ok := %s[%s]; !ok {\n%s[%s] = %s\n}\n", k, e.expr(args[0].Child("expr")), m, k, m, k, e.defaultValue(args[1].Child("expr")))
 			return m + "[" + k + "]"
+		}
+		if e.m.Recv(bt) == "OrderedDictionary" && (len(args) == 1 || len(args) == 2 && args[1].Str("label") == "default") {
+			// Assigning through an ordered dictionary element: copy it out, store it back after the statement.
+			d := e.lvalue(n.Child("base"))
+			k, tmp := e.newTmp("key"), e.newTmp("elem")
+			if len(args) == 2 {
+				e.w("%s := %s\n%s := swiftrt.OrderedDictionarySubscriptDefault(%s, %s, %s)\n", k, e.expr(args[0].Child("expr")), tmp, d, k, e.defaultValue(args[1].Child("expr")))
+				e.post = append(e.post, "swiftrt.OrderedDictionarySet(&"+d+", "+k+", &"+tmp+")")
+				return tmp
+			}
+			e.w("%s := %s\n%s := swiftrt.OrderedDictionaryGet(%s, %s)\n", k, e.expr(args[0].Child("expr")), tmp, d, k)
+			e.post = append(e.post, "swiftrt.OrderedDictionarySet(&"+d+", "+k+", "+tmp+")")
+			return "(*" + tmp + ")"
 		}
 		var labels []string
 		for _, a := range args {
