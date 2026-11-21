@@ -626,7 +626,13 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	sig := parseDeclSig(dem)
 	bt := e.m.typeOf(base.Type())
 	if base.Kind() == "type_expr" || bt.Kind == types.Meta {
-		name := "swiftrt." + e.m.Recv(e.m.typeOf(n.Type())) + capitalize(sig.base)
+		// A static member is named after the type it belongs to (`Task.isCancelled`), which is
+		// usually also its result type.
+		recvT := e.m.typeOf(n.Type())
+		if bt.Kind == types.Meta && len(bt.Args) == 1 && bt.Args[0].Kind == types.Named {
+			recvT = bt.Args[0]
+		}
+		name := "swiftrt." + e.m.Recv(recvT) + capitalize(sig.base)
 		if dynamicStatics[strings.TrimPrefix(name, "swiftrt.")] {
 			name += "()"
 		}
@@ -2430,6 +2436,7 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 
 // dynamicStatics are foreign static properties Swift recomputes on every read, so Go calls them.
 var dynamicStatics = map[string]bool{
+	"ContinuousClockNow": true, "NSThreadCallStackSymbols": true,
 	"TimeZoneCurrent": true, "TimeZoneAutoupdatingCurrent": true, "CalendarCurrent": true,
 	"CalendarAutoupdatingCurrent": true, "LocaleCurrent": true, "InstantNow": true,
 	"ContinuousClockInstantNow": true, "SuspendingClockInstantNow": true, "DateNow": true,

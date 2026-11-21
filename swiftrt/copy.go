@@ -1,6 +1,9 @@
 package swiftrt
 
-import "reflect"
+import (
+	"reflect"
+	"sync"
+)
 
 // SwiftClass marks Go types that came from Swift classes; their pointers are references, not optionals.
 type SwiftClass interface{ SwiftClass() }
@@ -10,9 +13,45 @@ var swiftClassType = reflect.TypeFor[SwiftClass]()
 // Copy gives v Swift value semantics: structs, arrays, dictionaries and optional structs are copied
 // deeply, while class references keep their identity.
 func Copy[T any](v T) T {
+	if !needsDeepCopy(reflect.TypeFor[T]()) {
+		// Go's assignment already copied every part Swift would.
+		return v
+	}
 	rv := reflect.ValueOf(&v).Elem()
 	out := deepCopy(rv)
 	return out.Interface().(T)
+}
+
+var deepCache sync.Map // reflect.Type -> bool
+
+// needsDeepCopy reports whether a value of type t shares storage that Swift would copy: a slice,
+// map, interface or non-class pointer anywhere inside it.
+func needsDeepCopy(t reflect.Type) bool {
+	if v, ok := deepCache.Load(t); ok {
+		return v.(bool)
+	}
+	deepCache.Store(t, true) // recursive types: assume deep while computing
+	deep := computeNeedsDeep(t)
+	deepCache.Store(t, deep)
+	return deep
+}
+
+func computeNeedsDeep(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Slice, reflect.Map, reflect.Interface:
+		return true
+	case reflect.Pointer:
+		return !t.Implements(swiftClassType)
+	case reflect.Array:
+		return needsDeepCopy(t.Elem())
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			if needsDeepCopy(t.Field(i).Type) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func deepCopy(v reflect.Value) reflect.Value {
@@ -25,10 +64,13 @@ func deepCopy(v reflect.Value) reflect.Value {
 		p.Elem().Set(deepCopy(v.Elem()))
 		return p
 	case reflect.Struct:
+		if !needsDeepCopy(v.Type()) {
+			return v
+		}
 		out := reflect.New(v.Type()).Elem()
 		out.Set(v)
 		for i := 0; i < v.NumField(); i++ {
-			if f := out.Field(i); f.CanSet() {
+			if f := out.Field(i); f.CanSet() && needsDeepCopy(f.Type()) {
 				f.Set(deepCopy(v.Field(i)))
 			}
 		}
@@ -38,7 +80,7 @@ func deepCopy(v reflect.Value) reflect.Value {
 			return v
 		}
 		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
-		if isPlain(v.Type().Elem()) {
+		if isPlain(v.Type().Elem()) || !needsDeepCopy(v.Type().Elem()) {
 			reflect.Copy(out, v)
 			return out
 		}
@@ -51,7 +93,7 @@ func deepCopy(v reflect.Value) reflect.Value {
 			return v
 		}
 		out := reflect.MakeMapWithSize(v.Type(), v.Len())
-		plain := isPlain(v.Type().Elem())
+		plain := isPlain(v.Type().Elem()) || !needsDeepCopy(v.Type().Elem())
 		it := v.MapRange()
 		for it.Next() {
 			if plain {
