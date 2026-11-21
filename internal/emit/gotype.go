@@ -35,6 +35,9 @@ func (m *Module) GoType(t *types.Type, generics map[string]string) string {
 		return "map[" + m.GoType(t.Args[0], generics) + "]" + m.GoType(t.Args[1], generics)
 	case types.Optional:
 		inner := m.GoType(t.Args[0], generics)
+		if inner == "" {
+			return "*struct{}"
+		}
 		if m.isReferenceGo(t.Args[0], inner) {
 			return inner
 		}
@@ -253,7 +256,16 @@ func (m *Module) Recv(t *types.Type) string {
 		return "OptionSet"
 	}
 	parts := strings.Split(t.Name, ".")
-	return parts[len(parts)-1]
+	last := strings.Map(func(r rune) rune {
+		if r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			return r
+		}
+		return -1
+	}, parts[len(parts)-1])
+	if last == "" {
+		return "Any"
+	}
+	return last
 }
 
 func isIntegerName(n string) bool {
