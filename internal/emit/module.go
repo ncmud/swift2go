@@ -793,3 +793,13 @@ func (m *Module) HasStaticRequirements(proto string) bool {
 	}
 	return false
 }
+
+// isLocalProtocol reports a protocol declared in this module or a transpiled dependency.
+func (m *Module) isLocalProtocol(q string) bool {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[q] == "protocol" {
+			return true
+		}
+	}
+	return false
+}

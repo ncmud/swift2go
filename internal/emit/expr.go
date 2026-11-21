@@ -21,7 +21,8 @@ func (e *fileEmitter) expr(n ast.Node) string {
 	}
 	for _, keep := range []string{"swiftrt.Unsupported", "swiftrt.CoalesceRef", "swiftrt.CoalesceOpt", "swiftrt.Flat(", "swiftrt.TryFlat", "swiftrt.Some",
 		"swiftrt.TaskLocalGet", "swiftrt.TaskLocalWithValue", "swiftrt.MapSubscriptDefault", "swiftrt.ForceRef", "swiftrt.Clone", "swiftrt.MustAs",
-		"swiftrt.Dynamic", "swiftrt.Ref", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.Coalesce("} {
+		"swiftrt.Dynamic", "swiftrt.Ref", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.Coalesce(",
+		"swiftrt.OptFlatMap", "swiftrt.RefFlatMap"} {
 		if strings.HasPrefix(out, keep) {
 			return out
 		}
@@ -384,7 +385,7 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 		return goSafe(name)
 	case "enum_element_decl":
 		if e.m.IsPayloadEnum(info.Owner) && !e.isPayloadCase(info) {
-			return "(" + pfx + info.GoName + "{})"
+			return e.asEnum(info, pfx, pfx+info.GoName+"{}")
 		}
 		return pfx + info.GoName
 	case "func_decl":
@@ -1007,7 +1008,25 @@ func (e *fileEmitter) call(n ast.Node) string {
 
 func (e *fileEmitter) payloadCtor(info *DeclInfo, pfx string, as []arg) string {
 	ss, _ := e.argStrings(as, false)
-	return "(" + pfx + info.GoName + "{" + strings.Join(ss, ", ") + "})"
+	return e.asEnum(info, pfx, pfx+info.GoName+"{"+strings.Join(ss, ", ")+"}")
+}
+
+// asEnum converts a payload enum case literal to its enum's interface type, so generic calls infer the
+// enum rather than the case struct.
+func (e *fileEmitter) asEnum(info *DeclInfo, pfx, lit string) string {
+	if owner := e.enumGoType(info); owner != "" {
+		return pfx + owner + "(" + lit + ")"
+	}
+	return "(" + lit + ")"
+}
+
+func (e *fileEmitter) enumGoType(info *DeclInfo) string {
+	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
+		if mod.typeKinds[info.Owner] == "enum_decl" {
+			return mod.LocalTypeName(info.Owner)
+		}
+	}
+	return ""
 }
 
 func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg) string {
@@ -1213,7 +1232,7 @@ func (e *fileEmitter) unappliedDot(n ast.Node) string {
 			return e.m.Unsup("payload-case-as-function", e.where, e.exprGoType(n))
 		}
 		if e.m.IsPayloadEnum(info.Owner) {
-			return "(" + pfx + info.GoName + "{})"
+			return e.asEnum(info, pfx, pfx+info.GoName+"{}")
 		}
 		return pfx + info.GoName
 	}
