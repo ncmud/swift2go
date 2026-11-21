@@ -330,6 +330,8 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 var foreignTypes = map[string]string{
 	"Swift.AnyObject":                         "any",
 	"Swift.Result":                            "swiftrt.Result[%s]",
+	"_StringProcessing.Regex":                 "swiftrt.SwiftRegex[%s]",
+	"_StringProcessing.Regex.Match":           "swiftrt.RegexMatch[%s]",
 	"OrderedCollections.OrderedDictionary":    "swiftrt.OrderedDictionary[%s, %t]",
 	"OrderedCollections.OrderedSet":           "swiftrt.OrderedSet[%s]",
 	"DequeModule.Deque":                       "[]%s",

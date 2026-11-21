@@ -131,6 +131,21 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		}
 		e.w("%s", pre)
 		return "&" + lv
+	case "regex_literal_expr":
+		text := n.Str("text")
+		for strings.HasPrefix(text, "#") && strings.HasSuffix(text, "#") {
+			text = text[1 : len(text)-1]
+		}
+		text = strings.TrimSuffix(strings.TrimPrefix(text, "/"), "/")
+		lit := "`" + text + "`"
+		if strings.Contains(text, "`") {
+			lit = strconv.Quote(text)
+		}
+		gt := e.exprGoType(n)
+		if strings.HasPrefix(gt, "swiftrt.SwiftRegex[") {
+			return "swiftrt.RegexLiteral[" + strings.TrimSuffix(strings.TrimPrefix(gt, "swiftrt.SwiftRegex["), "]") + "](" + lit + ")"
+		}
+		return e.m.Unsup("regex-literal-type", e.where, gt)
 	case "string_literal_expr":
 		if e.m.Recv(e.m.typeOf(n.Type())) == "Substring" {
 			return "swiftrt.SubstringInitString(" + e.stringLiteral(n) + ")"
