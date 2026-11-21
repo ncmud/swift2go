@@ -135,3 +135,9 @@ func SliceFlattenMaps[K comparable, V any](ms []map[K]V) []struct {
 	}
 	return out
 }
+
+// WritableKeyPath is Swift `WritableKeyPath`/`ReferenceWritableKeyPath`: a getter and a setter on Root.
+type WritableKeyPath[Root, Value any] struct {
+	Get func(Root) Value
+	Set func(*Root, Value)
+}

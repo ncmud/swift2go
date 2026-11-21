@@ -191,7 +191,11 @@ func (m *Module) typeOf(mangled string) *types.Type {
 	if t, ok := m.typeCache[mangled]; ok {
 		return t
 	}
-	t := types.Parse(m.demangle(mangled))
+	dem := m.demangle(mangled)
+	for _, marker := range []string{" & Swift.Sendable", "Swift.Sendable & "} {
+		dem = strings.ReplaceAll(dem, marker, "")
+	}
+	t := types.Parse(dem)
 	if t.Kind == types.Unknown {
 		m.Unsup("type-parse", m.demangle(mangled), "")
 	}

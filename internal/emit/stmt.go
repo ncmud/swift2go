@@ -945,6 +945,15 @@ func (e *fileEmitter) assign(n ast.Node) {
 			return
 		}
 	}
+	if d := stripLoads(dest); d.Kind() == "keypath_application_expr" && strings.HasPrefix(e.exprGoType(d.Child("keypath")), "swiftrt.WritableKeyPath[") {
+		base := stripLoads(d.Child("base"))
+		recv := "&" + e.lvalue(base)
+		if t := e.m.typeOf(base.Type()); t != nil && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+			recv = "swiftrt.Ref(" + e.expr(base) + ")"
+		}
+		e.w("%s.Set(%s, %s)\n", e.expr(d.Child("keypath")), recv, e.valueCopy(src))
+		return
+	}
 	if call, ok := e.setterCall(dest, e.valueCopy(src)); ok {
 		e.w("%s\n", call)
 		return
@@ -1152,4 +1161,11 @@ func unwrapSinglePattern(p ast.Node) ast.Node {
 // isVoidGo reports a Go type that stands for Swift Void or Void?.
 func isVoidGo(gt string) bool {
 	return gt == "" || gt == "*" || gt == "struct{}" || gt == "*struct{}"
+}
+
+func stripLoads(n ast.Node) ast.Node {
+	for n != nil && (n.Kind() == "load_expr" || n.Kind() == "paren_expr" || n.Kind() == "inout_expr") {
+		n = n.Child("sub_expr")
+	}
+	return n
 }

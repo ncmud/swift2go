@@ -122,8 +122,10 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		return "any"
 	case "Swift.DefaultIndices":
 		return "[]int"
-	case "Swift.KeyPath", "Swift.WritableKeyPath", "Swift.ReferenceWritableKeyPath":
+	case "Swift.KeyPath", "Swift.PartialKeyPath":
 		return "func(" + arg(0) + ") " + arg(1)
+	case "Swift.WritableKeyPath", "Swift.ReferenceWritableKeyPath":
+		return "swiftrt.WritableKeyPath[" + arg(0) + ", " + arg(1) + "]"
 	case "Swift.IndexingIterator":
 		return "swiftrt.IndexingIterator[" + strings.TrimPrefix(arg(0), "[]") + "]"
 	case "Testing.Comment":
