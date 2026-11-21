@@ -743,6 +743,10 @@ func (m *Module) markGenericFree() {
 				d.GenericFree = true
 			}
 		}
+		// A method with generic parameters of its own needs Go type parameters, which only functions can declare.
+		if own := len(d.Node.Child("generic_signature").Strings("generic_params")) - len(m.typeParamNames[d.Owner]); own > 0 && m.typeKinds[d.Owner] != "protocol" && !m.overridden[d.Node.Str("usr")] && d.Overrides == "" {
+			d.GenericFree = true
+		}
 	}
 }
 
