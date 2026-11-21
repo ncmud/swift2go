@@ -2,6 +2,7 @@ package emit
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -671,6 +672,13 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			continue
 		}
 		switch proto {
+		case "Swift.StringProtocol":
+			// A String or Substring parameter is a Go string; callers convert Substrings.
+			if own[param] {
+				dropParam(param)
+				g[param] = "string"
+			}
+			continue
 		case "Swift.BinaryInteger", "Swift.FixedWidthInteger", "Swift.SignedInteger", "Swift.UnsignedInteger":
 			if own[param] {
 				// Integer protocols become the runtime's integer constraint, so operators work.
@@ -1017,6 +1025,18 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		selfT := self.GoName
 		if info.ProtoExt {
 			selfT = e.m.LocalTypeName(info.Owner)
+			if e.m.isLocalProtocol(info.Owner) {
+				// Self inside a protocol extension's getter is the protocol's interface.
+				if st := e.m.typeOf(getter.Child("implicit_self_decl").Str("interface_type")); st != nil && st.Kind == types.Generic {
+					saveG := e.generics
+					e.generics = maps.Clone(e.generics)
+					if e.generics == nil {
+						e.generics = map[string]string{}
+					}
+					e.generics[st.Name] = selfT
+					defer func() { e.generics = saveG }()
+				}
+			}
 		}
 		tps := ""
 		if (self.Kind == "foreign" || info.ProtoExt) && !e.m.isLocalProtocol(info.Owner) {

@@ -1411,6 +1411,10 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 					}
 				}
 			}
+			// A Substring passed for a StringProtocol parameter, which is a Go string.
+			if pt := e.m.typeOf(params[i].Str("interface_type")); isGenericParam(pt) && paramConformsTo(e.m, callee.Node, pt, "Swift.StringProtocol") && e.m.Recv(e.m.typeOf(a.node.Type())) == "Substring" {
+				s += ".String()"
+			}
 			// A Set passed to a generic Sequence parameter, which is a slice here.
 			if pt := e.m.typeOf(params[i].Str("interface_type")); isGenericParam(pt) && sequenceParam(e.m, callee.Node, pt) {
 				if at := e.m.typeOf(a.node.Type()); at != nil && e.m.Recv(at) == "Set" && len(at.Args) == 1 {
@@ -2513,7 +2517,8 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
 		inner := t.Args[0]
 		gt := e.m.GoType(inner, e.generics)
-		if inner.Kind == types.Generic && strings.HasPrefix(gt, "any") {
+		if inner.Kind == types.Generic && (strings.HasPrefix(gt, "any") || e.m.isLocalProtocol(e.m.Name+"."+gt)) {
+			// Self in a protocol extension: the receiver carries the dynamic type.
 			return "self"
 		}
 		if inner.Kind == types.Named && e.m.HasMutatingMethods(inner.Name) {
@@ -2706,4 +2711,14 @@ func mapElementRoot(e *fileEmitter, n ast.Node) ast.Node {
 		n = base
 	}
 	return nil
+}
+
+// paramConformsTo reports whether fn's generic signature requires parameter t to conform to proto.
+func paramConformsTo(m *Module, fn ast.Node, t *types.Type, proto string) bool {
+	for _, r := range fn.Child("generic_signature").List("generic_reqs") {
+		if r.Str("kind") == "conforms_to" && m.typeOf(r.Str("first_type")).Name == t.Name && m.demangle(r.Str("protocol")) == proto {
+			return true
+		}
+	}
+	return false
 }
