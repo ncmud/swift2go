@@ -549,6 +549,15 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 		}
 		return goSafe(name)
 	}
+	if name == "max" || name == "min" {
+		// max/min passed as a function value over a type with its own `<`.
+		if ft := e.m.typeOf(n.Type()); n != nil && ft != nil && ft.Kind == types.Func && len(ft.Args) >= 1 {
+			if less := e.lessFunc(ft.Args[0]); less != "" {
+				gt := e.m.GoType(ft.Args[0], e.generics)
+				return "func(a, b " + gt + ") " + gt + " { return swiftrt." + capitalize(name) + "Less(" + less + ", a, b) }"
+			}
+		}
+	}
 	info, pfx := e.lookup(usr)
 	if info == nil {
 		dem := e.m.demangle(usr)
@@ -1371,6 +1380,14 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 			}
 		}
 		if i < len(params) && !foreign && callee != nil && callee.Node != nil {
+			// [Concrete] passed for [S] where S: LocalProtocol, which is a slice of the protocol's interface.
+			if pt := e.m.typeOf(params[i].Str("interface_type")); pt != nil && pt.Kind == types.Array && len(pt.Args) == 1 && isGenericParam(pt.Args[0]) {
+				if iface := protocolBoundOf(e.m, callee.Node, pt.Args[0]); iface != "" {
+					if at := e.exprGoType(a.node); strings.HasPrefix(at, "[]") && at != "[]"+iface {
+						s = "swiftrt.SliceMap(" + s + ", func(v " + at[2:] + ") " + iface + " { return v })"
+					}
+				}
+			}
 			// A Set passed to a generic Sequence parameter, which is a slice here.
 			if pt := e.m.typeOf(params[i].Str("interface_type")); isGenericParam(pt) && sequenceParam(e.m, callee.Node, pt) {
 				if at := e.m.typeOf(a.node.Type()); at != nil && e.m.Recv(at) == "Set" && len(at.Args) == 1 {
@@ -2633,3 +2650,17 @@ func sequenceParam(m *Module, fn ast.Node, t *types.Type) bool {
 // chainReturn marks an optional chain's own early exit until the closure's result type is known, so
 // rewriting it never reaches a nested closure's returns.
 const chainReturn = "return /*chain*/ nil"
+
+// protocolBoundOf is the Go interface of the local protocol (without static requirements) that
+// generic parameter t of fn conforms to, or "".
+func protocolBoundOf(m *Module, fn ast.Node, t *types.Type) string {
+	for _, r := range fn.Child("generic_signature").List("generic_reqs") {
+		if r.Str("kind") != "conforms_to" || m.typeOf(r.Str("first_type")).Name != t.Name {
+			continue
+		}
+		if proto := m.demangle(r.Str("protocol")); strings.HasPrefix(proto, m.Name+".") && !m.HasStaticRequirements(proto) {
+			return m.LocalTypeName(proto)
+		}
+	}
+	return ""
+}

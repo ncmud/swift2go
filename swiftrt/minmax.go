@@ -104,3 +104,13 @@ func LiftOpt2[A, B, R any](f func(A, B) R) func(A, B) *R {
 
 // DurationRatio is `Duration / Duration`, a Double.
 func DurationRatio(a, b Duration) float64 { return float64(a) / float64(b) }
+
+// RangeAllSatisfy is `Range.allSatisfy(_:)`: whether f holds for every integer in [Lo, Hi).
+func RangeAllSatisfy[T Integer](r Range[T], f func(T) bool) bool {
+	for v := r.Lo; v < r.Hi; v++ {
+		if !f(v) {
+			return false
+		}
+	}
+	return true
+}
