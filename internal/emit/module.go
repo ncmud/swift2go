@@ -527,6 +527,21 @@ func (m *Module) dedupePackageNames() {
 			info.GoName += m.paramTypeSuffix(info)
 		}
 	}
+	// A method such as `setFightingId(_:)` collides with the generated setter of `fightingId`.
+	setters := map[string]bool{}
+	for _, usr := range usrs {
+		info := m.decls[usr]
+		if info.Kind == "var_decl" && info.Owner != "" && !info.Static && (info.Settable || info.Observed) {
+			setters[info.Owner+".Set"+info.GoName] = true
+		}
+	}
+	for k, infos := range methods {
+		if setters[k] {
+			for _, info := range infos {
+				info.GoName += "Fn"
+			}
+		}
+	}
 	suffix := map[string]string{"enum_element_decl": "Case", "var_decl": "Value", "func_decl": "Fn", "constructor_decl": "Init"}
 	for _, infos := range byName {
 		if len(infos) < 2 {
