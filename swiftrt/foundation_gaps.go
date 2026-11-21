@@ -555,6 +555,25 @@ func (q *DispatchQueue) drain() {
 // OS_dispatch_queueInitLabel is Dispatch `DispatchQueue(label:)`.
 func OS_dispatch_queueInitLabel(label string) *DispatchQueue { return &DispatchQueue{Label: label} }
 
+// DispatchQoS is Dispatch `DispatchQoS`. A queue's quality of service sets only its scheduling
+// priority, which goroutines do not have.
+type DispatchQoS int
+
+// DispatchQoS classes.
+const (
+	DispatchQoSUnspecified DispatchQoS = iota
+	DispatchQoSBackground
+	DispatchQoSUtility
+	DispatchQoSDefault
+	DispatchQoSUserInitiated
+	DispatchQoSUserInteractive
+)
+
+// OS_dispatch_queueInitLabelQos is Dispatch `DispatchQueue(label:qos:)`: a serial queue.
+func OS_dispatch_queueInitLabelQos(label string, _ DispatchQoS) *DispatchQueue {
+	return OS_dispatch_queueInitLabel(label)
+}
+
 // OS_dispatch_queueAsyncExecute is Dispatch `DispatchQueue.async(execute:)`.
 func OS_dispatch_queueAsyncExecute(q *DispatchQueue, f func()) { q.enqueue(f) }
 

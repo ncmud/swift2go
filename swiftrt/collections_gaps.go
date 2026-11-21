@@ -644,3 +644,6 @@ func HasherCombine[T comparable](h *any, v T) {
 
 // HasherFinalize is `Hasher.finalize()`.
 func HasherFinalize(h any) int { return int(hasherIn(&h).h.Sum64()) }
+
+// ObjectIdentifierInitAny is `ObjectIdentifier(_: Any.Type)`: the identity of a metatype.
+func ObjectIdentifierInitAny(t Type) any { return t.Reflect() }
