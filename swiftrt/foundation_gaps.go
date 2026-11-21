@@ -441,13 +441,13 @@ func StringWriteToFileAtomicallyEncoding(s, path string, atomically bool, _ Stri
 		werr = cerr
 	}
 	if werr == nil {
-		werr = os.Chmod(f.Name(), 0o644)
+		werr = os.Chmod(f.Name(), 0o644) //nolint:gosec // Data.write(to:) creates world-readable files, as Foundation does
 	}
 	if werr == nil {
 		werr = os.Rename(f.Name(), path)
 	}
 	if werr != nil {
-		os.Remove(f.Name())
+		_ = os.Remove(f.Name())
 		panic(Throw(werr))
 	}
 }

@@ -245,7 +245,7 @@ func TestOpenCreatesAndAppends(t *testing.T) {
 			t.Fatal("open failed")
 		}
 		f := os.NewFile(uintptr(fd), path)
-		f.WriteString(line)
+		_, _ = f.WriteString(line)
 		f.Close()
 	}
 	if b, _ := os.ReadFile(path); string(b) != "a\nb\n" {

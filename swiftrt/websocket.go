@@ -3,7 +3,7 @@ package swiftrt
 import (
 	"bufio"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // RFC 6455 derives Sec-WebSocket-Accept with SHA-1.
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -80,17 +80,12 @@ func (c TLSConfiguration) goConfig(serverName string) *tls.Config {
 		cfg.InsecureSkipVerify = true
 	case CertificateVerificationNoHostnameVerification:
 		cfg.InsecureSkipVerify = true
-		cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
-			if len(raw) == 0 {
+		// Verify the chain without the host name. VerifyConnection, unlike VerifyPeerCertificate,
+		// also runs on resumed sessions.
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			certs := cs.PeerCertificates
+			if len(certs) == 0 {
 				return errors.New("tls: no peer certificate")
-			}
-			certs := make([]*x509.Certificate, len(raw))
-			for i, r := range raw {
-				c, err := x509.ParseCertificate(r)
-				if err != nil {
-					return err
-				}
-				certs[i] = c
 			}
 			inter := x509.NewCertPool()
 			for _, c := range certs[1:] {
@@ -191,8 +186,8 @@ type wsInternalClose struct{ code WebSocketErrorCode }
 
 func (e wsInternalClose) Error() string { return "close(" + strconv.Itoa(int(e.code)) + ")" }
 
-// wsIOOnClosedChannel is NIOCore `ChannelError.ioOnClosedChannel`.
-var wsIOOnClosedChannel = errors.New("ioOnClosedChannel")
+// errIOOnClosedChannel is NIOCore `ChannelError.ioOnClosedChannel`.
+var errIOOnClosedChannel = errors.New("ioOnClosedChannel")
 
 const (
 	wsOpContinuation byte = 0x0
@@ -254,7 +249,7 @@ func (h *wsHandler) readLoop(br *bufio.Reader) {
 					code = WebSocketErrorCodeMessageTooLarge
 				}
 				_ = h.writeFrame(wsFrame{fin: true, opcode: wsOpClose, data: binary.BigEndian.AppendUint16(nil, uint16(code))})
-				h.conn.Close()
+				_ = h.conn.Close()
 				h.readErr = err
 			} else if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, net.ErrClosed) {
 				h.readErr = err
@@ -349,7 +344,7 @@ func (h *wsHandler) writeFrame(f wsFrame) error {
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
 	if _, err := h.conn.Write(buf); err != nil {
-		return wsIOOnClosedChannel
+		return errIOOnClosedChannel
 	}
 	return nil
 }
@@ -748,7 +743,7 @@ func WebSocketClientConnectUrlConfigurationTlsConfigurationEventLoopGroupLoggerH
 			closeCode = WebSocketErrorCodeUnexpectedServerError
 		}
 	}
-	if err := h.close(closeCode, nil); err != nil && !errors.Is(err, wsIOOnClosedChannel) {
+	if err := h.close(closeCode, nil); err != nil && !errors.Is(err, errIOOnClosedChannel) {
 		panic(Throw(err))
 	}
 	h.mu.Lock()
@@ -836,7 +831,7 @@ func wsUpgrade(conn net.Conn, u *url.URL, scheme, host string) *bufio.Reader {
 	if err != nil {
 		panic(Throw(err))
 	}
-	sum := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	sum := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")) //nolint:gosec // required by RFC 6455
 	if resp.StatusCode != http.StatusSwitchingProtocols ||
 		!strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") ||
 		resp.Header.Get("Sec-WebSocket-Accept") != base64.StdEncoding.EncodeToString(sum[:]) {

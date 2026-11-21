@@ -96,7 +96,7 @@ func copyTree(from, to string) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		_ = out.Close()
 		return err
 	}
 	return out.Close()
@@ -165,7 +165,7 @@ func NSFileManagerContentsOfDirectoryAtPath(_ FileManager, path string) []string
 	var names []string
 	if err == nil {
 		names, err = f.Readdirnames(-1)
-		f.Close()
+		_ = f.Close()
 	}
 	if err != nil {
 		panic(Throw(cocoaFileError(path, err)))

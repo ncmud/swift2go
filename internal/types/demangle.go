@@ -67,9 +67,6 @@ func (d *Demangler) Add(syms []string) error {
 
 var privateName = regexp.MustCompile(`\(([^()\s]+) in _[0-9A-F]+\)`)
 
-// localName matches a type declared inside a function: "Foo #1 in Mod.Type.fn() -> ()".
-var localName = regexp.MustCompile(`(\w+) #\d+ in (\w+)\.[\w.]*\([^()]*\)(?: (?:async )?(?:throws )?-> (?:\(\)|[\w.?\[\]]+))?`)
-
 // Get returns the demangled form, or the input when unknown.
 func (d *Demangler) Get(s string) string {
 	if v, ok := d.cache[s]; ok {

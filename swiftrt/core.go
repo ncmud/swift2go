@@ -202,8 +202,6 @@ func Str(v any) string {
 		return strconv.Itoa(x)
 	case float64:
 		return formatDouble(x)
-	case Substring:
-		return x.String()
 	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {

@@ -134,7 +134,7 @@ func TestURLSessionDataFor(t *testing.T) {
 		body = string(b)
 		w.Header().Set("X-RateLimit-Remaining", "4")
 		w.WriteHeader(http.StatusTooManyRequests)
-		io.WriteString(w, `{"retry_after":1.5}`)
+		_, _ = io.WriteString(w, `{"retry_after":1.5}`)
 	}))
 	defer srv.Close()
 	req := URLRequestInitUrl(*URLOptInitString(srv.URL + "/api/x"))

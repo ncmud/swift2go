@@ -1,9 +1,9 @@
 package swiftrt
 
 import (
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // models CryptoKit Insecure.MD5
 	"crypto/pbkdf2"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // models CryptoKit Insecure.SHA1
 	"crypto/sha256"
 	"crypto/sha512"
 	"hash"
