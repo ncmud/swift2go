@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"bytes"
 	"math"
 	"regexp"
 	"strconv"
@@ -24,8 +25,17 @@ const (
 
 var icuRegexCache sync.Map
 
-// icuRegex compiles an ICU pattern with Go's RE2, widening \w, \W, \d and \D to Unicode as ICU does.
-// RE2 has no lookaround or backreferences; such patterns fail to compile.
+// icuClasses are ICU's Unicode meanings of \w, \d and \s (White_Space), written for use inside a bracket expression.
+var icuClasses = map[byte]string{
+	'w': `\p{L}\p{Nl}\p{M}\p{Nd}\p{Pc}\x{200C}\x{200D}`,
+	'd': `\p{Nd}`,
+	's': `\t-\r \x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`,
+}
+
+// icuRegex compiles an ICU pattern with Go's RE2, widening \w, \W, \d, \D, \s and \S to Unicode as ICU does.
+// Known differences from ICU: \b uses ASCII word characters, `$` matches only at the very end of the input
+// (ICU also matches before a final line terminator), and RE2 has no lookaround or backreferences, so such
+// patterns panic.
 func icuRegex(pattern string, caseInsensitive bool) *regexp.Regexp {
 	key := pattern
 	if caseInsensitive {
@@ -44,20 +54,19 @@ func icuRegex(pattern string, caseInsensitive bool) *regexp.Regexp {
 		if c == '\\' && i+1 < len(pattern) {
 			n := pattern[i+1]
 			i++
-			cls := map[byte]string{'w': `\p{L}\p{M}\p{Nd}\p{Pc}`, 'd': `\p{Nd}`}
 			switch n {
-			case 'w', 'd':
+			case 'w', 'd', 's':
 				if inClass {
-					b.WriteString(cls[n])
+					b.WriteString(icuClasses[n])
 				} else {
-					b.WriteString("[" + cls[n] + "]")
+					b.WriteString("[" + icuClasses[n] + "]")
 				}
-			case 'W', 'D':
+			case 'W', 'D', 'S':
 				lower := n + ('a' - 'A')
 				if inClass {
 					panic("swiftrt: negated ICU class inside a bracket expression is unsupported: " + pattern)
 				}
-				b.WriteString("[^" + cls[lower] + "]")
+				b.WriteString("[^" + icuClasses[lower] + "]")
 			default:
 				b.WriteByte('\\')
 				b.WriteByte(n)
@@ -120,7 +129,9 @@ func icuTemplate(t string) string {
 	return b.String()
 }
 
-// foldIndex finds needle in s[lo:hi] under simple case folding; it returns byte offsets into s.
+// foldIndex finds needle in s[lo:hi] under Unicode simple case folding; it returns byte offsets into s.
+// Foundation's .caseInsensitive uses full case folding, so matches that change length (ß against "SS",
+// ŉ against "ʼN") are missed; the standard library has no full-folding table.
 func foldIndex(s, needle string, lo, hi int, backwards bool) (int, int, bool) {
 	n := utf8.RuneCountInString(needle)
 	var starts []int
@@ -288,8 +299,9 @@ func IntSamePositionIn(i int, s string) *int {
 	return nil
 }
 
-// StringOptInitBytesEncoding is Foundation `String(bytes:encoding:)`; invalid UTF-8 gives nil.
+// StringOptInitBytesEncoding is Foundation `String(bytes:encoding:)`; invalid UTF-8 gives nil and a leading BOM is dropped.
 func StringOptInitBytesEncoding(b []byte, _ StringEncoding) *string {
+	b = bytes.TrimPrefix(b, []byte("\xEF\xBB\xBF"))
 	if !utf8.Valid(b) {
 		return nil
 	}

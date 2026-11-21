@@ -3,7 +3,6 @@ package swiftrt
 import (
 	"reflect"
 	"slices"
-	"strings"
 )
 
 // RangeCompactMap is `(lo..<hi).compactMap`.
@@ -59,37 +58,68 @@ func RangeFlatMap[U any](r Range[int], f func(int) []U) []U {
 // RangeLazy is `(lo..<hi).lazy`; Go evaluates eagerly.
 func RangeLazy(r Range[int]) []int { return rangeInts(r.Lo, r.Hi) }
 
-func closedInts(r ClosedRange[int]) []int {
+// eachClosed calls f for lo...hi in order until f returns false; it never computes hi+1, so hi may be Int.max.
+func eachClosed(r ClosedRange[int], f func(int) bool) {
 	if r.Hi < r.Lo {
 		Trap("Range requires lowerBound <= upperBound")
 	}
-	return rangeInts(r.Lo, Add(r.Hi, 1))
+	for i := r.Lo; ; i++ {
+		if !f(i) || i == r.Hi {
+			return
+		}
+	}
 }
 
 // ClosedRangeReduce is `(lo...hi).reduce(_:_:)`.
 func ClosedRangeReduce[A any](r ClosedRange[int], init A, f func(A, int) A) A {
-	return SliceReduce(closedInts(r), init, f)
+	eachClosed(r, func(i int) bool { init = f(init, i); return true })
+	return init
 }
 
 // ClosedRangeFirstWhere is `(lo...hi).first(where:)`.
 func ClosedRangeFirstWhere(r ClosedRange[int], f func(int) bool) *int {
-	return SliceFirstWhere(closedInts(r), f)
+	var out *int
+	eachClosed(r, func(i int) bool {
+		if f(i) {
+			out = &i
+			return false
+		}
+		return true
+	})
+	return out
 }
 
 // ClosedRangeContainsWhere is `(lo...hi).contains(where:)`.
 func ClosedRangeContainsWhere(r ClosedRange[int], f func(int) bool) bool {
-	return SliceContainsWhere(closedInts(r), f)
+	return ClosedRangeFirstWhere(r, f) != nil
 }
 
-// ClosedRangeCount is `(lo...hi).count`.
+// ClosedRangeCount is `(lo...hi).count`; it traps when the count overflows Int, like Swift.
 func ClosedRangeCount(r ClosedRange[int]) int { return Add(Sub(r.Hi, r.Lo), 1) }
 
 // ClosedRangePrefixInt is `(lo...hi).prefix(n)`.
-func ClosedRangePrefixInt(r ClosedRange[int], n int) []int { return SlicePrefixInt(closedInts(r), n) }
+func ClosedRangePrefixInt(r ClosedRange[int], n int) []int {
+	if n < 0 {
+		Trap("Can't take a prefix of negative length from a collection")
+	}
+	out := []int{}
+	if n == 0 {
+		return out
+	}
+	eachClosed(r, func(i int) bool { out = append(out, i); return len(out) < n })
+	return out
+}
 
 // ClosedRangeCompactMap is `(lo...hi).compactMap`.
 func ClosedRangeCompactMap[U any](r ClosedRange[int], f func(int) *U) []U {
-	return SliceCompactMap(closedInts(r), f)
+	out := []U{}
+	eachClosed(r, func(i int) bool {
+		if v := f(i); v != nil {
+			out = append(out, *v)
+		}
+		return true
+	})
+	return out
 }
 
 // PartialRangeFromFirstWhere is `(lo...).first(where:)`; it traps when the count overflows, like Swift.
@@ -562,5 +592,5 @@ func BoolToggle(b *bool) { *b = !*b }
 // ObjectIdentifierInit is `ObjectIdentifier(metatype)`.
 func ObjectIdentifierInit(t Type) any { return t.Reflect() }
 
-// AssertionFailure is Swift `assertionFailure`; debug builds trap.
-func AssertionFailure(msg ...string) { Trap("assertion failure " + strings.Join(msg, "")) }
+// AssertionFailure is Swift `assertionFailure`, which does nothing in optimized (-O) builds.
+func AssertionFailure(msg ...string) {}

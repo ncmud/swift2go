@@ -242,7 +242,7 @@ func SliceMaxBy[T any](xs []T, less func(T, T) bool) *T {
 	}
 	m := xs[0]
 	for _, x := range xs[1:] {
-		if !less(x, m) {
+		if less(m, x) {
 			m = x
 		}
 	}
