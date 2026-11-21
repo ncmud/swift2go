@@ -112,16 +112,21 @@ func SliceMin[T cmp.Ordered](xs []T) *T {
 }
 
 // SliceJoinedSeparator is [String].joined(separator:).
-func SliceJoinedSeparator[T ~string](xs []T, sep string) string {
+func SliceJoinedSeparator[T ~string | Substring](xs []T, sep string) string {
 	ss := make([]string, len(xs))
 	for i, x := range xs {
-		ss[i] = string(x)
+		switch v := any(x).(type) {
+		case Substring:
+			ss[i] = v.String()
+		default:
+			ss[i] = reflect.ValueOf(x).String()
+		}
 	}
 	return strings.Join(ss, sep)
 }
 
 // SliceJoined is [String].joined().
-func SliceJoined[T ~string](xs []T) string { return SliceJoinedSeparator(xs, "") }
+func SliceJoined[T ~string | Substring](xs []T) string { return SliceJoinedSeparator(xs, "") }
 
 // SliceDropLast is Array.dropLast().
 func SliceDropLast[T any](xs []T) []T { return SliceDropLastInt(xs, 1) }

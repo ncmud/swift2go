@@ -95,7 +95,7 @@ func shortPath(p string) string {
 	return p
 }
 
-func (e *fileEmitter) info(n ast.Node) *DeclInfo { return e.m.decls[n.Str("usr")] }
+func (e *fileEmitter) info(n ast.Node) *DeclInfo { return e.m.decls[declKey(n)] }
 
 func (e *fileEmitter) topDecl(n ast.Node, owner string) {
 	if n.Implicit() || isMacroName(n.Name()) {
@@ -716,6 +716,9 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 			if st := e.m.GoType(e.m.typeOf(n.Child("implicit_self_decl").Str("interface_type")), e.generics); st != "" && !strings.HasPrefix(st, "any") {
 				selfT = st
 			}
+		}
+		if self.Kind == "class_decl" && !strings.HasPrefix(selfT, "*") {
+			selfT = "*" + selfT + e.selfTypeArgs(self)
 		}
 		if info.Mutating && !info.ProtoExt && !strings.HasPrefix(selfT, "*") {
 			selfT = "*" + selfT
