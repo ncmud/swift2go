@@ -60,7 +60,7 @@ func (d *Demangler) Add(syms []string) error {
 		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(todo))
 	}
 	for i, s := range todo {
-		d.cache[s] = localName.ReplaceAllString(privateName.ReplaceAllString(lines[i], "$1"), "$2.$1")
+		d.cache[s] = normalizeLocal(privateName.ReplaceAllString(lines[i], "$1"))
 	}
 	return nil
 }
@@ -76,4 +76,65 @@ func (d *Demangler) Get(s string) string {
 		return v
 	}
 	return s
+}
+
+var localStart = regexp.MustCompile(`(\w+) #\d+ in (?:static )?(\w+)\.`)
+
+// normalizeLocal rewrites a type declared inside a function, "Foo #1 in static Mod.Type.fn(a: [Int]) -> [Bar]",
+// to "Mod.Foo", skipping the enclosing function's signature by balancing brackets.
+func normalizeLocal(s string) string {
+	for {
+		loc := localStart.FindStringSubmatchIndex(s)
+		if loc == nil {
+			return s
+		}
+		name, mod := s[loc[2]:loc[3]], s[loc[4]:loc[5]]
+		i := loc[1]
+		for i < len(s) && s[i] != '(' && s[i] != ' ' && s[i] != ',' && s[i] != ']' && s[i] != '>' {
+			i++
+		}
+		if i < len(s) && s[i] == '(' {
+			i = skipBalanced(s, i)
+			for _, kw := range []string{" async", " throws"} {
+				if strings.HasPrefix(s[i:], kw) {
+					i += len(kw)
+				}
+			}
+			if strings.HasPrefix(s[i:], " -> ") {
+				i += len(" -> ")
+				depth := 0
+				for i < len(s) {
+					c := s[i]
+					if c == '(' || c == '[' || c == '<' {
+						depth++
+					} else if c == ')' || c == ']' || c == '>' {
+						if depth == 0 {
+							break
+						}
+						depth--
+					} else if c == ',' && depth == 0 {
+						break
+					}
+					i++
+				}
+			}
+		}
+		s = s[:loc[0]] + mod + "." + name + s[i:]
+	}
+}
+
+func skipBalanced(s string, i int) int {
+	depth := 0
+	for ; i < len(s); i++ {
+		switch s[i] {
+		case '(', '[', '<':
+			depth++
+		case ')', ']', '>':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return i
 }
