@@ -27,3 +27,10 @@ func TestParse(t *testing.T) {
 		t.Errorf("A should be generic")
 	}
 }
+
+func TestSendingInoutParam(t *testing.T) {
+	ft := Parse("(sending inout [Mod.Item]) -> sending Swift.Int")
+	if ft.Kind != Func || len(ft.Inout) != 1 || !ft.Inout[0] {
+		t.Fatalf("inout lost after sending: %+v %v", ft, ft.Inout)
+	}
+}
