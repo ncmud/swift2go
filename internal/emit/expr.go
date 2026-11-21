@@ -1091,6 +1091,9 @@ func (e *fileEmitter) macro(n ast.Node) string {
 			break
 		}
 		fatal := name == "require"
+		if as[0].label == "throws" && len(as) >= 2 {
+			return e.expectThrows(as, fatal)
+		}
 		cond := as[0].node
 		msg := `""`
 		if len(as) > 1 && as[1].label == "" && as[1].node.Kind() != "default_argument_expr" {
@@ -2306,3 +2309,31 @@ func (e *fileEmitter) assignable(n ast.Node) bool {
 }
 
 var int128Ops = map[string]string{"+": "Add", "-": "Sub", "*": "Mul", "/": "Div", "%": "Rem"}
+
+// expectThrows emits `#expect(throws: E.self) { ... }`, `#expect(throws: value) { ... }` and their
+// #require forms.
+func (e *fileEmitter) expectThrows(as []arg, fatal bool) string {
+	body := as[len(as)-1].node
+	msg := `""`
+	for _, a := range as[1 : len(as)-1] {
+		if a.label == "" && a.node.Kind() != "default_argument_expr" {
+			msg = "swiftrt.Str(" + e.expr(a.node) + ")"
+		}
+	}
+	fn := e.expr(body)
+	what := as[0].node
+	for what.Kind() == "paren_expr" || what.Kind() == "erasure_expr" || what.Kind() == "load_expr" {
+		what = what.Child("sub_expr")
+	}
+	if wt := e.m.typeOf(what.Type()); wt != nil && wt.Kind == types.Meta {
+		inner := e.m.GoType(wt.Args[0], e.generics)
+		switch {
+		case wt.Args[0].Name == "Swift.Never":
+			return fmt.Sprintf("swiftrt.ExpectNoThrow(%s, %t, %s)", fn, fatal, msg)
+		case inner == "error" || inner == "any" || strings.HasPrefix(inner, "any"):
+			return fmt.Sprintf("swiftrt.ExpectThrows(%s, %t, %s)", fn, fatal, msg)
+		}
+		return fmt.Sprintf("swiftrt.ExpectThrowsType[%s](%s, %t, %s)", inner, fn, fatal, msg)
+	}
+	return fmt.Sprintf("swiftrt.ExpectThrowsEqual(%s, %s, %t, %s)", e.expr(what), fn, fatal, msg)
+}

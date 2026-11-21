@@ -319,6 +319,9 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 		if strings.HasPrefix(t.Name, m.Name+".") && m.typeKinds[t.Name] == "struct_decl" {
 			return false
 		}
+		if gt := m.GoType(t, nil); strings.HasPrefix(gt, "[]") || strings.HasPrefix(gt, "map[") {
+			return false
+		}
 	}
 	return true
 }
