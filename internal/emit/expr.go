@@ -142,6 +142,13 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.expr(sub)
 	case "inout_expr":
 		sub := n.Child("sub_expr")
+		if isUnicodeScalarsOfString(sub) {
+			// Mutating a String's unicodeScalars: mutate its runes, then store the String back.
+			str := e.lvalue(stripLoads(sub).Child("base"))
+			tmp := e.newTmp("scalars")
+			e.slots = append(e.slots, slot{pre: tmp + " := []rune(" + str + ")\n", writeBack: str + " = string(" + tmp + ")\n"})
+			return "&" + tmp
+		}
 		if ds := stripLoads(sub); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "OrderedDictionary" {
 			if args := ds.Child("args").List("args"); len(args) == 2 && args[1].Str("label") == "default" {
 				// An ordered dictionary element mutated in place: copy it out, then store it back.
@@ -2458,7 +2465,7 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 
 // dynamicStatics are foreign static properties Swift recomputes on every read, so Go calls them.
 var dynamicStatics = map[string]bool{
-	"ContinuousClockNow": true, "NSThreadCallStackSymbols": true,
+	"ContinuousClockNow": true, "NSThreadCallStackSymbols": true, "TaskIsCancelled": true, "TimeZoneGmt": true,
 	"TimeZoneCurrent": true, "TimeZoneAutoupdatingCurrent": true, "CalendarCurrent": true,
 	"CalendarAutoupdatingCurrent": true, "LocaleCurrent": true, "InstantNow": true,
 	"ContinuousClockInstantNow": true, "SuspendingClockInstantNow": true, "DateNow": true,
