@@ -141,6 +141,12 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if n.Bool("negative") {
 			v = "-" + v
 		}
+		if e.exprGoType(n) == "swiftrt.Int128" {
+			if _, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return "swiftrt.Int128Of(" + v + ")"
+			}
+			return "swiftrt.Int128Parse(\"" + v + "\")"
+		}
 		return v
 	case "boolean_literal_expr":
 		return n.Str("value")
@@ -1033,6 +1039,12 @@ func (e *fileEmitter) defaultArg(n ast.Node) string {
 	params := info.Node.Child("params").List("params")
 	if idx < len(params) {
 		if ex := params[idx].Child("expression"); ex != nil {
+			// An empty literal is typed in the callee's generic context; the call site knows the type.
+			if (ex.Kind() == "array_expr" || ex.Kind() == "dictionary_expr") && len(ex.List("elements")) == 0 {
+				if gt := e.exprGoType(n); gt != "" && gt != "any" {
+					return "(" + gt + "{})"
+				}
+			}
 			return e.expr(ex)
 		}
 		if info.Kind == "constructor_decl" && info.Node.Implicit() {
@@ -1520,6 +1532,13 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 			}
 		}
 	}
+	if recv == "Int" && len(as) == 1 && e.exprGoType(as[0].node) == "swiftrt.Int128" {
+		fn := "Int128ToInt"
+		if as[0].label == "clamping" {
+			fn = "Int128ToIntClamping"
+		}
+		return "swiftrt." + fn + "[" + gt + "](" + strings.Join(ss, ", ") + ")"
+	}
 	if recv == "TaskLocal" || recv == "Mutex" {
 		if t := e.m.typeOf(n.Type()); t != nil && len(t.Args) == 1 {
 			if recv == "Mutex" {
@@ -1665,6 +1684,14 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		return pfx + info.GoName + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 	}
 	lt := e.m.typeOf(l.Type())
+	if e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
+		if fn, ok := int128Ops[op]; ok {
+			return "swiftrt.Int128" + fn + "(" + e.expr(l) + ", " + e.expr(r) + ")"
+		}
+		if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+			return "swiftrt.Int128Compare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
+		}
+	}
 	switch op {
 	case "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=":
 		s, _ := e.compoundAssign(n)
@@ -1794,6 +1821,9 @@ func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
 		rs += ".String()"
 	}
 	combine := func(cur string) string {
+		if fn, ok := int128Ops[base]; ok && e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
+			return "swiftrt.Int128" + fn + "(" + cur + ", " + rs + ")"
+		}
 		if len(base) == 2 && base[0] == '&' && strings.ContainsAny(base[1:], "+-*") {
 			return cur + " " + base[1:] + " " + rs
 		}
@@ -1827,7 +1857,7 @@ func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
 		return pfx + info.GoName + "(&" + e.lvalue(l) + ", " + rs + ")", true
 	}
 	lv := e.lvalue(l)
-	if lt.Kind == types.Named && isIntegerName(lt.Name) || base == "+" && e.m.Recv(lt) == "Slice" || len(base) == 2 && base[0] == '&' {
+	if lt.Kind == types.Named && isIntegerName(lt.Name) || base == "+" && e.m.Recv(lt) == "Slice" || len(base) == 2 && base[0] == '&' || e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
 		return lv + " = " + combine(lv), true
 	}
 	return lv + " " + op + " " + rs, true
@@ -1840,11 +1870,17 @@ func (e *fileEmitter) prefix(n ast.Node) string {
 	if len(as) != 1 {
 		return e.m.Unsup("prefix-arity", e.where, e.exprGoType(n))
 	}
+	if info, pfx := e.lookup(d.Str("decl_usr")); info != nil {
+		return pfx + info.GoName + "(" + e.expr(as[0].node) + ")"
+	}
 	x := e.expr(as[0].node)
 	switch op {
 	case "!":
 		return "!" + x
 	case "-":
+		if e.exprGoType(as[0].node) == "swiftrt.Int128" {
+			return "swiftrt.Int128Neg(" + x + ")"
+		}
 		return "-" + x
 	case "~":
 		return "^" + x
@@ -2268,3 +2304,5 @@ func (e *fileEmitter) assignable(n ast.Node) bool {
 	}
 	return false
 }
+
+var int128Ops = map[string]string{"+": "Add", "-": "Sub", "*": "Mul", "/": "Div", "%": "Rem"}

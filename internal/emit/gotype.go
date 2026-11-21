@@ -8,7 +8,8 @@ import (
 )
 
 var scalarTypes = map[string]string{
-	"Swift.Int": "int", "Swift.Int8": "int8", "Swift.Int16": "int16", "Swift.Int32": "int32", "Swift.Int64": "int64",
+	"Swift.Int128": "swiftrt.Int128",
+	"Swift.Int":    "int", "Swift.Int8": "int8", "Swift.Int16": "int16", "Swift.Int32": "int32", "Swift.Int64": "int64",
 	"Swift.UInt": "uint", "Swift.UInt8": "uint8", "Swift.UInt16": "uint16", "Swift.UInt32": "uint32", "Swift.UInt64": "uint64",
 	"Swift.Double": "float64", "Swift.Float": "float32", "Swift.Bool": "bool",
 	"Swift.String": "string", "Swift.Substring": "swiftrt.Substring",

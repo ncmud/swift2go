@@ -19,7 +19,9 @@ type Target struct {
 	Path    string   `json:"path"`
 	Sources []string `json:"sources"`
 	Deps    []string `json:"target_dependencies"`
-	Type    string   `json:"type"`
+	// ProductDeps are dependencies through a package's products, which share the target's name here.
+	ProductDeps []string `json:"product_dependencies"`
+	Type        string   `json:"type"`
 	// Dir is the root of the SwiftPM package that declares the target.
 	Dir string `json:"-"`
 }
@@ -61,6 +63,9 @@ func describeOne(pkgDir string) (map[string]Target, error) {
 	m := map[string]Target{}
 	for _, t := range d.Targets {
 		t.Dir = pkgDir
+		if len(t.Deps) == 0 {
+			t.Deps = t.ProductDeps
+		}
 		m[t.Name] = t
 	}
 	return m, nil
