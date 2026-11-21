@@ -23,6 +23,7 @@ type fileEmitter struct {
 	topLevel    map[uintptr]bool // statements directly in the current function body
 	paramNames  map[string]bool  // parameters, which share the function body's Go scope
 	doRet       *doReturn        // set while emitting a do body
+	jumpDepth   int              // loops and switches open around the statement being emitted
 	post        []string         // writebacks to emit after the current statement
 	callee      *DeclInfo        // the local function whose arguments argStrings is rendering
 	unitCallee  bool             // the foreign callee takes a generic-result body closure
