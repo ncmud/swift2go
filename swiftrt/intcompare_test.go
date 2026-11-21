@@ -13,3 +13,9 @@ func TestIntCompare(t *testing.T) {
 		t.Fatal("sign handling")
 	}
 }
+
+func TestMaxOfMinOf(t *testing.T) {
+	if MaxOf([]int{3, 9, 4}, []int{7}) != 9 || MinOf([]int{3, 9, 4}, nil) != 3 {
+		t.Fatal("variadic max/min")
+	}
+}
