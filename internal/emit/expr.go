@@ -1364,14 +1364,66 @@ func (e *fileEmitter) unappliedDot(n ast.Node) string {
 		}
 		return pfx + info.GoName
 	}
-	if info != nil && info.Kind == "func_decl" {
-		args := n.Child("args").List("args")
-		if len(args) > 0 && args[0].Child("expr").Kind() != "type_expr" {
-			return e.recvExpr(args[0].Child("expr")) + "." + info.GoName
-		}
+	args := n.Child("args").List("args")
+	var base ast.Node
+	if len(args) > 0 && args[0].Child("expr").Kind() != "type_expr" {
+		base = args[0].Child("expr")
+	}
+	if info != nil && info.Kind == "constructor_decl" {
 		return pfx + info.GoName
 	}
+	if info != nil && info.Kind == "func_decl" {
+		if base == nil || info.Static {
+			return pfx + info.GoName
+		}
+		if !info.FreeSelf() {
+			return e.recvExpr(base) + "." + info.GoName
+		}
+		return e.boundMethod(n, base, func(recv string, ps []string) string {
+			return pfx + info.GoName + "(" + strings.Join(append([]string{recv}, ps...), ", ") + ")"
+		})
+	}
+	if info == nil {
+		usr := d.Str("decl_usr")
+		sig := parseDeclSig(e.m.demangle(usr))
+		t := e.m.typeOf(n.Type())
+		if t != nil && t.Kind != types.Func {
+			name := capitalize(d.Str("base_name"))
+			if gt := e.m.GoType(t, e.generics); strings.HasPrefix(gt, "swiftrt.") {
+				return gt + name
+			}
+			return "swiftrt." + e.m.Recv(t) + name
+		}
+		if base != nil && sig.base != "" {
+			recv := e.m.Recv(e.m.typeOf(base.Type()))
+			return e.boundMethod(n, base, func(r string, ps []string) string {
+				return "swiftrt." + recv + capitalize(sig.base) + "(" + strings.Join(append([]string{r}, ps...), ", ") + ")"
+			})
+		}
+	}
 	return e.m.Unsup("unapplied-method", e.where, e.exprGoType(n))
+}
+
+// boundMethod turns `base.method` into a closure that captures base once, as Swift's partial
+// application does.
+func (e *fileEmitter) boundMethod(n, base ast.Node, call func(recv string, params []string) string) string {
+	ft := e.m.typeOf(n.Type())
+	if ft == nil || ft.Kind != types.Func {
+		return e.m.Unsup("unapplied-method", e.where, e.exprGoType(n))
+	}
+	var decls, names []string
+	for i, a := range ft.Args {
+		name := "p" + itoa(i)
+		decls = append(decls, name+" "+e.m.GoType(a, e.generics))
+		names = append(names, name)
+	}
+	res := e.m.GoType(ft.Result, e.generics)
+	fnT := e.exprGoType(n)
+	body := call("r", names)
+	if res != "" {
+		body = "return " + body
+	}
+	return "func() " + fnT + " { r := " + e.expr(base) + "; return func(" + strings.Join(decls, ", ") + ") " + res + " { " + body + " } }()"
 }
 
 // ---- operators ----
