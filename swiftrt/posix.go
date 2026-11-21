@@ -93,3 +93,25 @@ func strerror(errnum int32) string {
 	r, n := utf8.DecodeRuneInString(msg)
 	return string(unicode.ToUpper(r)) + msg[n:]
 }
+
+// C `open(2)` flags, with the host platform's values.
+const (
+	CMacroO_RDONLY  int32 = syscall.O_RDONLY
+	CMacroO_WRONLY  int32 = syscall.O_WRONLY
+	CMacroO_RDWR    int32 = syscall.O_RDWR
+	CMacroO_APPEND  int32 = syscall.O_APPEND
+	CMacroO_CREAT   int32 = syscall.O_CREAT
+	CMacroO_TRUNC   int32 = syscall.O_TRUNC
+	CMacroO_EXCL    int32 = syscall.O_EXCL
+	CMacroO_CLOEXEC int32 = syscall.O_CLOEXEC
+)
+
+// OpenUnsafePointerIntInt is C `open(_:_:_:)`: it opens path, a C string, with the flags and
+// creation mode and returns the descriptor, or -1 on failure.
+func OpenUnsafePointerIntInt[M Integer](path any, flags int32, mode M) int32 {
+	fd, err := syscall.Open(StringInitCString(path), int(flags), uint32(mode))
+	if err != nil {
+		return -1
+	}
+	return int32(fd)
+}

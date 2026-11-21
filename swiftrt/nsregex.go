@@ -16,6 +16,19 @@ type NSError struct {
 
 func (e NSError) Error() string { return e.Msg }
 
+// NSRegularExpressionCObjcFor is Foundation `NSRegularExpression.escapedPattern(for:)`: each of
+// `*?+[(){}^$|\./` gets a backslash, so the result matches s literally.
+func NSRegularExpressionCObjcFor(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if strings.ContainsRune(`*?+[(){}^$|\./`, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // Regex is Foundation `NSRegularExpression`, compiled with Go's RE2 after ICU class widening.
 type Regex struct {
 	Pattern string

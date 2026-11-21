@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -194,5 +195,59 @@ func TestCreateDirectoryAtPath(t *testing.T) {
 	NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, true)
 	if err := Catch(func() { NSFileManagerCObjcAtPathWithIntermediateDirectories(NSFileManagerCObjc, dir, false) }); err == nil {
 		t.Error("created an existing directory without intermediates")
+	}
+}
+
+func TestEscapedPatternAndCopyItem(t *testing.T) {
+	var all strings.Builder
+	for c := byte(0x20); c < 0x7f; c++ {
+		all.WriteByte(c)
+	}
+	want := ` !"#\$%&'\(\)\*\+,-\.\/0123456789:;<=>\?@ABCDEFGHIJKLMNOPQRSTUVWXYZ\[\\]\^_` + "`" + `abcdefghijklmnopqrstuvwxyz\{\|\}~`
+	if got := NSRegularExpressionCObjcFor(all.String()); got != want {
+		t.Errorf("escapedPattern = %s\nwant %s", got, want)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/src/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/src/sub/f", []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	NSFileManagerCObjcAtTo(NSFileManagerCObjc, URLInitFileURLWithPath(dir+"/src"), URLInitFileURLWithPath(dir+"/dst"))
+	if b, err := os.ReadFile(dir + "/dst/sub/f"); err != nil || string(b) != "y" {
+		t.Errorf("copied file = %q, %v", b, err)
+	}
+	var ns NSError
+	err := Catch(func() {
+		NSFileManagerCObjcAtTo(NSFileManagerCObjc, URLInitFileURLWithPath(dir+"/src"), URLInitFileURLWithPath(dir+"/dst"))
+	})
+	if !errors.As(err, &ns) || ns.Code != 516 {
+		t.Errorf("existing destination: %v", err)
+	}
+	err = Catch(func() {
+		NSFileManagerCObjcAtTo(NSFileManagerCObjc, URLInitFileURLWithPath(dir+"/none"), URLInitFileURLWithPath(dir+"/x"))
+	})
+	if !errors.As(err, &ns) || ns.Code != 260 {
+		t.Errorf("missing source: %v", err)
+	}
+}
+
+func TestOpenCreatesAndAppends(t *testing.T) {
+	path := t.TempDir() + "/log"
+	for _, line := range []string{"a\n", "b\n"} {
+		fd := OpenUnsafePointerIntInt(path, CMacroO_WRONLY|CMacroO_APPEND|CMacroO_CREAT|CMacroO_CLOEXEC, 0o644)
+		if fd < 0 {
+			t.Fatal("open failed")
+		}
+		f := os.NewFile(uintptr(fd), path)
+		f.WriteString(line)
+		f.Close()
+	}
+	if b, _ := os.ReadFile(path); string(b) != "a\nb\n" {
+		t.Errorf("contents = %q", b)
+	}
+	if OpenUnsafePointerIntInt(path+"/x", CMacroO_RDONLY, 0) != -1 {
+		t.Error("opened a path under a file")
 	}
 }
