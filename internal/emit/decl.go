@@ -18,25 +18,27 @@ type fileEmitter struct {
 	generics map[string]string
 	tmp      int
 	// function context
-	inInit      bool
-	preamble    string           // statements body() writes first, then clears
-	topLevel    map[uintptr]bool // statements directly in the current function body
-	paramNames  map[string]bool  // parameters, which share the function body's Go scope
-	doRet       *doReturn        // set while emitting a do body
-	jumpDepth   int              // loops and switches open around the statement being emitted
-	slots       []slot           // dictionary elements taken inout by the call being emitted
-	post        []string         // writebacks to emit after the current statement
-	callee      *DeclInfo        // the local function whose arguments argStrings is rendering
-	unitCallee  bool             // the foreign callee takes a generic-result body closure
-	initRet     string           // what `return` yields inside an init: "self" or "&self"
-	resultType  string
-	throws      bool
-	opaque      map[string]string // opaque_value_expr identity → Go expression
-	where       string
-	inoutParams map[string]bool
-	typeParams  []string
-	typeBounds  map[string]string // type parameter → Go constraint, when not `any`
-	hoisted     []ast.Node
+	inInit        bool
+	preamble      string                  // statements body() writes first, then clears
+	topLevel      map[uintptr]bool        // statements directly in the current function body
+	paramNames    map[string]bool         // parameters, which share the function body's Go scope
+	doRet         *doReturn               // set while emitting a do body
+	jumpDepth     int                     // loops and switches open around the statement being emitted
+	slots         []slot                  // dictionary elements taken inout by the call being emitted
+	extraDecls    strings.Builder         // package-level declarations hoisted out of function bodies
+	localGenerics map[string]localGeneric // generic local functions, by Swift name
+	post          []string                // writebacks to emit after the current statement
+	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
+	unitCallee    bool                    // the foreign callee takes a generic-result body closure
+	initRet       string                  // what `return` yields inside an init: "self" or "&self"
+	resultType    string
+	throws        bool
+	opaque        map[string]string // opaque_value_expr identity → Go expression
+	where         string
+	inoutParams   map[string]bool
+	typeParams    []string
+	typeBounds    map[string]string // type parameter → Go constraint, when not `any`
+	hoisted       []ast.Node
 }
 
 func (e *fileEmitter) w(format string, args ...any) { fmt.Fprintf(&e.b, format, args...) }
@@ -60,6 +62,7 @@ func (e *fileEmitter) emitFile() string {
 		}
 	}
 	body.WriteString(e.b.String())
+	body.WriteString(e.extraDecls.String())
 	e.b = saved
 	src := body.String()
 	var hdr strings.Builder
@@ -803,6 +806,10 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 	}
 	e.body(n, res)
 	e.w("\n\n")
+	if ps := n.Child("params").List("params"); self != nil && info.FreeSelf() && n.Name() == "encode" && len(ps) == 1 && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Encoder" && e.m.IsPayloadEnum(e.selfQualified(self)) {
+		// An enum emitted as a Go interface has no Encode method for the runtime to find.
+		e.w("func init() {\nswiftrt.RegisterEncoder(func(v %s, e *swiftrt.Encoder) { %s(v, e) })\n}\n\n", self.GoName, info.GoName)
+	}
 	if e.m.Test && isTestFunc(n) {
 		e.goTest(n, info, self)
 	}

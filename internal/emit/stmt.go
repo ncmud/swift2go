@@ -282,6 +282,13 @@ func (e *fileEmitter) localFunc(n ast.Node) {
 	params, _ := e.paramList(n)
 	res := e.resultGo(n)
 	name := goSafe(n.Name())
+	if len(e.typeParams) > 0 {
+		// Go function literals cannot be generic: hoist to a package-level generic function that
+		// takes the captured variables by pointer.
+		e.hoistGenericLocal(n, name, params, res)
+		e.generics = saveG
+		return
+	}
 	sig := "func(" + params + ")"
 	if res != "" {
 		sig += " " + res
@@ -1543,4 +1550,45 @@ func balancedParens(s string) bool {
 		}
 	}
 	return depth == 0
+}
+
+// localGeneric is a generic local function hoisted to package level.
+type localGeneric struct {
+	goName   string
+	captures []string
+}
+
+func (e *fileEmitter) hoistGenericLocal(n ast.Node, name, params, res string) {
+	goName := "local" + capitalize(name) + itoa(e.m.nextHoist())
+	var caps, capParams []string
+	io := map[string]bool{}
+	for _, c := range n.List("captures") {
+		d := c.Child("decl")
+		cn := d.Str("base_name")
+		if cn == "" || cn == "self" {
+			continue
+		}
+		caps = append(caps, goSafe(cn))
+		capParams = append(capParams, goSafe(cn)+" *"+e.m.GoType(e.m.typeOf(d.Str("type_usr")), e.generics))
+		io[cn] = true
+	}
+	all := strings.Join(capParams, ", ")
+	if params != "" {
+		all = strings.Join(append(capParams, params), ", ")
+	}
+	saved, saveIO := e.b, e.inoutParams
+	e.b = strings.Builder{}
+	e.inoutParams = io
+	e.w("func %s%s(%s) %s ", goName, e.typeParamList(), all, res)
+	saveInit := e.inInit
+	e.inInit = false
+	e.body(n, res)
+	e.inInit = saveInit
+	e.w("\n\n")
+	e.extraDecls.WriteString(e.b.String())
+	e.b, e.inoutParams = saved, saveIO
+	if e.localGenerics == nil {
+		e.localGenerics = map[string]localGeneric{}
+	}
+	e.localGenerics[n.Name()] = localGeneric{goName: goName, captures: caps}
 }

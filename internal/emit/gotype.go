@@ -114,6 +114,9 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	case "Swift.Dictionary":
 		return "map[" + arg(0) + "]" + arg(1)
 	case "Swift.Set":
+		if len(args) == 1 && !m.goKeyable(args[0], map[string]bool{}) {
+			return "swiftrt.HSet[" + arg(0) + "]"
+		}
 		return "map[" + arg(0) + "]struct{}"
 	case "Swift.Range":
 		return "swiftrt.Range[" + arg(0) + "]"
@@ -255,6 +258,9 @@ func (m *Module) Recv(t *types.Type) string {
 	case "Swift.Dictionary":
 		return "Map"
 	case "Swift.Set":
+		if len(t.Args) == 1 && !m.goKeyable(t.Args[0], map[string]bool{}) {
+			return "HSet"
+		}
 		return "Set"
 	case "Swift.Character":
 		return "Character"
@@ -362,4 +368,47 @@ var foreignTypes = map[string]string{
 	"Foundation.Calendar.Component":           "swiftrt.CalendarComponent",
 	"Foundation.Calendar.Identifier":          "swiftrt.CalendarIdentifier",
 	"Foundation.JSONEncoder.OutputFormatting": "swiftrt.JSONEncoderOutputFormatting",
+}
+
+// goKeyable reports whether a Swift Hashable type's Go form can be a Go map key with the same
+// equality: arrays, sets and dictionaries cannot, nor can structs holding them.
+func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
+	switch t.Kind {
+	case types.Array, types.Dict:
+		return false
+	case types.Tuple:
+		for _, a := range t.Args {
+			if !m.goKeyable(a, seen) {
+				return false
+			}
+		}
+		return true
+	case types.Named:
+		switch t.Name {
+		case "Swift.Array", "Swift.Set", "Swift.Dictionary", "Swift.ArraySlice":
+			return false
+		}
+		if m.typeKinds[t.Name] != "struct_decl" || seen[t.Name] {
+			return true
+		}
+		if k, ok := m.keyable[t.Name]; ok {
+			return k
+		}
+		seen[t.Name] = true
+		k := true
+		for _, d := range m.decls {
+			if d.Kind == "var_decl" && d.Owner == t.Name && !d.Static && !d.Computed && d.Node != nil {
+				if !m.goKeyable(m.typeOf(d.Node.Str("interface_type")), seen) {
+					k = false
+					break
+				}
+			}
+		}
+		if m.keyable == nil {
+			m.keyable = map[string]bool{}
+		}
+		m.keyable[t.Name] = k
+		return k
+	}
+	return true
 }

@@ -68,6 +68,8 @@ type Module struct {
 	sources        map[string][]byte
 	localFuncs     map[string]ast.Node // functions declared inside function bodies, by USR
 	objcNames      map[string]string   // Swift names of Objective-C members, by USR
+	hoists         int
+	keyable        map[string]bool // whether a local struct can be a Go map key
 	mutatingTypes  map[string]bool
 	overridden     map[string]bool // USRs of class members some subclass overrides
 	superOf        map[string]string
@@ -969,6 +971,8 @@ var foreignOptionSets = map[string]bool{
 	"YYJSON.YYJSONSerialization.WritingOptions": true,
 	"YYJSON.YYJSONWriteOptions":                 true,
 	"YYJSON.GameJSONEncoder.OutputFormatting":   true,
+	"__C.NSJSONWritingOptions":                  true,
+	"__C.NSJSONReadingOptions":                  true,
 }
 
 // sourceText returns a Swift source file's bytes, cached.
@@ -982,4 +986,9 @@ func (m *Module) sourceText(file string) []byte {
 	b, _ := os.ReadFile(file)
 	m.sources[file] = b
 	return b
+}
+
+func (m *Module) nextHoist() int {
+	m.hoists++
+	return m.hoists
 }
