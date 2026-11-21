@@ -110,6 +110,13 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	switch name {
 	case "Swift.Array", "Swift.ArraySlice", "Swift.ContiguousArray":
 		return "[]" + arg(0)
+	case "Swift.ReversedCollection", "Swift.Slice":
+		// The runtime reverses or slices into a slice of the base collection's elements.
+		if base := arg(0); strings.HasPrefix(base, "[]") {
+			return base
+		} else if base == "string" || base == "swiftrt.Substring" {
+			return "[]swiftrt.Character"
+		}
 	case "Swift.Optional":
 		return m.GoType(&types.Type{Kind: types.Optional, Args: args}, generics)
 	case "Swift.Dictionary":
