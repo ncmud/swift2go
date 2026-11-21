@@ -58,7 +58,7 @@ func (e *fileEmitter) expr(n ast.Node) string {
 	default:
 		return out
 	}
-	for _, keep := range []string{"swiftrt.Unsupported", "swiftrt.CoalesceRef", "swiftrt.CoalesceOpt", "swiftrt.Flat(", "swiftrt.TryFlat", "swiftrt.Some",
+	for _, keep := range []string{"swiftrt.Unsupported", "swiftrt.CoalesceRef", "swiftrt.CoalesceOpt", "swiftrt.Flat(", "swiftrt.TryFlat", "swiftrt.TryNil", "swiftrt.Some",
 		"swiftrt.TaskLocalGet", "swiftrt.TaskLocalWithValue", "swiftrt.MapSubscriptDefault", "swiftrt.ForceRef", "swiftrt.Clone", "swiftrt.MustAs",
 		"swiftrt.Dynamic", "swiftrt.Ref(", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.Coalesce(",
 		"swiftrt.OptFlatMap", "swiftrt.RefFlatMap"} {
@@ -128,6 +128,11 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		"unevaluated_instance", "dot_self_expr", "await_expr", "unsafe_expr", "borrow_expr", "copy_expr", "consume_expr", "any_hashable_erasure_expr":
 		if n.Kind() == "collection_upcast_expr" || n.Kind() == "any_hashable_erasure_expr" {
 			return e.upcast(n)
+		}
+		if n.Kind() == "function_conversion_expr" {
+			if f, ok := e.optionalParamConversion(n); ok {
+				return f
+			}
 		}
 		if ac := n.Child("sub_expr"); n.Kind() == "function_conversion_expr" && ac.Kind() == "autoclosure_expr" {
 			if f, ok := e.methodRef(ac); ok {
@@ -1284,6 +1289,10 @@ func (e *fileEmitter) tryExpr(n ast.Node) string {
 			return "swiftrt.TryVoid(func() { " + e.expr(sub) + " })"
 		}
 		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind == types.Optional {
+			if !strings.HasPrefix(inner, "*") {
+				// An optional whose Go form is itself nil-able (an interface or closure).
+				return "swiftrt.TryNil(func() " + inner + " { return " + e.expr(sub) + " })"
+			}
 			return "swiftrt.TryFlat(func() " + inner + " { return " + e.expr(sub) + " })"
 		}
 		return "swiftrt.TryOpt(func() " + inner + " { return " + e.expr(sub) + " })"
@@ -2019,8 +2028,12 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		return "(swiftrt.ClosedRange[" + e.m.GoType(lt, e.generics) + "]{Lo: " + e.expr(l) + ", Hi: " + e.expr(r) + "})"
 	case "??":
 		if lt.Kind == types.Optional && len(lt.Args) == 1 && lt.Args[0].Kind == types.Optional {
-			// T?? ?? T? unwraps one level.
-			return "swiftrt.Coalesce(" + e.expr(l) + ", " + e.expr(r) + ")"
+			// T?? ?? T? unwraps one level, unless `try?` already flattened it to T?.
+			ls := e.expr(l)
+			if strings.HasPrefix(strings.TrimLeft(ls, "("), "swiftrt.TryFlat(") {
+				return "swiftrt.CoalesceOpt(" + ls + ", " + e.expr(r) + ")"
+			}
+			return "swiftrt.Coalesce(" + ls + ", " + e.expr(r) + ")"
 		}
 		if rt := e.m.typeOf(n.Type()); rt != nil && rt.Kind == types.Optional {
 			return "swiftrt.CoalesceOpt(" + e.expr(l) + ", " + e.expr(r) + ")"
@@ -2758,4 +2771,31 @@ func isOperatorRef(n ast.Node) bool {
 	}
 	name := n.Child("decl").Str("base_name")
 	return name != "" && strings.ContainsAny(name[:1], "=<>!+-*/%&|^~")
+}
+
+// optionalParamConversion handles a function taking T? passed where one taking T is expected:
+// Swift wraps the argument in Optional, which in Go is taking its address.
+func (e *fileEmitter) optionalParamConversion(n ast.Node) (string, bool) {
+	sub := n.Child("sub_expr")
+	from, to := e.m.typeOf(sub.Type()), e.m.typeOf(n.Type())
+	if from == nil || to == nil || from.Kind != types.Func || to.Kind != types.Func || len(from.Args) != 1 || len(to.Args) != 1 {
+		return "", false
+	}
+	fp, tp := from.Args[0], to.Args[0]
+	if fp.Kind != types.Optional || len(fp.Args) != 1 || tp.Kind == types.Optional {
+		return "", false
+	}
+	fg, tg := e.m.GoType(fp, e.generics), e.m.GoType(tp, e.generics)
+	if fg != "*"+tg {
+		return "", false
+	}
+	res := ""
+	if from.Result != nil {
+		res = e.m.GoType(from.Result, e.generics)
+	}
+	body := "f(&v)"
+	if res != "" {
+		body = "return " + body
+	}
+	return "func(f func(" + fg + ") " + res + ") func(" + tg + ") " + res + " { return func(v " + tg + ") " + res + " { " + body + " } }(" + e.expr(sub) + ")", true
 }
