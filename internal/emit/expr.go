@@ -46,6 +46,14 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.upcastClass(n)
 	case "erasure_expr":
 		sub := n.Child("sub_expr")
+		if nt, st := e.m.typeOf(n.Type()), e.m.typeOf(sub.Type()); nt != nil && st != nil && nt.Kind == types.Meta && st.Kind == types.Meta && len(st.Args) == 1 && st.Args[0].Kind == types.Named {
+			// A concrete metatype stored as `any P.Type` becomes the type's zero value, which carries P's static requirements.
+			gt := e.m.GoType(st.Args[0], e.generics)
+			if e.m.HasMutatingMethods(st.Args[0].Name) {
+				return "new(" + gt + ")"
+			}
+			return "*new(" + gt + ")"
+		}
 		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind == types.Named && e.m.HasMutatingMethods(t.Name) {
 			return "swiftrt.Ref(" + e.expr(sub) + ")"
 		}
@@ -712,10 +720,27 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 		}
 	}
 	find(n.Child("sub_expr"))
-	var pre strings.Builder
+	var pre, post strings.Builder
+	mutates := false
+	ast.Walk(n.Child("sub_expr"), func(x ast.Node) {
+		if x.Kind() == "assign_expr" || x.Kind() == "inout_expr" {
+			mutates = true
+		}
+	})
 	for _, b := range binds {
 		v := e.newTmp("bound")
 		sub := b.Child("sub_expr")
+		// `dict[k]?.field = v` mutates the dictionary entry in Swift; MapGet hands back a copy, so write it back.
+		if ds := stripLoads(sub); mutates && ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "Map" && len(ds.Child("args").List("args")) == 1 && e.assignable(stripLoads(ds.Child("base"))) {
+			if vt := e.m.typeOf(sub.Type()); vt != nil && vt.Kind == types.Optional && len(vt.Args) == 1 && !e.m.isReferenceGo(vt.Args[0], e.m.GoType(vt.Args[0], e.generics)) {
+				k := e.newTmp("key")
+				m := e.lvalue(stripLoads(ds.Child("base")))
+				fmt.Fprintf(&pre, "%s := %s\n%s := swiftrt.MapGet(%s, %s)\nif %s == nil { return nil }\n", k, e.expr(ds.Child("args").List("args")[0].Child("expr")), v, m, k, v)
+				fmt.Fprintf(&post, "%s[%s] = *%s\n", m, k, v)
+				e.opaque[nodeID(b)] = "(*" + v + ")"
+				continue
+			}
+		}
 		fmt.Fprintf(&pre, "%s := %s\nif %s == nil { return nil }\n", v, e.expr(sub), v)
 		u := e.unwrap(v, sub)
 		if strings.HasPrefix(u, "*") {
@@ -726,7 +751,10 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 	rt := e.exprGoType(n)
 	body := e.expr(n.Child("sub_expr"))
 	if rt == "" || rt == "*" || rt == "*struct{}" {
-		return "func() { " + strings.ReplaceAll(pre.String(), "return nil", "return") + body + " }()"
+		return "func() { " + strings.ReplaceAll(pre.String(), "return nil", "return") + body + "\n" + post.String() + " }()"
+	}
+	if post.Len() > 0 {
+		return "func() " + rt + " {\n" + pre.String() + "res := " + body + "\n" + post.String() + "return res\n}()"
 	}
 	return "func() " + rt + " {\n" + pre.String() + "return " + body + "\n}()"
 }
@@ -1533,7 +1561,16 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			return "!" + less + "(" + a + ", " + b + ")"
 		}
 		if lt.Kind == types.Tuple {
-			return "swiftrt.TupleCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
+			var cmps []string
+			for _, el := range lt.Args {
+				gt := e.m.GoType(el, e.generics)
+				if less := e.lessFunc(el); less != "" {
+					cmps = append(cmps, "swiftrt.CompareBy("+less+")")
+				} else {
+					cmps = append(cmps, "swiftrt.CompareOrdered["+gt+"]")
+				}
+			}
+			return "swiftrt.TupleCompare(" + e.expr(l) + ", " + e.expr(r) + ", " + strings.Join(cmps, ", ") + ") " + op + " 0"
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "+", "-", "*":
@@ -1955,6 +1992,10 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 		return "self"
 	}
 	t := e.m.typeOf(base.Type())
+	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 && (t.Args[0].Kind == types.Existential || t.Args[0].Kind == types.Named && e.m.isLocalProtocol(t.Args[0].Name)) {
+		// `any P.Type` values are carried as a zero value of the concrete type, typed as P.
+		return e.expr(base)
+	}
 	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
 		inner := t.Args[0]
 		gt := e.m.GoType(inner, e.generics)
@@ -2039,4 +2080,18 @@ func (e *fileEmitter) defaultValue(n ast.Node) string {
 		}
 	}
 	return e.expr(n)
+}
+
+// assignable reports an expression the emitter can write to directly: a local, parameter, or a chain of
+// stored properties.
+func (e *fileEmitter) assignable(n ast.Node) bool {
+	switch n.Kind() {
+	case "declref_expr":
+		info, _ := e.lookup(n.Child("decl").Str("decl_usr"))
+		return info == nil || !info.Computed
+	case "member_ref_expr":
+		info, _ := e.lookup(n.Child("decl").Str("decl_usr"))
+		return info != nil && info.Kind == "var_decl" && !info.Computed && e.assignable(stripLoads(n.Child("base")))
+	}
+	return false
 }
