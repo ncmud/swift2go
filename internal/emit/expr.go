@@ -628,6 +628,9 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	if base.Kind() == "type_expr" || bt.Kind == types.Meta {
 		// A static member is named after the type it belongs to (`Task.isCancelled`), which is
 		// usually also its result type.
+		if bt.Kind == types.Meta && len(bt.Args) == 1 && isGenericParam(bt.Args[0]) && sig.base == "allCases" {
+			return "swiftrt.AllCasesOf[" + e.m.GoType(bt.Args[0], e.generics) + "]()"
+		}
 		recvT := e.m.typeOf(n.Type())
 		if bt.Kind == types.Meta && len(bt.Args) == 1 && bt.Args[0].Kind == types.Named {
 			recvT = bt.Args[0]
@@ -1618,6 +1621,10 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 			}
 		}
 	}
+	if base != nil && d.Str("base_name") == "encode" && len(as) == 1 && as[0].label == "to" && isGenericParam(e.m.typeOf(base.Type())) {
+		ss, _ := e.argStrings(as, false)
+		return "swiftrt.EncodeInto(" + e.expr(base) + ", " + ss[0] + ")"
+	}
 	if base != nil && d.Str("base_name") == "filter" && len(as) == 1 && sig.owner == "Swift.Sequence" {
 		// Sequence.filter (chosen over Set.filter when the context wants an Array) returns an Array.
 		if bt := e.m.typeOf(base.Type()); bt != nil && e.m.Recv(bt) == "Set" && len(bt.Args) == 1 {
@@ -1712,6 +1719,21 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 	}
 	sig := parseDeclSig(e.m.demangle(usr))
 	ss, kept := e.argStrings(as, true)
+	if rt := e.m.typeOf(n.Type()); len(kept) == 1 {
+		inner := rt
+		if inner.Kind == types.Optional && len(inner.Args) == 1 {
+			inner = inner.Args[0]
+		}
+		if isGenericParam(inner) {
+			// A protocol initializer on a type parameter goes through the runtime's registries.
+			switch kept[0].label {
+			case "rawValue":
+				return "swiftrt.RawInitOf[" + e.m.GoType(inner, e.generics) + "](" + ss[0] + ")"
+			case "from":
+				return "swiftrt.DecodeAs[" + e.m.GoType(inner, e.generics) + "](" + ss[0] + ")"
+			}
+		}
+	}
 	recv := e.m.Recv(e.m.typeOf(n.Type()))
 	suffix := ""
 	for _, a := range kept {
