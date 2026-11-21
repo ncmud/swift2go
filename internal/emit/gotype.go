@@ -196,7 +196,7 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	if strings.HasPrefix(name, "Swift.") {
 		return "any /* " + name + " */"
 	}
-	for _, pfx := range []string{"Foundation.", "__C.NS", "__C.", "Synchronization.", "Dispatch.", "_Concurrency.", "CryptoKit.", "Crypto."} {
+	for _, pfx := range []string{"Foundation.", "__C.NS", "__C.", "Synchronization.", "Dispatch.", "_Concurrency.", "CryptoKit.", "Crypto.", "Logging.", "YYJSON."} {
 		if strings.HasPrefix(name, pfx) {
 			return "swiftrt." + strings.ReplaceAll(strings.TrimPrefix(name, pfx), ".", "")
 		}
