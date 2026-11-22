@@ -1,10 +1,12 @@
 package emit
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,12 +14,22 @@ import (
 	"github.com/ncmud/swift2go/internal/swiftmod"
 )
 
-const fixtureRT = "github.com/ncmud/swift2go/swiftrt"
+const (
+	fixtureRT         = "github.com/ncmud/swift2go/swiftrt"
+	fixtureImportRoot = "github.com/ncmud/swift2go/internal/emit/testdata"
+)
 
 // transpileFixture transpiles targets of the Swift package testdata/<fixture>, in order, into out/<test name>
 // at the repository root, so the Go output builds inside this module. It returns that directory. Test targets
 // are written into the package of the target they test.
 func transpileFixture(t *testing.T, fixture string, targets ...string) string {
+	t.Helper()
+	return transpileMapped(t, fixture, nil, targets...)
+}
+
+// transpileMapped is transpileFixture with Swift modules replaced by Go packages: maps holds each module's
+// package directory under testdata/<fixture>. The modules are compiled for their declarations only.
+func transpileMapped(t *testing.T, fixture string, mapped map[string]string, targets ...string) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("transpiles a Swift package")
@@ -45,6 +57,22 @@ func transpileFixture(t *testing.T, fixture string, targets ...string) string {
 	}
 	mods := filepath.Join(outDir, "modules")
 	extra := swiftmod.TestingFlags()
+	var mappings []Mapping
+	for _, mod := range slices.Sorted(maps.Keys(mapped)) {
+		if err := swiftmod.EmitModule(described[mod], mods, extra...); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(pkgDir, filepath.FromSlash(mapped[mod]))
+		pkg, exports, generic, err := PackageExports(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqs, err := swiftmod.ProtocolRequirements(mod, []string{"-I", mods})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mappings = append(mappings, Mapping{Module: mod, ImportPath: path.Join(fixtureImportRoot, fixture, mapped[mod]), Package: pkg, Exports: exports, Generic: generic, Requirements: reqs})
+	}
 	byName := map[string]*Module{}
 	var done []*Module
 	for _, name := range targets {
@@ -70,6 +98,7 @@ func transpileFixture(t *testing.T, fixture string, targets ...string) string {
 			t.Fatal(err)
 		}
 		m.Deps = done
+		m.Mappings = mappings
 		pkgOut := strings.ToLower(name)
 		if tg.Type == "test" {
 			under := byName[tg.Deps[0]]
@@ -99,4 +128,24 @@ func goTest(t *testing.T, dir string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go test %s: %v\n%s", dir, err, out)
 	}
+}
+
+// readGo returns the concatenated Go sources of a transpiled package directory.
+func readGo(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, ent := range entries {
+		if strings.HasSuffix(ent.Name(), ".go") {
+			data, err := os.ReadFile(filepath.Join(dir, ent.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			b.Write(data)
+		}
+	}
+	return b.String()
 }

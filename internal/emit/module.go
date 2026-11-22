@@ -63,7 +63,9 @@ type Module struct {
 	UnsupportedAt  map[string][]string
 	Deps           []*Module
 	ImportPath     string
-	Mappings       []Mapping // hand-written Go packages standing in for modules not transpiled in this run
+	Mappings       []Mapping                  // hand-written Go packages standing in for modules not transpiled in this run
+	mappedKinds    map[string]map[string]byte // nominal kinds of each mapped module's types, read on first use
+	adapters       map[string]bool            // adapter types emitted for retroactive conformances to local protocols
 	importPkgs     map[string]string
 	typeCache      map[string]*types.Type
 	payloadEnums   map[string]bool
@@ -170,7 +172,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 	for _, f := range files {
 		for _, it := range f.Items {
 			ast.Walk(it, func(n ast.Node) {
-				for _, k := range []string{"type", "usr", "decl_usr", "interface_type", "result", "extended_type", "type_usr", "first_type", "second_type", "protocol"} {
+				for _, k := range []string{"type", "usr", "decl_usr", "interface_type", "result", "extended_type", "type_usr", "first_type", "second_type", "protocol", "generic_param", "replacement_type"} {
 					if s := n.Str(k); strings.HasPrefix(s, "$s") || strings.HasPrefix(s, "s:") {
 						syms = append(syms, s)
 					}
