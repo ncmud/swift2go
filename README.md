@@ -55,6 +55,11 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage transpil
 - A target with resources gets the `Bundle.module` accessor SwiftPM generates, written to
   `out/derived/<Target>`. It looks for the `<package>_<Target>.bundle` resource bundle next to the
   executable.
+- An attached macro that adds an extension (`@attached(extension)`) is expanded for the dump: the
+  compiler's JSON AST leaves such extensions out, so a file that uses one is dumped from a copy,
+  written under `out/derived/<Target>/macros`, in which the extension stands as source in place of
+  the attribute. The macro's plugin must be built (`swift build`). Members that macros add already
+  arrive in the AST.
 - Sources that build-tool plugins generate (for example swift-openapi-generator) are read from
   `<build>/plugins/outputs`, where `swift build` writes them. swift2go does not run plugins. Run
   `swift build --target <Target>` first; if the outputs are missing, or older than a non-Swift file in

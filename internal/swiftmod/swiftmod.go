@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -406,7 +407,11 @@ func StaleModule(t Target, targets map[string]Target, fresh map[string]bool, sea
 // one document per source file. Each file is dumped by its own frontend so a compiler crash on
 // one file skips only that file; skipped files are reported on stderr.
 // modulesDir holds the built .swiftmodule files of the target's dependencies.
-func DumpAST(t Target, modulesDir string, extra ...string) ([]byte, error) {
+//
+// The dump leaves out the extensions that attached macros generate. A file with such a macro is
+// dumped a second time from a copy, written under expandDir, that holds those extensions as
+// source in place of the macro attributes; the JSON then names the copy as its file.
+func DumpAST(t Target, modulesDir, expandDir string, extra ...string) ([]byte, error) {
 	args := []string{"-dump-ast", "-dump-ast-format", "json", "-module-name", t.Name, "-swift-version", "6", "-package-name", filepath.Base(t.Dir)}
 	if modulesDir != "" {
 		args = append(args, "-I", modulesDir)
@@ -417,61 +422,56 @@ func DumpAST(t Target, modulesDir string, extra ...string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	list, err := os.CreateTemp("", "swift2go-sources-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(list.Name())
-	fmt.Fprintln(list, strings.Join(sources, "\n"))
-	_ = list.Close()
-	job = append(job, "-filelist", list.Name())
-
 	outs := make([][]byte, len(sources))
 	errs := make([]string, len(sources))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, runtime.NumCPU())
-	for i, src := range sources {
-		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			var stdout, stderr bytes.Buffer
-			run := func(more ...string) error {
-				stdout.Reset()
-				stderr.Reset()
-				cmd := exec.Command(job[0], append(append(append([]string{}, job[1:]...), more...), "-primary-file", src)...)
-				cmd.Dir = t.Dir
-				cmd.Stdout = &stdout
-				cmd.Stderr = &stderr
-				return cmd.Run()
+	expansions := make([]string, len(sources))
+	dump := func(sources []string, only func(i int) bool, more ...string) error {
+		list, err := os.CreateTemp("", "swift2go-sources-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(list.Name())
+		fmt.Fprintln(list, strings.Join(sources, "\n"))
+		_ = list.Close()
+		job := append(append(slices.Clone(job), "-filelist", list.Name()), more...)
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, runtime.NumCPU())
+		for i, src := range sources {
+			if !only(i) {
+				continue
 			}
-			err := run()
-			if err != nil && strings.Contains(stderr.String(), "Assertion failed") {
-				err = run("-Xllvm", "-assert-continue")
-			}
-			out := stdout.Bytes()
-			if !bytes.HasPrefix(bytes.TrimSpace(out), []byte("{")) {
-				out = stderr.Bytes()
-			}
-			if j := bytes.Index(out, []byte(`{"_kind"`)); j >= 0 {
-				out = out[j:]
-			} else {
-				out = nil
-			}
-			if err != nil {
-				msg := stderr.String()
-				if k := strings.Index(msg, "Assertion failed"); k >= 0 {
-					msg = msg[k:]
-				}
-				if k := strings.Index(msg, "\n"); k >= 0 {
-					msg = msg[:k]
-				}
-				errs[i] = fmt.Sprintf("%s: %v: %s", src, err, msg)
-				out = nil
-			}
-			outs[i] = out
-		})
+			wg.Go(func() {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				outs[i], expansions[i], errs[i] = dumpFile(job, t.Dir, src)
+			})
+		}
+		wg.Wait()
+		return nil
 	}
-	wg.Wait()
+	if err := dump(sources, func(int) bool { return true }, "-dump-macro-expansions"); err != nil {
+		return nil, err
+	}
+	expanded := slices.Clone(sources)
+	redo := map[int]bool{}
+	for i, src := range sources {
+		if outs[i] == nil {
+			continue
+		}
+		copied, err := expandedSource(src, filepath.Join(expandDir, t.Name, "macros"), outs[i], expansions[i])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", src, err)
+		}
+		if copied != "" {
+			expanded[i] = copied
+			redo[i] = true
+		}
+	}
+	if len(redo) > 0 {
+		if err := dump(expanded, func(i int) bool { return redo[i] }); err != nil {
+			return nil, err
+		}
+	}
 	var all []byte
 	for i := range sources {
 		if errs[i] != "" {
@@ -484,6 +484,45 @@ func DumpAST(t Target, modulesDir string, extra ...string) ([]byte, error) {
 		return nil, fmt.Errorf("swiftc -dump-ast produced no output for %s", t.Name)
 	}
 	return all, nil
+}
+
+// dumpFile runs one frontend job with src as its primary file. It returns the file's JSON AST and
+// what the frontend wrote to stderr, or a description of the failure.
+func dumpFile(job []string, dir, src string) (out []byte, stderrText, failure string) {
+	var stdout, stderr bytes.Buffer
+	run := func(more ...string) error {
+		stdout.Reset()
+		stderr.Reset()
+		cmd := exec.Command(job[0], append(append(append([]string{}, job[1:]...), more...), "-primary-file", src)...)
+		cmd.Dir = dir
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		return cmd.Run()
+	}
+	err := run()
+	if err != nil && strings.Contains(stderr.String(), "Assertion failed") {
+		err = run("-Xllvm", "-assert-continue")
+	}
+	out = stdout.Bytes()
+	if !bytes.HasPrefix(bytes.TrimSpace(out), []byte("{")) {
+		out = stderr.Bytes()
+	}
+	if j := bytes.Index(out, []byte(`{"_kind"`)); j >= 0 {
+		out = out[j:]
+	} else {
+		out = nil
+	}
+	if err != nil {
+		msg := stderr.String()
+		if k := strings.Index(msg, "Assertion failed"); k >= 0 {
+			msg = msg[k:]
+		}
+		if k := strings.Index(msg, "\n"); k >= 0 {
+			msg = msg[:k]
+		}
+		return nil, "", fmt.Sprintf("%s: %v: %s", src, err, msg)
+	}
+	return out, stderr.String(), ""
 }
 
 // frontendJob asks the driver for its first frontend command line and strips the source inputs from it.

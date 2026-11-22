@@ -119,7 +119,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			}
 			emitted[t.Name] = true
 		}
-		data, err := swiftmod.DumpAST(t, mods, extra...)
+		data, err := swiftmod.DumpAST(t, mods, absPath(filepath.Join(outDir, "derived")), extra...)
 		if err != nil {
 			return nil, err
 		}
