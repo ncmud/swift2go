@@ -528,7 +528,7 @@ func (m *Module) assignNames() {
 		case "enum_element_decl":
 			info.GoName = owner + capitalize(name)
 		case "subscript_decl":
-			info.GoName = "Subscript" + labelSuffix(paramLabels(info.Node))
+			info.GoName = m.memberName(info, owner, "Subscript"+labelSuffix(paramLabels(info.Node)))
 		}
 	}
 	m.dedupePackageNames()
@@ -613,7 +613,7 @@ func (m *Module) packageLevel(info *DeclInfo) bool {
 	switch info.Kind {
 	case "struct_decl", "class_decl", "enum_decl", "protocol", "constructor_decl", "enum_element_decl":
 		return true
-	case "func_decl", "var_decl":
+	case "func_decl", "var_decl", "subscript_decl":
 		return info.Owner == "" || info.Static || info.FreeSelf()
 	}
 	return false
@@ -799,6 +799,13 @@ func (info *DeclInfo) FreeSelf() bool {
 // markGenericFree flags methods that must become generic package-level functions.
 func (m *Module) markGenericFree() {
 	for _, d := range m.decls {
+		if d.Kind == "subscript_decl" && !d.Static && d.Owner != "" && d.OwnerKind != "protocol" && m.typeKinds[d.Owner] != "protocol" {
+			// A subscript with generic parameters of its own becomes a pair of generic functions.
+			if len(m.typeParamNames[d.Owner]) == 0 && len(d.Node.Child("generic_signature").Strings("generic_params")) > 0 {
+				d.GenericFree = true
+			}
+			continue
+		}
 		if d.Kind != "func_decl" || d.Static || d.Owner == "" || d.OwnerKind == "protocol" || d.Node.Child("implicit_self_decl") == nil {
 			continue
 		}

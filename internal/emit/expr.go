@@ -842,6 +842,15 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		if v, ok := e.opaque[nodeID(n)]; ok {
 			return v
 		}
+	case "call_expr", "dot_syntax_call_expr":
+		// Swift only writes through a call result that is a class reference; bind it once so the call runs once.
+		if t := e.m.typeOf(n.Type()); t != nil && t.Kind != types.Optional {
+			if gt := e.m.GoType(t, e.generics); strings.HasPrefix(gt, "*") && e.m.isReferenceGo(t, gt) {
+				tmp := e.newTmp("ref")
+				e.w("%s := %s\n", tmp, e.expr(n))
+				return tmp
+			}
+		}
 	}
 	return e.m.Unsup("lvalue:"+n.Kind(), e.where, "")
 }

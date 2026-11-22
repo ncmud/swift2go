@@ -1406,7 +1406,7 @@ func (e *fileEmitter) subscriptDecl(n ast.Node, self *DeclInfo) {
 	e.inoutParams = nil
 	defer func() { e.inoutParams = saveIO }()
 	info := e.info(n)
-	if info == nil || self == nil || self.Kind == "foreign" || info.FreeSelf() || info.Static {
+	if info == nil || self == nil || self.Kind == "foreign" || info.FreeSelf() && !info.GenericFree || info.Static {
 		e.m.Unsup("decl:subscript", shortPath(e.file.Filename), "")
 		return
 	}
@@ -1436,15 +1436,27 @@ func (e *fileEmitter) subscriptDecl(n ast.Node, self *DeclInfo) {
 	for _, a := range n.List("accessors") {
 		switch {
 		case a.Bool("get"):
-			e.w("func (self %s) %s(%s) %s ", recv, info.GoName, params, res)
+			if info.GenericFree {
+				e.w("func %s%s(self %s%s) %s ", info.GoName, e.typeParamList(), recv, prefixComma(params), res)
+			} else {
+				e.w("func (self %s) %s(%s) %s ", recv, info.GoName, params, res)
+			}
 			e.body(a, res)
 			e.w("\n\n")
 		case a.Bool("set"):
 			setRecv := recv
 			if !strings.HasPrefix(setRecv, "*") {
 				setRecv = "*" + setRecv
+				if e.inoutParams == nil {
+					e.inoutParams = map[string]bool{}
+				}
+				e.inoutParams["self"] = true
 			}
-			e.w("func (self %s) Set%s(%s) {\n", setRecv, info.GoName, prefixCommaTail(params, "newValue "+res))
+			if info.GenericFree {
+				e.w("func %s%s(self %s, %s) {\n", subscriptSetterName(info), e.typeParamList(), setRecv, prefixCommaTail(params, "newValue "+res))
+			} else {
+				e.w("func (self %s) Set%s(%s) {\n", setRecv, info.GoName, prefixCommaTail(params, "newValue "+res))
+			}
 			if ps := a.Child("params").List("params"); len(ps) > 0 && goSafe(ps[0].Name()) != "newValue" && !strings.Contains(params, goSafe(ps[0].Name())+" ") {
 				e.w("%s := newValue\n_ = %s\n", goSafe(ps[0].Name()), goSafe(ps[0].Name()))
 			}
@@ -1454,9 +1466,16 @@ func (e *fileEmitter) subscriptDecl(n ast.Node, self *DeclInfo) {
 				e.stmts(b.List("elements"))
 			}
 			e.resultType = saveR
+			delete(e.inoutParams, "self")
 			e.w("}\n\n")
 		}
 	}
+}
+
+// subscriptSetterName names the setter function of a subscript emitted as free functions.
+func subscriptSetterName(info *DeclInfo) string {
+	i := strings.LastIndex(info.GoName, "Subscript")
+	return info.GoName[:i] + "Set" + info.GoName[i:]
 }
 
 func prefixCommaTail(params, last string) string {
