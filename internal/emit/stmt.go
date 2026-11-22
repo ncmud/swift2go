@@ -528,6 +528,10 @@ func (e *fileEmitter) bindPattern(p ast.Node, init ast.Node, declare bool) {
 			s = sinkStore
 		}
 		e.w("var %s %s = %s\n", name, gt, e.owned(init, s))
+		if gt == "swiftrt.Type" {
+			// Members of a metatype local resolve to the type's statics, which leaves the local itself unused.
+			e.w("_ = %s\n", name)
+		}
 		e.bindSliceBase(p, init)
 	case "pattern_typed", "pattern_binding", "pattern":
 		e.bindPattern(p.Child("sub_pattern"), init, declare)

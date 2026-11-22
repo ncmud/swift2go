@@ -258,9 +258,13 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 				fail(name, fmt.Errorf("its target %s is mapped to a Go package", under.Name))
 				continue
 			}
-			m.SetTarget(under)
-			m.Overlay = overlays[t.Deps[0]]
-			pkgOut = filepath.Join(outDir, under.Pkg)
+			if t.TestCycles(targets) {
+				m.SetTestPackage()
+			} else {
+				m.SetTarget(under)
+				m.Overlay = overlays[t.Deps[0]]
+				pkgOut = filepath.Join(outDir, under.Pkg)
+			}
 		}
 		m.ImportPath = path.Join(goModule, filepath.ToSlash(pkgOut))
 		if _, err := m.WriteGo(pkgOut); err != nil {

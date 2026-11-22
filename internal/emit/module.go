@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/ncmud/swift2go/internal/ast"
 	"github.com/ncmud/swift2go/internal/types"
@@ -488,6 +489,12 @@ func parallel(n int, f func(i int)) {
 
 // SetTarget marks the module as a test target whose code joins the package of under. Package-level names the
 // two modules share, such as file-private globals both declare, are renamed in the test module.
+// SetTestPackage makes m a test target with a Go package of its own, which imports the target it tests like
+// any other dependency. A test target needs one when another of its dependencies imports the tested target.
+func (m *Module) SetTestPackage() {
+	m.Test = true
+}
+
 func (m *Module) SetTarget(under *Module) {
 	m.Test = true
 	m.Pkg = under.Pkg
@@ -1105,6 +1112,9 @@ var goKeywords = map[string]bool{"break": true, "case": true, "chan": true, "con
 
 func goSafe(n string) string {
 	n = strings.Trim(n, "`")
+	if strings.ContainsFunc(n, isRawIdentifierRune) {
+		n = rawIdentifier(n)
+	}
 	if len(n) > 1 && n[0] == '$' && n[1] >= '0' && n[1] <= '9' {
 		return "p" + n[1:]
 	}
@@ -1113,6 +1123,28 @@ func goSafe(n string) string {
 		return n + "_"
 	}
 	return n
+}
+
+// isRawIdentifierRune reports a character that only a raw identifier (“ `get and take` “) can hold.
+func isRawIdentifierRune(r rune) bool {
+	return r != '_' && r != '$' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+}
+
+// rawIdentifier spells a raw identifier's words as one camel-case Go identifier, with an underscore before a
+// leading digit.
+func rawIdentifier(n string) string {
+	var b strings.Builder
+	for i, w := range strings.FieldsFunc(n, isRawIdentifierRune) {
+		if i > 0 {
+			w = capitalize(w)
+		}
+		b.WriteString(w)
+	}
+	out := b.String()
+	if out == "" || unicode.IsDigit(rune(out[0])) {
+		out = "_" + out
+	}
+	return out
 }
 
 func (m *Module) countUnsupported(kind, where string) {

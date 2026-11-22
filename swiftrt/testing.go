@@ -199,9 +199,61 @@ func Catch(body func()) (err error) {
 func IssueRecord(args ...any) {
 	parts := make([]string, 0, len(args))
 	for _, a := range args {
+		if c, ok := a.(*string); ok {
+			// A Comment? argument prints its text, not Optional("...").
+			if c == nil {
+				continue
+			}
+			a = *c
+		}
 		if s := Str(a); s != "" {
 			parts = append(parts, s)
 		}
 	}
 	report(false, "issue recorded: %s", strings.Join(parts, " "))
+}
+
+// CommentInitRawValue is swift-testing's `Comment(rawValue:)`; a Comment is its text.
+func CommentInitRawValue(text string) string { return text }
+
+// CommentRawValue is swift-testing's `Comment.rawValue`.
+func CommentRawValue(c string) string { return c }
+
+// SourceLocationInitFileIDFilePathLineColumn is swift-testing's `SourceLocation(fileID:filePath:line:column:)`,
+// in the `path:line:column` form SourceLocationHere's callers print.
+func SourceLocationInitFileIDFilePathLineColumn(fileID, filePath string, line, column int) any {
+	return filePath + ":" + strconv.Itoa(line) + ":" + strconv.Itoa(column)
+}
+
+// IssueRecordSourceLocation is swift-testing's `Issue.record(_:sourceLocation:)`: a non-fatal test failure
+// reported at the given location.
+func IssueRecordSourceLocation(comment *string, location any) {
+	text := "issue recorded"
+	if comment != nil {
+		text = *comment
+	}
+	report(false, "%s: %s", Str(location), text)
+}
+
+// Test is swift-testing's `Test`: the test a trait scopes.
+type Test struct{ Name string }
+
+// TestCase is swift-testing's `Test.Case`: one run of a test, which a trait scopes when it is not nil.
+type TestCase struct{}
+
+// TestScoping is swift-testing's `TestScoping`: a trait that runs each test inside a scope of its own.
+type TestScoping interface {
+	ProvideScope(test Test, testCase *TestCase, function func())
+}
+
+// WithTraits runs the test body inside the scope of each trait that provides one, the first outermost.
+func WithTraits(name string, body func(), traits ...any) {
+	run := body
+	for i := len(traits) - 1; i >= 0; i-- {
+		if s, ok := traits[i].(TestScoping); ok {
+			inner := run
+			run = func() { s.ProvideScope(Test{Name: name}, &TestCase{}, inner) }
+		}
+	}
+	run()
 }

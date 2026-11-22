@@ -382,3 +382,22 @@ func compareOrdered(a, b any) (int, bool) {
 	}
 	return 0, false
 }
+
+// SliceInitSubstring is Array(_: Substring): its Characters.
+func SliceInitSubstring[S ~[]Character](s Substring) S { return S(StringChars(s.String())) }
+
+// SliceElementsEqualBy is Sequence `elementsEqual(_:by:)`: the same length, and eq holds for each pair.
+func SliceElementsEqualBy[T, U any](a []T, b []U, eq func(T, U) bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !eq(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// BidirectionalCollectionLast is `last` on a collection the runtime keeps as a slice, read through a key path.
+func BidirectionalCollectionLast[T any](xs []T) *T { return SliceLast(xs) }

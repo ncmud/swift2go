@@ -153,9 +153,19 @@ func (m *Module) importedPackages(src string) map[string]string {
 
 // initialValue is the expression that initializes the stored property owner|name, or nil.
 func (m *Module) initialValue(key string) ast.Node {
-	init := m.varInit[key]
+	owner, init := m, m.varInit[key]
+	for _, d := range m.Deps {
+		if init != nil {
+			break
+		}
+		// A dependency's struct, whose implicit memberwise initializer takes the property's initial value.
+		owner, init = d, d.varInit[key]
+	}
+	if init == nil {
+		owner = m
+	}
 	if m.rec != nil {
-		m.observe(obsInit, m.Name, key, hashNode(init))
+		m.observe(obsInit, owner.Name, key, hashNode(init))
 	}
 	return init
 }

@@ -77,7 +77,7 @@ func (e *fileEmitter) expr(n ast.Node) string {
 	}
 	for _, keep := range []string{"swiftrt.Unsupported", "swiftrt.CoalesceRef", "swiftrt.CoalesceOpt", "swiftrt.Flat(", "swiftrt.TryFlat", "swiftrt.TryNil", "swiftrt.Some",
 		"swiftrt.TaskLocalGet", "swiftrt.TaskLocalWithValue", "swiftrt.MapSubscriptDefault", "swiftrt.ForceRef", "swiftrt.Clone", "swiftrt.MustAs", "swiftrt.Copy(",
-		"swiftrt.Dynamic", "swiftrt.Ref(", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.Coalesce(",
+		"swiftrt.Dynamic", "swiftrt.Ref(", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.NSRecursiveLockWithLock", "swiftrt.Coalesce(",
 		"swiftrt.OptFlatMap", "swiftrt.RefFlatMap"} {
 		if strings.HasPrefix(out, keep) {
 			return out
@@ -129,6 +129,9 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if e.exprGoType(n) == "error" && e.exprGoType(sub) != "error" {
 			// A Swift error value need not implement Go's error; the runtime carries it as one.
 			return "swiftrt.ErrorOf(" + e.expr(sub) + ")"
+		}
+		if e.typedErasure[nodeKey(n)] {
+			return e.exprGoType(n) + "(" + e.expr(sub) + ")"
 		}
 		return e.expr(sub)
 	case "dot_syntax_base_ignored":
@@ -867,6 +870,11 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 		if strings.Contains(dem, "(in ") || strings.HasPrefix(usr, "s:") && strings.Contains(usr, "L_") {
 			return goSafe(name)
 		}
+		if name == "$kp$" {
+			// The key path a key-path function binds, which an attribute's argument (`@Test(arguments:)`)
+			// declares outside any function.
+			return goSafe(name)
+		}
 		if name := e.m.foreignValueName(usr, name, parseDeclSig(dem)); name != "" {
 			return "swiftrt." + name
 		}
@@ -903,11 +911,38 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 
 func (e *fileEmitter) isLocalFunc(info *DeclInfo) bool { return false }
 
+// stdOperatorValue renders a standard-library comparison operator passed as a function (`by: ==`), such as the
+// == of tuples, as a Go func literal. It returns "" for other operators.
+func (e *fileEmitter) stdOperatorValue(op string, n ast.Node) string {
+	ft := e.m.typeOf(n.Type())
+	if ft == nil || ft.Kind != types.Func || len(ft.Args) != 2 {
+		return ""
+	}
+	var body string
+	switch op {
+	case "==":
+		body = "swiftrt.Equal(a, b)"
+	case "!=":
+		body = "!swiftrt.Equal(a, b)"
+	case "<", ">", "<=", ">=":
+		body = lessOp("swiftrt.Less", op, "a", "b")
+	default:
+		return ""
+	}
+	gt := e.m.GoType(ft.Args[0], e.generics)
+	return "func(a, b " + gt + ") bool { return " + body + " }"
+}
+
 func (e *fileEmitter) stdFuncValue(dem string, n ast.Node) string {
 	sig := parseDeclSig(dem)
 	if dem == "c:@environ" {
 		// Darwin's overlay computes environ; Linux's C libraries export the global itself.
 		return "swiftrt.CEnviron()"
+	}
+	if sig.owner == "Swift" && isOperatorName(sig.base) {
+		if f := e.stdOperatorValue(sig.base, n); f != "" {
+			return f
+		}
 	}
 	if sig.owner == "Swift" || sig.owner == "" {
 		return "swiftrt." + capitalize(sig.base)
@@ -1207,13 +1242,22 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		}
 		// A missing key reads as Go's zero value, which serves for a zero default, except that a nil
 		// map (an empty dictionary or set) cannot be written into.
-		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" && isZeroLiteral(args[1].Child("expr")) && !strings.HasPrefix(e.exprGoType(n), "map[") {
+		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" && isZeroLiteral(args[1].Child("expr")) && !strings.HasPrefix(e.exprGoType(n), "map[") &&
+			!isFuncDict(e.m.Recv(e.m.typeOf(n.Type()))) {
 			return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "]"
 		}
 		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" {
 			m := e.lvalue(n.Child("base"))
 			k := e.newTmp("key")
 			e.w("%s := %s\nif _, ok := %s[%s]; !ok {\n%s[%s] = %s\n}\n", k, e.expr(args[0].Child("expr")), m, k, m, k, e.defaultValue(args[1].Child("expr")))
+			if isFuncDict(e.m.Recv(e.m.typeOf(n.Type()))) {
+				// A runtime dictionary is a struct, and a Go map's element cannot be addressed: change a copy,
+				// then store it back.
+				tmp := e.newTmp("elem")
+				e.w("%s := %s[%s]\n", tmp, m, k)
+				e.post = append(e.post, m+"["+k+"] = "+tmp)
+				return tmp
+			}
 			return m + "[" + k + "]"
 		}
 		if recv := e.m.Recv(bt); isFuncDict(recv) && (len(args) == 1 || len(args) == 2 && args[1].Str("label") == "default") {
@@ -2078,6 +2122,17 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 				}
 			}
 		}
+		if i < len(params) && !foreign {
+			// A class reference or existential passed for a generic `T?` parameter is the reference itself in Go,
+			// from which Go would infer T as the class's struct: pass a pointer to the reference instead.
+			if pt := e.m.typeOf(params[i].Str("interface_type")); pt != nil && pt.Kind == types.Optional && len(pt.Args) == 1 && isGenericParam(pt.Args[0]) {
+				if at := e.m.typeOf(a.node.Type()); at != nil && at.Kind == types.Optional && len(at.Args) == 1 && !isGenericParam(at.Args[0]) && at.Args[0].Kind != types.Optional {
+					if gt := e.m.GoType(at.Args[0], e.generics); e.m.isReferenceGo(at.Args[0], gt) || gt == "error" {
+						s = "swiftrt.SomeRef(" + s + ")"
+					}
+				}
+			}
+		}
 		if i < len(params) && !foreign && callee != nil && callee.Node != nil {
 			// [Concrete] passed for [S] where S: LocalProtocol, which is a slice of the protocol's interface.
 			if pt := e.m.typeOf(params[i].Str("interface_type")); pt != nil && pt.Kind == types.Array && len(pt.Args) == 1 && isGenericParam(pt.Args[0]) {
@@ -2426,6 +2481,20 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 	}
 	if b := d.Str("base_name"); strings.HasPrefix(b, "withLock") || strings.HasPrefix(b, "withValue") || b == "sync" || b == "withCriticalRegion" || b == "withCString" || strings.HasPrefix(b, "withUnsafe") {
 		e.unitCallee = true
+	}
+	if strings.HasPrefix(d.Str("base_name"), "withValue") && strings.Contains(sig.owner, "TaskLocal") && len(as) > 0 {
+		// A concrete value bound to a protocol-typed task local: Go infers the task local's type from both
+		// arguments, so the value is converted to the interface.
+		v := as[0].node
+		for v != nil && v.Kind() == "inject_into_optional" {
+			v = v.Child("sub_expr")
+		}
+		if v != nil && v.Kind() == "erasure_expr" {
+			if e.typedErasure == nil {
+				e.typedErasure = map[uintptr]bool{}
+			}
+			e.typedErasure[nodeKey(v)] = true
+		}
 	}
 	if d.Str("base_name") == "joined" && len(as) == 0 && base != nil {
 		if bt := e.m.typeOf(base.Type()); bt != nil && (bt.Kind == types.Array || e.m.Recv(bt) == "Slice") && len(bt.Args) == 1 {
@@ -2943,6 +3012,17 @@ func (e *fileEmitter) optionalEqual(lt, rt *types.Type) (string, bool) {
 	return "", false
 }
 
+// unboundedTypeParam reports whether t is one of the function's type parameters with no Go constraint that
+// allows == or <, such as a parameter that is only Equatable or Comparable.
+func (e *fileEmitter) unboundedTypeParam(t *types.Type) bool {
+	gt := e.m.GoType(t, e.generics)
+	if !slices.Contains(e.typeParams, gt) {
+		return false
+	}
+	_, bounded := e.typeBounds[gt]
+	return !bounded
+}
+
 func (e *fileEmitter) opDecl(n ast.Node) ast.Node {
 	fn := stripConv(n.Child("fn"))
 	if fn.Kind() == "dot_syntax_call_expr" {
@@ -3023,7 +3103,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			}
 			return s
 		}
-		if lt.Kind == types.Optional || !e.m.isGoComparable(lt) {
+		if lt.Kind == types.Optional || !e.m.isGoComparable(lt) || e.unboundedTypeParam(lt) {
 			fn := "swiftrt.Equal"
 			if op == "!=" {
 				return "!" + fn + "(" + e.expr(l) + ", " + e.expr(r) + ")"
@@ -3035,7 +3115,11 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		if rt := e.m.typeOf(r.Type()); lt.Kind == types.Named && rt != nil && rt.Kind == types.Named && isIntegerName(lt.Name) && isIntegerName(rt.Name) && lt.Name != rt.Name {
 			return "swiftrt.IntCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
 		}
-		if less := e.lessFunc(lt); less != "" {
+		less := e.lessFunc(lt)
+		if less == "" && e.unboundedTypeParam(lt) {
+			less = "swiftrt.Less"
+		}
+		if less != "" {
 			a, b := e.expr(l), e.expr(r)
 			if op == "<" || op == ">=" || (e.isPure(l) && e.isPure(r)) {
 				return lessOp(less, op, a, b)

@@ -99,9 +99,13 @@ func transpileMapped(t *testing.T, fixture string, mapped map[string]string, tar
 		m.Mappings = mappings
 		pkgOut := strings.ToLower(name)
 		if tg.Type == "test" {
-			under := byName[tg.Deps[0]]
-			m.SetTarget(under)
-			pkgOut = under.Pkg
+			if tg.TestCycles(described) {
+				m.SetTestPackage()
+			} else {
+				under := byName[tg.Deps[0]]
+				m.SetTarget(under)
+				pkgOut = under.Pkg
+			}
 		}
 		m.ImportPath = "github.com/ncmud/swift2go/" + rel + "/" + pkgOut
 		if _, err := m.WriteGo(filepath.Join(outDir, pkgOut)); err != nil {

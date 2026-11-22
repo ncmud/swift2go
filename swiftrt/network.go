@@ -29,6 +29,15 @@ func URLRequestInitUrl(u URL) URLRequest {
 	return URLRequest{Url: &u, HttpMethod: new("GET"), TimeoutInterval: 60}
 }
 
+// URLRequestUrl is `URLRequest.url`, read where the emitter calls the property's getter.
+func URLRequestUrl(r URLRequest) *URL { return r.Url }
+
+// URLRequestHttpMethod is `URLRequest.httpMethod`.
+func URLRequestHttpMethod(r URLRequest) *string { return r.HttpMethod }
+
+// URLRequestHttpBody is `URLRequest.httpBody`.
+func URLRequestHttpBody(r URLRequest) *[]byte { return r.HttpBody }
+
 // URLRequestSetValueForHTTPHeaderField is `URLRequest.setValue(_:forHTTPHeaderField:)`: it replaces the
 // field's value, matching the name case-insensitively, or removes the field when value is nil.
 func URLRequestSetValueForHTTPHeaderField(r *URLRequest, value *string, field string) {
