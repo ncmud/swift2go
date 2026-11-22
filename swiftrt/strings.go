@@ -48,7 +48,7 @@ func lastGrapheme(s string) (Character, int) {
 		return s[n-1:], n - 1
 	}
 	var last string
-	for rest, state := s, -1; rest != ""; {
+	for rest, state := s[graphemeRestart(s, n-1):], -1; rest != ""; {
 		last, rest, state = firstGrapheme(rest, state)
 	}
 	return last, n - len(last)

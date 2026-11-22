@@ -1,6 +1,10 @@
 package swiftrt
 
-import "github.com/rivo/uniseg"
+import (
+	"unicode/utf8"
+
+	"github.com/rivo/uniseg"
+)
 
 // firstGrapheme splits the first grapheme cluster off s, threading uniseg's state between calls (-1 at the
 // start). An ASCII byte followed by another ASCII byte other than CR LF is a cluster of its own, and the
@@ -21,4 +25,25 @@ func graphemeCount(s string) int {
 		n++
 	}
 	return n
+}
+
+// graphemeRestart is the largest offset i <= at at which s certainly has a cluster boundary, or 0. It
+// looks back for an ASCII byte that no cluster continues across: every one except the LF of a CR LF and
+// a printable byte after a Prepend character. Segmenting from there with a fresh state gives the same
+// clusters as segmenting from the start of s, so text with ASCII in it is segmented backwards in time
+// proportional to the distance walked, not to the length of s.
+func graphemeRestart(s string, at int) int {
+	for i := at; i > 0; i-- {
+		switch b := s[i]; {
+		case b >= 0x80, b == '\n' && s[i-1] == '\r':
+			continue
+		case s[i-1] < 0x80:
+			return i
+		}
+		_, size := utf8.DecodeLastRuneInString(s[:i])
+		if c, _, _, _ := uniseg.FirstGraphemeClusterInString(s[i-size:i+1], -1); len(c) == size {
+			return i
+		}
+	}
+	return 0
 }

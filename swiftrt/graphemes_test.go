@@ -99,3 +99,30 @@ func BenchmarkStringDropLastLoop(b *testing.B) {
 		}
 	}
 }
+
+// TestBackwardSegmentationMatchesForward checks lastGrapheme and graphemeBoundary, which restart
+// segmentation at an ASCII byte near the end, against segmentation from the start, at every offset.
+func TestBackwardSegmentationMatchesForward(t *testing.T) {
+	text := strings.Join(graphemeSamples, "x") + "؀؀b\r\ńa\U0001F1FA\U0001F1F8\U0001F1EBzक्क"
+	boundaries := map[int]bool{0: true}
+	off := 0
+	for _, c := range StringChars(text) {
+		off += len(c)
+		boundaries[off] = true
+	}
+	for end := 1; end <= len(text); end++ {
+		if !boundaries[end] {
+			continue
+		}
+		chars := StringChars(text[:end])
+		want := chars[len(chars)-1]
+		if got, at := lastGrapheme(text[:end]); got != want || at != end-len(want) {
+			t.Errorf("lastGrapheme(text[:%d]) = %q at %d, want %q", end, got, at, want)
+		}
+	}
+	for i := 0; i <= len(text); i++ {
+		if got := graphemeBoundary(text, i); got != boundaries[i] {
+			t.Errorf("graphemeBoundary(text, %d) = %v, want %v", i, got, boundaries[i])
+		}
+	}
+}
