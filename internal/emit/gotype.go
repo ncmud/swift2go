@@ -172,6 +172,10 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		return "string"
 	case "Testing.SourceLocation":
 		return "any"
+	case "Testing.Test":
+		return "swiftrt.Test"
+	case "Testing.Test.Case":
+		return "*swiftrt.TestCase"
 	case "_Concurrency.TaskLocal":
 		return "*swiftrt.TaskLocal[" + arg(0) + "]"
 	}
@@ -531,6 +535,7 @@ var foreignTypes = map[string]string{
 	"__C.NSDateFormatter":                     "*swiftrt.DateFormatter",
 	"__C.NSISO8601DateFormatter":              "*swiftrt.ISO8601DateFormatter",
 	"__C.NSLock":                              "*swiftrt.Lock",
+	"__C.NSRecursiveLock":                     "*swiftrt.RecursiveLock",
 	"__C.NSRegularExpression":                 "*swiftrt.Regex",
 	"Foundation.JSONEncoder":                  "*swiftrt.JSONEncoder",
 	"Foundation.JSONDecoder":                  "*swiftrt.JSONDecoder",
@@ -559,7 +564,7 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 		return true
 	case types.Named:
 		switch t.Name {
-		case "Swift.Array", "Swift.Set", "Swift.Dictionary", "Swift.ArraySlice", "Swift.Substring":
+		case "Swift.Array", "Swift.Set", "Swift.Dictionary", "Swift.ArraySlice", "Swift.Substring", "Foundation.Data":
 			return false
 		case "Swift.AnyHashable":
 			// An AnyHashable can hold an array, which cannot key a Go map.

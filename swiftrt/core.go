@@ -698,3 +698,29 @@ func AnyFn2[A, B any](f func(A, B)) func(A, B) any { return func(a A, b B) any {
 // Eval returns v. Wrapping an operand in it makes Go read the operand before the calls to its
 // right, as Swift does.
 func Eval[T any](v T) T { return v }
+
+// SwiftLesser is a type that declares its own `<`.
+type SwiftLesser interface{ SwiftLess(other any) bool }
+
+// Less is `a < b` on a type parameter that is only Comparable: Go's < for numbers and strings, and the type's
+// own `<` otherwise.
+func Less[T any](a, b T) bool {
+	if l, ok := any(a).(SwiftLesser); ok {
+		return l.SwiftLess(b)
+	}
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	switch va.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return va.Int() < vb.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return va.Uint() < vb.Uint()
+	case reflect.Float32, reflect.Float64:
+		return va.Float() < vb.Float()
+	case reflect.String:
+		return va.String() < vb.String()
+	}
+	if sa, ok := any(a).(Substring); ok {
+		return sa.String() < any(b).(Substring).String()
+	}
+	panic(fmt.Sprintf("swiftrt.Less: %T has no <", a))
+}

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf16"
@@ -319,6 +320,44 @@ func NSLockLock(l *Lock) { l.mu.Lock() }
 
 // NSLockUnlock is Foundation `NSLock.unlock()`.
 func NSLockUnlock(l *Lock) { l.mu.Unlock() }
+
+// RecursiveLock is Foundation `NSRecursiveLock`: the goroutine that holds it may lock it again.
+type RecursiveLock struct {
+	mu    sync.Mutex
+	owner atomic.Uint64
+	depth int
+}
+
+// NSRecursiveLockInit is Foundation `NSRecursiveLock()`.
+func NSRecursiveLockInit() *RecursiveLock { return &RecursiveLock{} }
+
+// NSRecursiveLockLock is Foundation `NSRecursiveLock.lock()`.
+func NSRecursiveLockLock(l *RecursiveLock) {
+	g := goroutineID()
+	if l.owner.Load() == g {
+		l.depth++
+		return
+	}
+	l.mu.Lock()
+	l.owner.Store(g)
+	l.depth = 1
+}
+
+// NSRecursiveLockUnlock is Foundation `NSRecursiveLock.unlock()`.
+func NSRecursiveLockUnlock(l *RecursiveLock) {
+	l.depth--
+	if l.depth == 0 {
+		l.owner.Store(0)
+		l.mu.Unlock()
+	}
+}
+
+// NSRecursiveLockWithLock is Foundation `NSRecursiveLock.withLock`.
+func NSRecursiveLockWithLock[R any](l *RecursiveLock, body func() R) R {
+	NSRecursiveLockLock(l)
+	defer NSRecursiveLockUnlock(l)
+	return body()
+}
 
 // Mutex is Synchronization `Mutex`.
 type Mutex[T any] struct {

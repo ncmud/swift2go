@@ -45,6 +45,7 @@ type fileEmitter struct {
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
+	typedErasure  map[uintptr]bool        // erasures converted to the interface explicitly, for Go's type inference
 	initRet       string                  // what `return` yields inside an init: "self", "&self", or "true" in a class initializer body
 	initFail      string                  // what `return nil` yields inside a failable init
 	initOwner     string                  // the class whose initializer body is being emitted
@@ -305,10 +306,11 @@ func (e *fileEmitter) member(n, mem ast.Node, self *DeclInfo) {
 }
 
 // equalityHook gives a type that declares its own `==` a SwiftEqual method, so the runtime's
-// equality (`!=`, contains, firstIndex(of:), array ==) calls it as Swift does.
+// equality (`!=`, contains, firstIndex(of:), array ==) calls it as Swift does, and one that declares its
+// own `<` a SwiftLess method, which swiftrt.Less calls for a type parameter that is only Comparable.
 func (e *fileEmitter) equalityHook(fn ast.Node, self *DeclInfo) {
 	info := e.info(fn)
-	if self == nil || self.Node == nil || info == nil || fn.Name() != "==" || !info.Static {
+	if self == nil || self.Node == nil || info == nil || (fn.Name() != "==" && fn.Name() != "<") || !info.Static {
 		return
 	}
 	recv := ""
@@ -331,6 +333,10 @@ func (e *fileEmitter) equalityHook(fn ast.Node, self *DeclInfo) {
 		if e.m.GoType(e.m.typeOf(p.Str("interface_type")), nil) != recv {
 			return
 		}
+	}
+	if fn.Name() == "<" {
+		e.w("// SwiftLess is %s's own <.\nfunc (self %s) SwiftLess(other any) bool {\n\to, ok := other.(%s)\n\treturn ok && %s(self, o)\n}\n\n", self.GoName, recv, recv, info.GoName)
+		return
 	}
 	e.w("// SwiftEqual is %s's own ==.\nfunc (self %s) SwiftEqual(other any) bool {\n\to, ok := other.(%s)\n\treturn ok && %s(self, o)\n}\n\n", self.GoName, recv, recv, info.GoName)
 }
@@ -1259,13 +1265,15 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			}
 			continue
 		case "Swift.Comparable":
-			// `<` and `==` on a type parameter need Go's ordered types.
-			if own[param] {
-				e.typeBounds[g[param]] = "cmp.Ordered"
-			}
+			// `<` and `==` on the parameter call swiftrt.Less and swiftrt.Equal, so a struct with its own `<` is
+			// a valid type argument.
 			continue
-		case "Swift.Hashable", "Swift.Equatable":
-			// Map keys and == need Go's comparable; a stronger bound (Integer) already implies it.
+		case "Swift.Equatable":
+			// == on the parameter compares with swiftrt.Equal, so arrays, dictionaries and structs holding
+			// them, which Go cannot compare, are valid type arguments.
+			continue
+		case "Swift.Hashable":
+			// Map keys need Go's comparable; a stronger bound (Integer) already implies it.
 			if own[param] {
 				if _, set := e.typeBounds[g[param]]; !set {
 					e.typeBounds[g[param]] = "comparable"
@@ -1590,7 +1598,12 @@ func (e *fileEmitter) goTest(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		name = "Test" + self.GoName + info.GoName
 	}
 	params := n.Child("params").List("params")
+	skips, scopes := e.testTraits(n, self)
 	call := func(args string) {
+		if len(scopes) > 0 {
+			e.w("\tswiftrt.WithTraits(%q, func() {\n", name)
+			defer e.w("\t}, %s)\n", strings.Join(scopes, ", "))
+		}
 		switch {
 		case self == nil || info.Static:
 			e.w("\t%s(%s)\n", info.GoName, args)
@@ -1604,7 +1617,7 @@ func (e *fileEmitter) goTest(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		}
 	}
 	if len(params) == 0 {
-		e.w("func %s(t *testing.T) {\n\tdefer swiftrt.BindT(t)()\n", name)
+		e.w("func %s(t *testing.T) {\n%s\tdefer swiftrt.BindT(t)()\n", name, skips)
 		call("")
 		e.w("}\n\n")
 		return
@@ -1625,7 +1638,7 @@ func (e *fileEmitter) goTest(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		e.w("func %s(t *testing.T) { t.Skip(\"swift2go: parameterized @Test\") }\n\n", name)
 		return
 	}
-	e.w("func %s(t *testing.T) {\n", name)
+	e.w("func %s(t *testing.T) {\n%s", name, skips)
 	var names []string
 	for i, ax := range argExprs {
 		var et string
@@ -1662,6 +1675,74 @@ func (e *fileEmitter) goTest(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		e.w("}\n")
 	}
 	e.w("}\n\n")
+}
+
+// testTraits renders the traits of a @Test function and of its @Suite: the Go statements that skip the test
+// when a ConditionTrait (`.enabled(if:)`, `.disabled`) rules it out, and the TestScoping traits that wrap it,
+// the suite's outermost. The other traits of the Testing module, such as `.serialized` and `.timeLimit`, change
+// nothing in Go.
+func (e *fileEmitter) testTraits(fn ast.Node, self *DeclInfo) (skips string, scopes []string) {
+	var attrs []ast.Node
+	if self != nil && self.Node != nil {
+		attrs = append(attrs, self.Node.List("attrs")...)
+	}
+	attrs = append(attrs, fn.List("attrs")...)
+	var b strings.Builder
+	for _, a := range attrs {
+		if a.Kind() != "custom_attr" {
+			continue
+		}
+		for _, arg := range a.Child("args").List("args") {
+			if arg.Str("label") == "arguments" {
+				break
+			}
+			x := arg.Child("expr")
+			for x != nil && (x.Kind() == "erasure_expr" || x.Kind() == "inject_into_optional") {
+				x = x.Child("sub_expr")
+			}
+			if x == nil {
+				continue
+			}
+			t := e.m.typeOf(x.Type())
+			if t == nil || t.Kind != types.Named || t.Name == "Swift.String" {
+				continue
+			}
+			if t.Name == "Testing.ConditionTrait" {
+				b.WriteString(e.conditionSkip(x))
+				continue
+			}
+			if strings.HasPrefix(t.Name, "Testing.") {
+				continue
+			}
+			scopes = append(scopes, e.expr(x))
+		}
+	}
+	return b.String(), scopes
+}
+
+// conditionSkip renders the t.Skip for a ConditionTrait: `.disabled(...)`, or `.enabled(if:)` whose condition
+// is false.
+func (e *fileEmitter) conditionSkip(call ast.Node) string {
+	fn := stripConv(call.Child("fn"))
+	if fn.Kind() == "dot_syntax_call_expr" {
+		fn = stripConv(fn.Child("fn"))
+	}
+	switch fn.Child("decl").Str("base_name") {
+	case "disabled":
+		return "\tt.Skip(\"disabled by .disabled\")\n"
+	case "enabled":
+		for _, arg := range call.Child("args").List("args") {
+			if arg.Str("label") != "if" {
+				continue
+			}
+			cond := arg.Child("expr")
+			if cond.Kind() == "autoclosure_expr" {
+				cond = cond.Child("single_expr_body")
+			}
+			return "\tif !(" + e.expr(cond) + ") {\n\t\tt.Skip(\"disabled by .enabled(if:)\")\n\t}\n"
+		}
+	}
+	return "\t_ = " + e.m.Unsup("condition-trait", e.where, "") + "\n"
 }
 
 func (m *Module) zeroArgInit(self *DeclInfo) string {

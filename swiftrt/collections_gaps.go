@@ -848,3 +848,9 @@ func RangeCountWhere[T Integer](r Range[T], f func(T) bool) int {
 	}
 	return n
 }
+
+// ReversedCollectionFilter is `xs.reversed().filter`; the runtime keeps the reversed collection as a slice.
+func ReversedCollectionFilter[T any](xs []T, f func(T) bool) []T { return SliceFilter(xs, f) }
+
+// ReversedCollectionPrefixInt is `xs.reversed().prefix(n)`.
+func ReversedCollectionPrefixInt[T any](xs []T, n int) []T { return xs[:min(max(n, 0), len(xs))] }

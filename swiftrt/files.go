@@ -348,6 +348,9 @@ func NSFileHandleCloseFile(h FileHandle) {
 	_ = h.File.Close()
 }
 
+// NSFileManagerTemporaryDirectory is FileManager's `temporaryDirectory`: the directory of os.TempDir.
+func NSFileManagerTemporaryDirectory(FileManager) URL { return directoryURL(os.TempDir()) }
+
 // NSFileManagerCurrentDirectoryPath is Foundation `FileManager.currentDirectoryPath`.
 func NSFileManagerCurrentDirectoryPath(FileManager) string {
 	dir, err := os.Getwd()

@@ -54,6 +54,36 @@ func (t Target) AllDeps() []string {
 	return append(append([]string{}, t.Deps...), t.ProductDeps...)
 }
 
+// TestCycles reports whether the test target t imports a target that depends, directly or not, on the target
+// it tests (its first dependency). Go would then see an import cycle if t's tests joined that target's
+// package, so they need a package of their own.
+func (t Target) TestCycles(targets map[string]Target) bool {
+	if len(t.Deps) == 0 {
+		return false
+	}
+	under := t.Deps[0]
+	seen := map[string]bool{}
+	var reaches func(name string) bool
+	reaches = func(name string) bool {
+		if seen[name] {
+			return false
+		}
+		seen[name] = true
+		for _, d := range targets[name].AllDeps() {
+			if d == under || reaches(d) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, d := range t.AllDeps()[1:] {
+		if d != under && reaches(d) {
+			return true
+		}
+	}
+	return false
+}
+
 // SourcePaths are the absolute paths of every Swift file compiled into the target.
 func (t Target) SourcePaths() []string {
 	var paths []string
