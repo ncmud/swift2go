@@ -1197,7 +1197,7 @@ func (e *fileEmitter) captureList(n ast.Node) string {
 				meta = true
 			}
 		}
-		if meta || isIdentityCapture(c) {
+		if meta || (isIdentityCapture(c) && !capturesVar(c)) {
 			continue
 		}
 		e.localBinding(c)
@@ -2640,6 +2640,16 @@ func isIdentityCapture(c ast.Node) bool {
 		init = init.Child("sub_expr")
 	}
 	return init != nil && init.Kind() == "declref_expr" && init.Child("decl").Str("base_name") == patternName(pes[0].Child("pattern"))
+}
+
+// capturesVar reports an identity capture of a `var`, whose value Swift copies when the closure is
+// created; a `let` cannot change afterwards, so the closure may read it directly.
+func capturesVar(c ast.Node) bool {
+	init := c.List("pattern_entries")[0].Child("processed_init")
+	for init != nil && init.Kind() == "paren_expr" {
+		init = init.Child("sub_expr")
+	}
+	return init != nil && init.Kind() == "load_expr"
 }
 
 // metaReceiver turns a metatype expression (`A.self`, `Self`, `Foo.self`) into a value whose methods
