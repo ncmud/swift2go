@@ -2,11 +2,14 @@ package swiftmod
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ncmud/swift2go/internal/swifttest"
 )
 
 func write(t *testing.T, path, content string, mtime time.Time) {
@@ -109,5 +112,40 @@ func TestAddGeneratedReadsPluginOutputsAndRejectsStaleOnes(t *testing.T) {
 	missing := spec
 	if err := AddGenerated(&missing, filepath.Join(t.TempDir(), ".build"), derived, Destination{}); err == nil {
 		t.Error("AddGenerated without plugin outputs succeeded")
+	}
+}
+
+// TestDescribeResolvesIntoAnEmptyBuildDir checks that a remote dependency described for a build directory
+// of its own is checked out there, so its targets' directories outlive the description.
+func TestDescribeResolvesIntoAnEmptyBuildDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("resolves a SwiftPM package")
+	}
+	swifttest.Require(t, "swift", "git")
+	now := time.Now()
+	dep := filepath.Join(t.TempDir(), "dep")
+	write(t, filepath.Join(dep, "Package.swift"), "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: \"dep\", products: [.library(name: \"Dep\", targets: [\"Dep\"])], targets: [.target(name: \"Dep\")])\n", now)
+	write(t, filepath.Join(dep, "Sources/Dep/Dep.swift"), "public let dep = 1\n", now)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "dep"}, {"tag", "1.0.0"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dep
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	pkg := t.TempDir()
+	write(t, filepath.Join(pkg, "Package.swift"), "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: \"app\", dependencies: [.package(url: \"file://"+dep+"\", from: \"1.0.0\")], targets: [.target(name: \"App\", dependencies: [.product(name: \"Dep\", package: \"dep\")])])\n", now)
+	write(t, filepath.Join(pkg, "Sources/App/App.swift"), "import Dep\n", now)
+	build := filepath.Join(t.TempDir(), "linux-build")
+	targets, err := Describe(pkg, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ok := targets["Dep"]
+	if !ok {
+		t.Fatalf("no Dep target among %v", targets)
+	}
+	if !strings.HasPrefix(d.Dir, build) || !exists(filepath.Join(d.Dir, d.Path, "Dep.swift")) {
+		t.Errorf("Dep is described at %s, not in a checkout under %s that exists", d.Dir, build)
 	}
 }
