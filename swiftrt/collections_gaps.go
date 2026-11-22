@@ -4,6 +4,7 @@ import (
 	"hash/maphash"
 	"reflect"
 	"slices"
+	"strings"
 )
 
 // RangeCompactMap is `(lo..<hi).compactMap`.
@@ -619,8 +620,12 @@ func IndexingIteratorNext[T any](it *IndexingIterator[T]) *T {
 
 var hasherSeed = maphash.MakeSeed()
 
-// Hasher is Swift `Hasher`, seeded once per process.
-type Hasher struct{ h maphash.Hash }
+// Hasher is Swift `Hasher`, seeded once per process. A Hasher with a key collects the canonical
+// rendering of what is combined into it, for keying runtime maps by a custom hash(into:).
+type Hasher struct {
+	h   maphash.Hash
+	key *strings.Builder
+}
 
 func hasherIn(h *any) *Hasher {
 	if hh, ok := (*h).(*Hasher); ok {
@@ -639,7 +644,13 @@ func HasherCombine[T comparable](h *any, v T) {
 		hv.Hash(h)
 		return
 	}
-	maphash.WriteComparable(&hasherIn(h).h, v)
+	hh := hasherIn(h)
+	if hh.key != nil {
+		writeKey(hh.key, reflect.ValueOf(v))
+		hh.key.WriteString(",")
+		return
+	}
+	maphash.WriteComparable(&hh.h, v)
 }
 
 // HasherFinalize is `Hasher.finalize()`.

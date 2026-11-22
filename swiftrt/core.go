@@ -126,6 +126,23 @@ func Equal[T any](a, b T) bool { return equalValues(reflect.ValueOf(a), reflect.
 
 var substringType = reflect.TypeFor[Substring]()
 
+// SwiftEqualer is a type that declares its own `==`.
+type SwiftEqualer interface{ SwiftEqual(other any) bool }
+
+// customEqual returns v's own `==`. A pointer to a struct is an Optional, whose == unwraps it first.
+func customEqual(v reflect.Value) (SwiftEqualer, bool) {
+	if !v.CanInterface() {
+		return nil, false
+	}
+	if v.Kind() == reflect.Pointer {
+		if _, class := v.Interface().(SwiftClass); !class {
+			return nil, false
+		}
+	}
+	eq, ok := v.Interface().(SwiftEqualer)
+	return eq, ok
+}
+
 // equalValues is reflect.DeepEqual except that Substrings compare by content, as Swift's do.
 func equalValues(a, b reflect.Value) bool {
 	if !a.IsValid() || !b.IsValid() {
@@ -133,6 +150,12 @@ func equalValues(a, b reflect.Value) bool {
 	}
 	if a.Type() == substringType && b.Type() == substringType {
 		return a.Interface().(Substring).String() == b.Interface().(Substring).String()
+	}
+	if eq, ok := customEqual(a); ok {
+		if a.Kind() == reflect.Pointer && (a.IsNil() || b.Kind() == reflect.Pointer && b.IsNil()) {
+			return a.IsNil() && b.Kind() == reflect.Pointer && b.IsNil()
+		}
+		return b.CanInterface() && eq.SwiftEqual(b.Interface())
 	}
 	switch a.Kind() {
 	case reflect.Slice, reflect.Array:

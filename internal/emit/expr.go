@@ -2285,6 +2285,10 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		if r.Kind() == "nil_literal_expr" || l.Kind() == "nil_literal_expr" {
 			return e.expr(l) + " " + op + " " + e.expr(r)
 		}
+		if op == "!=" && lt.Kind == types.Named && e.m.declaresMember(lt.Name, "==") {
+			// The standard library's != negates the type's own ==.
+			return "!swiftrt.Equal(" + e.expr(l) + ", " + e.expr(r) + ")"
+		}
 		if rt := e.m.typeOf(r.Type()); lt.Kind == types.Named && rt != nil && rt.Kind == types.Named && isIntegerName(lt.Name) && isIntegerName(rt.Name) && lt.Name != rt.Name {
 			return "swiftrt.IntCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
 		}

@@ -466,7 +466,11 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 		return true
 	case types.Named:
 		switch t.Name {
-		case "Swift.Array", "Swift.Set", "Swift.Dictionary", "Swift.ArraySlice":
+		case "Swift.Array", "Swift.Set", "Swift.Dictionary", "Swift.ArraySlice", "Swift.Substring":
+			return false
+		}
+		if m.declaresMember(t.Name, "hash") {
+			// A custom hash(into:) goes with a custom ==, which Go map keys would not use.
 			return false
 		}
 		if m.typeKinds[t.Name] != "struct_decl" || seen[t.Name] {
@@ -492,6 +496,28 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 		return k
 	}
 	return true
+}
+
+// declaresMember reports whether the local or dependency type q declares a method named name, in
+// its body or an extension. Members the compiler synthesizes do not count.
+func (m *Module) declaresMember(q, name string) bool {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[q] == "" {
+			continue
+		}
+		if mod.methodNames == nil {
+			mod.methodNames = map[string]bool{}
+			for _, d := range mod.decls {
+				if d.Kind == "func_decl" && d.Node != nil && !d.Node.Implicit() {
+					mod.methodNames[d.Owner+" "+d.Node.Name()] = true
+				}
+			}
+		}
+		if mod.methodNames[q+" "+name] {
+			return true
+		}
+	}
+	return false
 }
 
 func isGenericParamType(t *types.Type) bool {

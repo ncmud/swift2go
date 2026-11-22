@@ -181,6 +181,7 @@ func (e *fileEmitter) member(n, mem ast.Node, self *DeclInfo) {
 		switch mem.Kind() {
 		case "func_decl":
 			e.funcDecl(mem, self)
+			e.equalityHook(mem, self)
 		case "constructor_decl":
 			e.ctorDecl(mem, self, n)
 		case "var_decl":
@@ -215,6 +216,37 @@ func (e *fileEmitter) member(n, mem ast.Node, self *DeclInfo) {
 			e.m.Unsup("member:"+mem.Kind(), shortPath(e.file.Filename), "")
 		}
 	}
+}
+
+// equalityHook gives a type that declares its own `==` a SwiftEqual method, so the runtime's
+// equality (`!=`, contains, firstIndex(of:), array ==) calls it as Swift does.
+func (e *fileEmitter) equalityHook(fn ast.Node, self *DeclInfo) {
+	info := e.info(fn)
+	if self == nil || self.Node == nil || info == nil || fn.Name() != "==" || !info.Static {
+		return
+	}
+	recv := ""
+	switch self.Kind {
+	case "struct_decl", "enum_decl":
+		recv = self.GoName
+	case "class_decl":
+		recv = "*" + self.GoName
+	default:
+		return
+	}
+	if q := e.m.qualify(self.Owner, self.Node.Name()); len(e.m.TypeParams(q)) > 0 || e.m.IsPayloadEnum(q) {
+		return
+	}
+	ps := fn.Child("params").List("params")
+	if len(ps) != 2 {
+		return
+	}
+	for _, p := range ps {
+		if e.m.GoType(e.m.typeOf(p.Str("interface_type")), nil) != recv {
+			return
+		}
+	}
+	e.w("// SwiftEqual is %s's own ==.\nfunc (self %s) SwiftEqual(other any) bool {\n\to, ok := other.(%s)\n\treturn ok && %s(self, o)\n}\n\n", self.GoName, recv, recv, info.GoName)
 }
 
 func (e *fileEmitter) findVar(typeNode ast.Node, name string) *DeclInfo {

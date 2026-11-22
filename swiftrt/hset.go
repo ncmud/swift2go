@@ -25,6 +25,14 @@ func writeKey(b *strings.Builder, v reflect.Value) {
 		b.WriteString("nil")
 		return
 	}
+	if v.Type() == substringType {
+		fmt.Fprintf(b, "%q", v.Interface().(Substring).String())
+		return
+	}
+	if k, ok := customHashKey(v); ok {
+		b.WriteString(k)
+		return
+	}
 	switch v.Kind() {
 	case reflect.Slice, reflect.Array:
 		b.WriteString("[")
@@ -80,6 +88,9 @@ func HSetOf[T any](xs ...T) HSet[T] {
 	}
 	return s
 }
+
+// HSetInitSlice is `Set(_:)` from an array.
+func HSetInitSlice[T any](xs []T) HSet[T] { return HSetOf(xs...) }
 
 // HSetInsert is `Set.insert(_:)`: whether v was new, and the member equal to v afterwards.
 func HSetInsert[T any](s *HSet[T], v T) struct {
@@ -152,4 +163,25 @@ func SetUpcast[D ~map[K2]struct{}, K2, K1 comparable](s map[K1]struct{}) D {
 		out[any(k).(K2)] = struct{}{}
 	}
 	return out
+}
+
+// customHashKey renders a value whose type declares hash(into:) from what that method combines, so
+// values its own == calls equal share a key.
+func customHashKey(v reflect.Value) (string, bool) {
+	if !v.CanInterface() || v.Kind() == reflect.Pointer && v.IsNil() {
+		return "", false
+	}
+	if v.Kind() == reflect.Pointer {
+		if _, class := v.Interface().(SwiftClass); !class {
+			return "", false
+		}
+	}
+	hv, ok := v.Interface().(interface{ Hash(*any) })
+	if !ok {
+		return "", false
+	}
+	hh := &Hasher{key: &strings.Builder{}}
+	var h any = hh
+	hv.Hash(&h)
+	return v.Type().String() + "#" + hh.key.String(), true
 }
