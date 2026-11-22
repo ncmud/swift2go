@@ -561,6 +561,12 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 	if r, ok := raw.(RawDecodable); ok && r.SwiftDecodeInto(dst, path) {
 		return
 	}
+	if dst.CanAddr() {
+		if r, ok := dst.Addr().Interface().(boundsDecodable); ok {
+			r.decodeBounds(raw, path)
+			return
+		}
+	}
 	if t.Kind() == reflect.Struct && structInfoOf(t).rawCodable {
 		decodeInto(dst.FieldByName("RawValue"), raw, path)
 		return
