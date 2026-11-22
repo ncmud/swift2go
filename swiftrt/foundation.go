@@ -12,6 +12,9 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"uuid"
+
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
 )
 
 // UUID is Foundation `UUID`.
@@ -627,7 +630,31 @@ func StringCapitalized(s string) string {
 	return b.String()
 }
 
-// StringLocalizedCaseInsensitiveCompare is Foundation `localizedCaseInsensitiveCompare`.
+// StringLocalizedCaseInsensitiveCompare is Foundation `localizedCaseInsensitiveCompare`: the CLDR
+// root collation, which ICU gives Foundation's localized comparisons, ignoring case. Punctuation
+// orders by its collation weight, not its code point: "-" sorts before "(".
 func StringLocalizedCaseInsensitiveCompare(a, b string) int {
-	return StringCaseInsensitiveCompare(a, b)
+	return collateCompare(&caseInsensitiveCollators, a, b, collate.IgnoreCase)
+}
+
+// StringLocalizedCompare is Foundation `localizedCompare`.
+func StringLocalizedCompare(a, b string) int { return collateCompare(&localizedCollators, a, b) }
+
+// StringLocalizedStandardCompare is Foundation `localizedStandardCompare`: collation with digits
+// compared by their numeric value.
+func StringLocalizedStandardCompare(a, b string) int {
+	return collateCompare(&standardCollators, a, b, collate.Numeric)
+}
+
+// A Collator is not safe for concurrent use, so each comparison borrows one.
+var caseInsensitiveCollators, localizedCollators, standardCollators sync.Pool
+
+func collateCompare(pool *sync.Pool, a, b string, opts ...collate.Option) int {
+	c, _ := pool.Get().(*collate.Collator)
+	if c == nil {
+		c = collate.New(language.Und, opts...)
+	}
+	r := c.CompareString(a, b)
+	pool.Put(c)
+	return r
 }

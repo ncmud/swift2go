@@ -61,33 +61,64 @@ func codingPathStrings(path any) []string {
 	case []any:
 		out := make([]string, len(p))
 		for i, k := range p {
-			out[i] = Str(k)
+			out[i] = keyString(k)
 		}
 		return out
 	}
 	return Iterate[string](path)
 }
 
-func (c CodingContext) error(kind string) CodingError {
+func (c CodingContext) render(kind string) string {
 	msg := kind + ": " + c.DebugDescription
 	if len(c.CodingPath) > 0 {
 		msg += " (at " + strings.Join(c.CodingPath, ".") + ")"
 	}
-	return CodingError{msg}
+	return msg
+}
+
+// ContextCodingPath is `DecodingError.Context.codingPath`, as coding keys.
+func ContextCodingPath(c any) []any {
+	path := c.(CodingContext).CodingPath
+	out := make([]any, len(path))
+	for i, k := range path {
+		out[i] = k
+	}
+	return out
+}
+
+// ContextDebugDescription is `DecodingError.Context.debugDescription`.
+func ContextDebugDescription(c any) string { return c.(CodingContext).DebugDescription }
+
+// CodingKeyStringValue is `CodingKey.stringValue` for a key of a coding path.
+func CodingKeyStringValue(k any) string { return keyString(k) }
+
+// CodingKeyIntValue is `CodingKey.intValue` for a key of a coding path: the index of an array
+// element, which a path records as "Index N".
+func CodingKeyIntValue(k any) *int {
+	if s, ok := k.(string); ok {
+		if rest, ok := strings.CutPrefix(s, "Index "); ok {
+			if n, err := strconv.Atoi(rest); err == nil {
+				return &n
+			}
+		}
+	}
+	return nil
 }
 
 // DecodingErrorDataCorruptedContext is `DecodingError.dataCorrupted(_:)`.
-func DecodingErrorDataCorruptedContext(c CodingContext) error { return c.error("dataCorrupted") }
+func DecodingErrorDataCorruptedContext(c CodingContext) error {
+	return DecodingErrorDataCorrupted{F0: c}
+}
 
 // DecodingErrorDataCorruptedErrorForKeyInDebugDescription is `DecodingError.dataCorruptedError(forKey:in:debugDescription:)`.
 func DecodingErrorDataCorruptedErrorForKeyInDebugDescription(key any, c KeyedDecodingContainer, desc string) error {
 	path := append(append([]string{}, c.path...), keyString(key))
-	return CodingContext{CodingPath: path, DebugDescription: desc}.error("dataCorrupted")
+	return DecodingErrorDataCorrupted{F0: CodingContext{CodingPath: path, DebugDescription: desc}}
 }
 
 // EncodingErrorInvalidValueAny is `EncodingError.invalidValue(_:_:)`.
 func EncodingErrorInvalidValueAny(v any, c CodingContext) error {
-	return c.error("invalidValue " + Str(v))
+	return CodingError{c.render("invalidValue " + Str(v))}
 }
 
 // UnkeyedDecodingContainer is Swift `UnkeyedDecodingContainer`.

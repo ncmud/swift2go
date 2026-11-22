@@ -106,3 +106,25 @@ public func boundParameterTypes() -> [String] {
         Handler.bindIfAny(nil, Book.self).parameterType,
     ]
 }
+
+public func stampedFields() -> (String, String) {
+    var fields = Fields()
+    fields[.kind] = "note"
+    fields[.tag] = "a"
+    fields[.tag] = (fields[.tag] ?? "") + "b"
+    var message = Message()
+    message.fields[.kind] = "reply"
+    message.fields[.tag] = fields[.tag]
+    message.fields[.kind] = nil
+    return (fields.rendered, message.fields.rendered)
+}
+
+public func fieldNameTexts() -> [String] {
+    [FieldName.kind, .tag].map(\.text)
+}
+
+public func messageBodyText() -> String {
+    var message = Message()
+    message.fields[.kind] = "note"
+    return message.body.text
+}

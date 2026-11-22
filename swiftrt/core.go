@@ -239,6 +239,18 @@ func Concat[T any](a, b []T) []T {
 	return append(append(out, a...), b...)
 }
 
+// ownDescription marks a type whose Description method is a member of its own, not a
+// CustomStringConvertible witness, which printing must not use.
+type ownDescription interface{ SwiftOwnDescription() }
+
+// ownDebugDescription marks a type whose DebugDescription method is a member of its own.
+type ownDebugDescription interface{ SwiftOwnDebugDescription() }
+
+func ownsDescription(v any) bool {
+	_, own := v.(ownDescription)
+	return own
+}
+
 // Describer is a Swift type conforming to CustomStringConvertible.
 type Describer interface{ Description() string }
 
@@ -260,6 +272,17 @@ func Str(v any) string { return describe(v, false) }
 func StringInitReflecting(v any) string { return describe(v, true) }
 
 func debugStr(v any) string { return describe(v, true) }
+
+// caseDescription is an enum case as Swift prints it: its name and payload, qualified by the
+// enum's type when debug.
+func caseDescription(v any, c SwiftCase, debug bool) string {
+	name, labels := c.SwiftCase()
+	s := name + payloadDescription(reflect.ValueOf(v), labels)
+	if n, ok := v.(SwiftNamed); ok && debug {
+		return n.SwiftTypeName() + "." + s
+	}
+	return s
+}
 
 func describe(v any, debug bool) string {
 	if t, ok := v.(thrownValue); ok {
@@ -294,12 +317,25 @@ func describe(v any, debug bool) string {
 		}
 		return x.String()
 	case DebugDescriber:
-		if d, ok := v.(Describer); ok && !debug {
+		if _, own := v.(ownDebugDescription); !own {
+			if d, ok := v.(Describer); ok && !debug && !ownsDescription(v) {
+				return d.Description()
+			}
+			return x.DebugDescription()
+		}
+		if d, ok := v.(Describer); ok && !ownsDescription(v) {
 			return d.Description()
 		}
-		return x.DebugDescription()
+		if c, ok := v.(SwiftCase); ok {
+			return caseDescription(v, c, debug)
+		}
 	case Describer:
-		return x.Description()
+		if !ownsDescription(v) {
+			return x.Description()
+		}
+		if c, ok := v.(SwiftCase); ok {
+			return caseDescription(v, c, debug)
+		}
 	case fmt.Stringer:
 		return x.String()
 	case bool:
@@ -311,12 +347,7 @@ func describe(v any, debug bool) string {
 	case float32:
 		return swiftFloatDescription(float64(x), 32)
 	case SwiftCase:
-		name, labels := x.SwiftCase()
-		s := name + payloadDescription(reflect.ValueOf(v), labels)
-		if n, ok := v.(SwiftNamed); ok && debug {
-			return n.SwiftTypeName() + "." + s
-		}
-		return s
+		return caseDescription(v, x, debug)
 	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {

@@ -113,7 +113,11 @@ func goroutineID() uint64 {
 }
 
 // runInScope runs f on the current goroutine as part of the task whose cancellation state is s.
-func runInScope(s *cancelScope, f func()) {
+func runInScope(s *cancelScope, locals *localFrame, f func()) {
+	runWithLocals(locals, func() { runScoped(s, f) })
+}
+
+func runScoped(s *cancelScope, f func()) {
 	id := goroutineID()
 	prev, had := goroutineScopes.Load(id)
 	goroutineScopes.Store(id, s)
@@ -191,12 +195,19 @@ func TaskInitNameExecutorPreferenceOperation(name *string, executor *any, op any
 // WithTaskCancellationHandlerOperationOnCancel is Swift `withTaskCancellationHandler(operation:onCancel:)`:
 // it runs op, calling onCancel once if the current task is cancelled while op runs, or immediately
 // if the task is already cancelled.
-func WithTaskCancellationHandlerOperationOnCancel[R any](op func() R, onCancel func()) R {
+// onCancel is a func() or, when the emitter passes every Void closure of the call as one returning
+// struct{}, a func() struct{}.
+func WithTaskCancellationHandlerOperationOnCancel[R any](op func() R, onCancel any) R {
 	s := currentScope()
 	if s == nil {
 		return op()
 	}
-	unregister := s.onCancel(onCancel)
+	cancel, ok := onCancel.(func())
+	if !ok {
+		unit := onCancel.(func() struct{})
+		cancel = func() { unit() }
+	}
+	unregister := s.onCancel(cancel)
 	defer unregister()
 	return op()
 }
@@ -260,7 +271,7 @@ func taskGroupAdd(group *any, op any) {
 	g.mu.Lock()
 	g.running++
 	g.mu.Unlock()
-	go runInScope(child, func() {
+	go runInScope(child, inheritLocals(), func() {
 		defer child.detach()
 		var value any
 		err := Catch(func() { value = callTaskOperation(op) })

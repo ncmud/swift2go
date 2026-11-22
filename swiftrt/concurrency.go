@@ -19,9 +19,11 @@ type TaskHandle struct {
 // TaskInitOperation is Swift `Task { ... }`, run on a goroutine. op is a `func()` or a `func() T`; an
 // error the operation throws is kept for TaskValue, and any other panic crashes the process as a
 // Swift trap would.
-func TaskInitOperation(op any) *TaskHandle {
+func TaskInitOperation(op any) *TaskHandle { return startTask(inheritLocals(), op) }
+
+func startTask(locals *localFrame, op any) *TaskHandle {
 	t := &TaskHandle{done: make(chan struct{}), scope: newCancelScope(nil)}
-	go runInScope(t.scope, func() {
+	go runInScope(t.scope, locals, func() {
 		defer close(t.done)
 		t.err = Catch(func() {
 			if f, ok := op.(func()); ok {
@@ -59,8 +61,9 @@ func taskHandle(t any) *TaskHandle {
 func TaskInitExecutorPreferenceOperation(_ *any, op any) *TaskHandle { return TaskInitOperation(op) }
 
 // TaskDetachedOperation is Swift `Task.detached(operation:)`: a task that inherits nothing from the
-// one that starts it. Tasks here take no cancellation or priority from their creator either way.
-func TaskDetachedOperation(op any) *TaskHandle { return TaskInitOperation(op) }
+// one that starts it, not even its task-local values. Tasks here take no cancellation or priority
+// from their creator either way.
+func TaskDetachedOperation(op any) *TaskHandle { return startTask(nil, op) }
 
 // TaskValue is Swift `await task.value`: it waits for the operation and returns its result,
 // rethrowing the error a throwing task ended with.

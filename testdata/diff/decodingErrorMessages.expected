@@ -1,0 +1,26 @@
+typeMismatch at s: Expected to decode String but found bool instead.
+typeMismatch at i: Expected to decode Int but found bool instead.
+typeMismatch at i: Expected to decode Int but found a dictionary instead.
+typeMismatch at s: Expected to decode String but found an array instead.
+typeMismatch at d: Expected to decode Double but found a string instead.
+dataCorrupted at : The given data was not valid JSON.
+dataCorrupted at : The given data was not valid JSON.
+valueNotFound at arr/[1]: Cannot get value of type Int -- found null value instead
+typeMismatch at arr: Expected to decode Array<Any> but found a string instead.
+typeMismatch at inner: Expected to decode Dictionary<String, Any> but found number instead.
+valueNotFound at inner/count: Cannot get value of type Int -- found null value instead
+ok
+typeMismatch at i: Expected to decode Int but found a string instead.
+ok
+keyNotFound(name) at : No value associated with key CodingKeys(stringValue: "name", intValue: nil) ("name").
+typeMismatch at name: Expected to decode String but found number instead.
+typeMismatch at level: Expected to decode Int but found a string instead.
+dataCorrupted at : The given data was not valid JSON.
+valueNotFound at level: Cannot get value of type Int -- found null value instead
+typeMismatch at flag: Expected to decode Bool but found number instead.
+dataCorrupted at color: Cannot initialize DEMColor from invalid String value blue
+typeMismatch at items: Expected to decode Array<Any> but found a dictionary instead.
+keyNotFound(label) at items/[0]: No value associated with key CodingKeys(stringValue: "label", intValue: nil) ("label").
+typeMismatch at items/[1]/count: Expected to decode Int but found a string instead.
+typeMismatch at note: Expected to decode String but found number instead.
+typeMismatch at : Expected to decode Dictionary<String, Any> but found an array instead.

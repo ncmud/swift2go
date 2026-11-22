@@ -35,3 +35,17 @@ import Testing
 @Test func closuresRecordOptionalParameters() {
     #expect(boundParameterTypes() == ["Book", "Optional<Book>", "Int", "Optional<Book>", "none"])
 }
+
+@Test func subscriptsAssignThroughSetters() {
+    let (fields, message) = stampedFields()
+    #expect(fields == "kind=note;tag=ab")
+    #expect(message == "tag=ab")
+}
+
+@Test func keyPathsReadMappedProperties() {
+    #expect(fieldNameTexts() == ["kind", "tag"])
+}
+
+@Test func propertiesNamedLikeTypesTakeOf() {
+    #expect(messageBodyText() == "kind=note")
+}

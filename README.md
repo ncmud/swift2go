@@ -166,9 +166,10 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
     (unlabeled arguments add their runtime kind, as for runtime initializers); a member a module declares
     in an extension of another module's type is that module's (`grdb.SequenceContains`).
   - The receiver is the first argument (`&v` for a mutating method on a struct). An instance property is
-    read with `<Owner><Prop>(recv)` and written with `<Owner>Set<Prop>(&v, x)`. A static property is a
-    package variable, or `<Protocol><Prop>[T]()` when a protocol declares it. A payload case is a
-    constructor function and a payload-free case a value that `case` patterns compare with.
+    read with `<Owner><Prop>(recv)` and written with `<Owner>Set<Prop>(&v, x)`. A subscript is read with
+    `<Owner>Subscript<suffix>(recv, args...)` and written with `<Owner>SetSubscript<suffix>(&v, args..., x)`.
+    A static property is a package variable, or `<Protocol><Prop>[T]()` when a protocol declares it. A
+    payload case is a constructor function and a payload-free case a value that `case` patterns compare with.
   - An operator is a call, `<Owner>Op<Word>` or `Op<Word>` at module level (`==` is `OpEqual`, `&&`
     `OpAnd`, `!` `OpNot`, …), with the label suffix's kind for concrete standard-library operands:
     `Column("read") == false` is `grdb.SQLSpecificExpressibleOpEqualBool(…, false)`.
@@ -179,8 +180,9 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
     call site with a class for `T` flattens it to the class pointer, as for runtime generics.
   - An array or dictionary literal of one of its types calls `<Type>InitArrayLiteral(elems...)` or
     `<Type>InitDictionaryLiteral(swiftrt.KV[K, V]{…}...)`.
-  - An instance property whose name matches a type nested in its owner (`value.storage` beside
-    `DatabaseValue.Storage`) is read with `<Owner><Prop>Of(recv)`, since the two would share a name.
+  - An instance property whose Go name is also the name of a type in the package, nested in its owner
+    (`value.storage` beside `DatabaseValue.Storage`) or not (`request.body` beside `RequestBody`), is
+    read with `<Owner><Prop>Of(recv)`, since the two would share a name.
   - An enum case with a payload is a struct type `<Enum><Case>` with fields `F0`, `F1`, …, which `case`
     patterns match by type and bind from.
   - Its classes are pointers (`*grdb.Database`) and its protocols interfaces, nil for none.
