@@ -1809,7 +1809,16 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 			}
 			return pfx + info.GoName + "(" + strings.Join(append([]string{recv}, ss...), ", ") + ")"
 		default:
-			return e.recvExpr(base) + "." + info.GoName + "(" + strings.Join(ss, ", ") + ")"
+			call := e.recvExpr(base) + "." + info.GoName + "(" + strings.Join(ss, ", ") + ")"
+			if info.OwnerKind != "protocol" && !info.ProtoExt {
+				// A witness for a requirement typed by an associated type returns any.
+				if _, erased := e.m.assocErasure(info.Node, info.Owner); erased {
+					if gt := e.exprGoType(n); gt != "" && !strings.HasPrefix(gt, "any") {
+						return "swiftrt.MustAs[" + gt + "](" + call + ")"
+					}
+				}
+			}
+			return call
 		}
 	}
 	if base != nil {

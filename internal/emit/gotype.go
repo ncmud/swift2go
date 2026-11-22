@@ -2,6 +2,7 @@ package emit
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/ncmud/swift2go/internal/types"
@@ -183,6 +184,10 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		}
 		return "[" + strings.Join(out, ", ") + "]"
 	}
+	if m.isAssociatedType(name) {
+		// Go interfaces have no associated types: a protocol's requirements see them as any.
+		return "any"
+	}
 	if strings.HasPrefix(name, m.Name+".") {
 		g := m.LocalTypeName(name) + typeArgs(m)
 		if m.typeKinds[name] == "class_decl" {
@@ -240,6 +245,29 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		return strings.ToLower(parts[0]) + "." + strings.ReplaceAll(parts[1], ".", "") + m.mappedTypeArgs(&types.Type{Kind: types.Named, Name: name, Args: args}, generics)
 	}
 	return "any"
+}
+
+var genericParam = regexp.MustCompile(`^(?:[A-Z][0-9]*|τ_\d+_\d+)$`)
+
+// isAssociatedType reports whether name is an associated type reached through a generic parameter,
+// as the demangler prints it: "A.Module.Protocol.Assoc".
+func (m *Module) isAssociatedType(name string) bool {
+	first, rest, ok := strings.Cut(name, ".")
+	if !ok || !genericParam.MatchString(first) {
+		return false
+	}
+	i := strings.LastIndex(rest, ".")
+	return i > 0 && m.isProtocol(rest[:i])
+}
+
+// isProtocol reports whether the qualified Swift name is a protocol of this module or a dependency.
+func (m *Module) isProtocol(q string) bool {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[q] == "protocol" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Module) isReferenceGo(t *types.Type, goType string) bool {
