@@ -791,6 +791,18 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		}
 		return "swiftrt.KeyedDecodingContainerAllKeys(" + e.recvArg(base) + ", " + ctor + ")"
 	}
+	switch sig.base {
+	case "startIndex", "endIndex", "indices":
+		if lo := e.sliceOffset(base); lo != "" {
+			switch sig.base {
+			case "startIndex":
+				return lo
+			case "endIndex":
+				return "(" + lo + " + len(" + e.expr(base) + "))"
+			}
+			return "(swiftrt.Range[int]{Lo: " + lo + ", Hi: " + lo + " + len(" + e.expr(base) + ")})"
+		}
+	}
 	return "swiftrt." + recv + capitalize(sig.base) + "(" + e.recvArg(base) + ")"
 }
 
@@ -937,6 +949,9 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		bt := e.m.typeOf(n.Child("base").Type())
 		args := n.Child("args").List("args")
 		if len(args) == 1 && e.m.Recv(bt) == "Slice" && e.m.Recv(e.m.typeOf(args[0].Child("expr").Type())) == "Int" {
+			if lo := e.sliceOffset(n.Child("base")); lo != "" {
+				return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "-" + lo + "]"
+			}
 			return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "]"
 		}
 		if len(args) == 1 && e.m.Recv(bt) == "Map" {
@@ -1078,7 +1093,15 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 		return "swiftrt." + recv + "SubscriptAll(" + e.expr(base) + ")"
 	}
 	if recv == "Slice" && at == "Int" {
+		if lo := e.sliceOffset(base); lo != "" {
+			return e.recvExpr(base) + "[" + e.expr(a) + "-" + lo + "]"
+		}
 		return e.recvExpr(base) + "[" + e.expr(a) + "]"
+	}
+	if recv == "Slice" && strings.Contains(at, "Range") {
+		if lo := e.sliceOffset(base); lo != "" {
+			return "swiftrt.ArraySliceSubscript" + at + "(" + e.expr(base) + ", " + lo + ", " + e.expr(a) + ")"
+		}
 	}
 	if recv == "Map" {
 		return "swiftrt.MapGet(" + e.expr(base) + ", " + e.expr(a) + ")"
@@ -1939,43 +1962,16 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 	if base != nil {
 		switch d.Str("base_name") {
 		case "firstIndex", "lastIndex", "index", "startIndex", "endIndex":
-			if lo, ok := e.sliceLowerBound(base); ok {
-				saved := lo
+			if lo := e.sliceOffset(base); lo != "" {
 				out := e.methodCallForeign(n, d, base, as)
 				if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional {
-					return "swiftrt.OffsetIndex(" + out + ", " + saved + ")"
+					return "swiftrt.OffsetIndex(" + out + ", " + lo + ")"
 				}
-				return "(" + out + " + " + saved + ")"
+				return "(" + out + " + " + lo + ")"
 			}
 		}
 	}
 	return e.methodCallForeign(n, d, base, as)
-}
-
-// sliceLowerBound returns the lower bound of an ArraySlice made by subscripting an array with a range,
-// since Swift slices keep their parent's indices while Go slices start at zero.
-func (e *fileEmitter) sliceLowerBound(base ast.Node) (string, bool) {
-	for base.Kind() == "load_expr" || base.Kind() == "paren_expr" || base.Kind() == "inout_expr" {
-		base = base.Child("sub_expr")
-	}
-	if base.Kind() != "subscript_expr" {
-		return "", false
-	}
-	if t := e.m.typeOf(base.Type()); t == nil || t.Kind != types.Named || t.Name != "Swift.ArraySlice" {
-		return "", false
-	}
-	args := base.Child("args").List("args")
-	if len(args) != 1 {
-		return "", false
-	}
-	a := args[0].Child("expr")
-	switch e.m.Recv(e.m.typeOf(a.Type())) {
-	case "Range", "ClosedRange", "PartialRangeFrom":
-		return "(" + e.expr(a) + ").Lo", true
-	case "PartialRangeUpTo", "PartialRangeThrough":
-		return "0", true
-	}
-	return "", false
 }
 
 func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, as []arg) string {

@@ -1,0 +1,6 @@
+1 5 fire 2 ball 3
+4 fire orc [1, 2, 3, 4] fire 3
+0 3 3 at 4
+2 at ["ball", "at"] 2 ball 3
+ball ball 2
+9 [4, 2, 3] ball-at-orc
