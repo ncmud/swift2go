@@ -20,4 +20,9 @@ func TestHSet(t *testing.T) {
 	if HSetCount(sets) != 1 {
 		t.Fatal("sets of sets compare by value")
 	}
+	c := Copy(s)
+	HSetInsert(&c, []int{3})
+	if HSetCount(s) != 2 || HSetCount(c) != 3 {
+		t.Fatal("a copied set should not share storage")
+	}
 }
