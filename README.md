@@ -96,7 +96,8 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
   - Type arguments are explicit when Go cannot infer them: the conforming type for a static member of a
     protocol (`MailRecord.filter(e)` is `grdb.TableRecordFilter[MailRecord](e)`), then all of a member's
     own type parameters when one occurs in its result (`row["id"]` is `grdb.RowSubscriptString[int64]`).
-    `Void` is `struct{}`.
+    `Void` is `struct{}`. A function returning its own type parameter's Optional (`T?`) returns `*T`; a
+    call site with a class for `T` flattens it to the class pointer, as for runtime generics.
   - An array or dictionary literal of one of its types calls `<Type>InitArrayLiteral(elems...)` or
     `<Type>InitDictionaryLiteral(swiftrt.KV[K, V]{…}...)`.
   - Its classes are pointers (`*grdb.Database`) and its protocols interfaces, nil for none.

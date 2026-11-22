@@ -56,7 +56,7 @@ func TestMappedModules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("go run: %v\n%s", err, out)
 	}
-	if got, want := strings.TrimSpace(string(out)), "hi, go: 84 12 dark"; got != want {
+	if got, want := strings.TrimSpace(string(out)), "hi, go: 84 12 dark tagged"; got != want {
 		t.Errorf("Report(\"go\") = %q, want %q", got, want)
 	}
 }

@@ -54,3 +54,20 @@ func EvensUpTo(n int) iter.Seq[int] {
 		}
 	}
 }
+
+// Tag is Glue's class `Tag`.
+type Tag struct{ name string }
+
+// TagInitString is `Tag(_:)`.
+func TagInitString(name string) *Tag { return &Tag{name: name} }
+
+// TagName is `Tag.name`.
+func TagName(t *Tag) string { return t.name }
+
+// FirstOf is `firstOf(_:)`: it returns *T, which generated code flattens when T is a class.
+func FirstOf[T any](items []T) *T {
+	if len(items) == 0 {
+		return nil
+	}
+	return &items[0]
+}
