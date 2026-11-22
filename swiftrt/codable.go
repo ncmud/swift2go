@@ -13,10 +13,53 @@ import (
 	"sync"
 )
 
-// CodingError is Swift `DecodingError` / `EncodingError`.
+// CodingError is a Swift `DecodingError` or `EncodingError` that the runtime or a mapped package
+// raises with a message alone, and the Go type of `EncodingError`.
 type CodingError struct{ Msg string }
 
 func (e CodingError) Error() string { return e.Msg }
+
+// CodingContext is the error's context: its message as the debug description.
+func (e CodingError) CodingContext() CodingContext { return CodingContext{DebugDescription: e.Msg} }
+
+// DecodingError is Swift `DecodingError`: a CodingError, or a value of one of the case types
+// DecodingErrorTypeMismatch, DecodingErrorValueNotFound, DecodingErrorKeyNotFound and
+// DecodingErrorDataCorrupted, which `switch` patterns match.
+type DecodingError interface {
+	error
+	// CodingContext is the context every case carries.
+	CodingContext() CodingContext
+}
+
+// DecodingErrorTypeMismatch is `DecodingError.typeMismatch(_:_:)`.
+type DecodingErrorTypeMismatch struct {
+	F0 any
+	F1 CodingContext
+}
+
+// DecodingErrorValueNotFound is `DecodingError.valueNotFound(_:_:)`.
+type DecodingErrorValueNotFound struct {
+	F0 any
+	F1 CodingContext
+}
+
+// DecodingErrorKeyNotFound is `DecodingError.keyNotFound(_:_:)`.
+type DecodingErrorKeyNotFound struct {
+	F0 any
+	F1 CodingContext
+}
+
+// DecodingErrorDataCorrupted is `DecodingError.dataCorrupted(_:)`.
+type DecodingErrorDataCorrupted struct{ F0 CodingContext }
+
+func (e DecodingErrorTypeMismatch) Error() string                 { return e.F1.render("typeMismatch") }
+func (e DecodingErrorValueNotFound) Error() string                { return e.F1.render("valueNotFound") }
+func (e DecodingErrorKeyNotFound) Error() string                  { return e.F1.render("keyNotFound") }
+func (e DecodingErrorDataCorrupted) Error() string                { return e.F0.render("dataCorrupted") }
+func (e DecodingErrorTypeMismatch) CodingContext() CodingContext  { return e.F1 }
+func (e DecodingErrorValueNotFound) CodingContext() CodingContext { return e.F1 }
+func (e DecodingErrorKeyNotFound) CodingContext() CodingContext   { return e.F1 }
+func (e DecodingErrorDataCorrupted) CodingContext() CodingContext { return e.F0 }
 
 func codingFail(format string, args ...any) {
 	panic(Throw(CodingError{fmt.Sprintf(format, args...)}))
@@ -46,6 +89,12 @@ func keyString(k any) string {
 		return v.StringValue()
 	case interface{ RawValue() string }:
 		return v.RawValue()
+	}
+	// A CodingKey struct whose stringValue is a stored property.
+	if rv := reflect.ValueOf(k); rv.Kind() == reflect.Struct {
+		if f := rv.FieldByName("StringValue"); f.IsValid() && f.Kind() == reflect.String {
+			return f.String()
+		}
 	}
 	return Str(k)
 }
@@ -187,7 +236,7 @@ func DecoderContainerKeyedBy(d *Decoder, _ Type) KeyedDecodingContainer {
 	}
 	m, ok := treeObject(d.Value)
 	if !ok {
-		codingFail("expected a keyed container at %s, found %T", strings.Join(d.CodingPath, "."), d.Value)
+		mismatch(reflect.TypeFor[map[string]any](), d.Value, d.CodingPath)
 	}
 	return KeyedDecodingContainer{M: m, path: d.CodingPath}
 }
@@ -215,7 +264,7 @@ func KeyedDecodingContainerDecodeForKey[T any](c KeyedDecodingContainer, _ TypeT
 	k := keyString(key)
 	raw, ok := c.lookup(k)
 	if !ok {
-		codingFail("key %q not found at %s", k, strings.Join(c.path, "."))
+		keyNotFound(k, c.path)
 	}
 	return DecodeValue[T](raw, append(c.path, k))
 }
@@ -396,6 +445,8 @@ func EncodeValue(v any) any {
 	case reflect.Struct:
 		t := rv.Type()
 		out := newEncodedObject(t.NumField())
+		fields := make([]int, 0, t.NumField())
+		names := map[string]int{}
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			if !f.IsExported() {
@@ -405,11 +456,24 @@ func EncodeValue(v any) any {
 			if name == "" || name == "-" {
 				continue
 			}
+			fields = append(fields, i)
+			names[name] = i
+		}
+		if o, ok := v.(interface{ SwiftCodingKeyOrder() []string }); ok {
+			// The order of the type's CodingKeys cases, which a synthesized encode(to:) follows.
+			fields = fields[:0]
+			for _, k := range o.SwiftCodingKeyOrder() {
+				if i, ok := names[k]; ok {
+					fields = append(fields, i)
+				}
+			}
+		}
+		for _, i := range fields {
 			fv := rv.Field(i)
 			if fv.Kind() == reflect.Pointer && fv.IsNil() {
 				continue
 			}
-			out.set(name, EncodeValue(fv.Interface()))
+			out.set(codingKey(t.Field(i)), EncodeValue(fv.Interface()))
 		}
 		return out
 	}
@@ -509,50 +573,53 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 	case reflect.Bool:
 		b, ok := raw.(bool)
 		if !ok {
-			codingFail("expected Bool at %s", strings.Join(path, "."))
+			mismatch(t, raw, path)
 		}
 		dst.SetBool(b)
 	case reflect.String:
 		s, ok := raw.(string)
 		if !ok {
-			codingFail("expected String at %s", strings.Join(path, "."))
+			mismatch(t, raw, path)
 		}
 		dst.SetString(s)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if _, isNum := rawNumberText(raw); !isNum {
-			if s, isStr := raw.(string); isStr && decodeRawString(dst, s) {
+			if s, isStr := raw.(string); isStr && decodeRawString(dst, s, path) {
 				return
 			}
-			codingFail("expected a number at %s", strings.Join(path, "."))
+			mismatch(t, raw, path)
 		}
 		n, ok := rawInt(raw)
 		if !ok || dst.OverflowInt(n) {
-			codingFail("Number %s is not representable in Swift at %s", Str(raw), strings.Join(path, "."))
+			notValidJSON()
 		}
-		if decodeRawInt(dst, int(n)) {
+		if decodeRawInt(dst, n, path) {
 			return
 		}
 		dst.SetInt(n)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if _, isNum := rawNumberText(raw); !isNum {
+			mismatch(t, raw, path)
+		}
 		n, ok := rawUint(raw)
 		if !ok || dst.OverflowUint(n) {
-			codingFail("Number %s is not representable in Swift at %s", Str(raw), strings.Join(path, "."))
+			notValidJSON()
 		}
 		dst.SetUint(n)
 	case reflect.Float32, reflect.Float64:
 		n, ok := rawFloat(raw)
 		if !ok {
-			codingFail("expected a number at %s", strings.Join(path, "."))
+			mismatch(t, raw, path)
 		}
 		dst.SetFloat(n)
 	case reflect.Slice:
 		xs, ok := raw.([]any)
 		if !ok {
-			codingFail("expected an array at %s", strings.Join(path, "."))
+			mismatch(t, raw, path)
 		}
 		out := reflect.MakeSlice(t, len(xs), len(xs))
 		for i, x := range xs {
-			decodeInto(out.Index(i), x, append(path, fmt.Sprint(i)))
+			decodeInto(out.Index(i), x, append(path, "Index "+strconv.Itoa(i)))
 		}
 		dst.Set(out)
 	case reflect.Map:
@@ -588,7 +655,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		}
 		m, ok := treeObject(raw)
 		if !ok {
-			codingFail("expected a dictionary at %s", strings.Join(path, "."))
+			mismatch(t, raw, path)
 		}
 		out := reflect.MakeMapWithSize(t, len(m))
 		for k, x := range m {
@@ -606,7 +673,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		} else if m, ok := treeObject(raw); ok {
 			c.M = m
 		} else {
-			codingFail("expected a keyed container at %s", strings.Join(path, "."))
+			mismatch(t, raw, path)
 		}
 		if dst.CanAddr() {
 			if d, ok := dst.Addr().Interface().(interface{ SwiftDecodeDefaults() }); ok {
@@ -624,7 +691,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 				if fd.Type.Kind() == reflect.Pointer {
 					continue
 				}
-				codingFail("key %q not found at %s", name, strings.Join(path, "."))
+				keyNotFound(name, path)
 			}
 			decodeInto(dst.Field(i), x, append(path, name))
 		}
@@ -641,25 +708,26 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 
 // decodeRawInt sets an Int-raw enum from its raw value when T has RawValue() int, through the
 // enum's init(rawValue:), since a case's raw value need not be its position.
-func decodeRawInt(dst reflect.Value, n int) bool {
+func decodeRawInt(dst reflect.Value, n int64, path []string) bool {
 	if _, ok := dst.Interface().(interface{ RawValue() int }); !ok {
 		return false
 	}
 	f, ok := rawInitReg.Load(dst.Type())
 	if !ok {
-		dst.SetInt(int64(n))
+		dst.SetInt(n)
 		return true
 	}
-	out := reflect.ValueOf(f).Call([]reflect.Value{reflect.ValueOf(n)})[0]
+	fn := reflect.ValueOf(f)
+	out := fn.Call([]reflect.Value{reflect.ValueOf(n).Convert(fn.Type().In(0))})[0]
 	if out.IsNil() {
-		codingFail("cannot initialize %s from invalid Int value %d", dst.Type(), n)
+		invalidRawValue(dst.Type(), "Int", strconv.FormatInt(n, 10), path)
 	}
 	dst.Set(out.Elem())
 	return true
 }
 
 // decodeRawString sets a String-raw enum by searching its cases for the raw value.
-func decodeRawString(dst reflect.Value, s string) bool {
+func decodeRawString(dst reflect.Value, s string, path []string) bool {
 	if _, ok := dst.Interface().(interface{ RawValue() string }); !ok {
 		return false
 	}
@@ -682,7 +750,7 @@ func decodeRawString(dst reflect.Value, s string) bool {
 			return true
 		}
 	}
-	codingFail("cannot initialize %s from invalid String value %q", dst.Type(), s)
+	invalidRawValue(dst.Type(), "String", s, path)
 	return false
 }
 
@@ -763,6 +831,90 @@ func rawNumberText(raw any) (string, bool) {
 	return "", false
 }
 
+// foundKind is how Foundation's JSONDecoder names the JSON value it found instead of the one it
+// expected.
+func foundKind(raw any) string {
+	switch raw.(type) {
+	case nil:
+		return "null"
+	case string:
+		return "a string"
+	case bool:
+		return "bool"
+	case []any:
+		return "an array"
+	case map[string]any, *encodedObject, RawKeyed:
+		return "a dictionary"
+	}
+	return "number"
+}
+
+// decodeTypeName is how Foundation's JSONDecoder names the type it expected.
+func decodeTypeName(t reflect.Type) string {
+	if n, ok := reflect.Zero(t).Interface().(SwiftNamed); ok && t.Kind() != reflect.Struct {
+		name := n.SwiftTypeName()
+		return name[strings.LastIndexByte(name, '.')+1:]
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "String"
+	case reflect.Bool:
+		return "Bool"
+	case reflect.Int:
+		return "Int"
+	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return "Int" + strconv.Itoa(t.Bits())
+	case reflect.Uint:
+		return "UInt"
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "UInt" + strconv.Itoa(t.Bits())
+	case reflect.Float64:
+		return "Double"
+	case reflect.Float32:
+		return "Float"
+	case reflect.Slice:
+		return "Array<Any>"
+	}
+	return "Dictionary<String, Any>"
+}
+
+func codingPathCopy(path []string) []string { return append([]string{}, path...) }
+
+// mismatch throws the DecodingError Foundation's JSONDecoder throws for a value of the wrong kind:
+// valueNotFound for null, typeMismatch otherwise.
+func mismatch(t reflect.Type, raw any, path []string) {
+	ctx := CodingContext{CodingPath: codingPathCopy(path)}
+	if raw == nil {
+		ctx.DebugDescription = "Cannot get value of type " + decodeTypeName(t) + " -- found null value instead"
+		panic(Throw(DecodingErrorValueNotFound{F0: t, F1: ctx}))
+	}
+	ctx.DebugDescription = "Expected to decode " + decodeTypeName(t) + " but found " + foundKind(raw) + " instead."
+	panic(Throw(DecodingErrorTypeMismatch{F0: t, F1: ctx}))
+}
+
+// keyNotFound throws the DecodingError for a key a container lacks.
+func keyNotFound(key string, path []string) {
+	panic(Throw(DecodingErrorKeyNotFound{F0: key, F1: CodingContext{
+		CodingPath:       codingPathCopy(path),
+		DebugDescription: fmt.Sprintf("No value associated with key CodingKeys(stringValue: %s, intValue: nil) (%s).", swiftQuote(key), swiftQuote(key)),
+	}}))
+}
+
+// invalidRawValue throws the DecodingError for a raw value no case of an enum has.
+func invalidRawValue(t reflect.Type, kind, value string, path []string) {
+	panic(Throw(DecodingErrorDataCorrupted{F0: CodingContext{
+		CodingPath:       codingPathCopy(path),
+		DebugDescription: "Cannot initialize " + decodeTypeName(t) + " from invalid " + kind + " value " + value,
+	}}))
+}
+
+// notValidJSON throws what Foundation's JSONDecoder throws for a number the expected integer type
+// cannot hold: the data as a whole is not valid JSON.
+func notValidJSON() {
+	panic(Throw(DecodingErrorDataCorrupted{F0: CodingContext{DebugDescription: "The given data was not valid JSON."}}))
+}
+
+// rawKind is a JSON value's kind, for messages.
 func rawKind(raw any) string {
 	switch raw.(type) {
 	case nil:

@@ -1,0 +1,12 @@
+default
+outer
+inner
+outer
+default
+caught with default
+a a
+b b
+child parent
+grandchild parent
+detached default
+default

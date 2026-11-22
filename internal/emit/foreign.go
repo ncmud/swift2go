@@ -81,20 +81,46 @@ func (m *Module) mappedKind(name string) byte {
 	if mp == nil || m.dm == nil {
 		return 0
 	}
+	return m.mappedKindsOf(mp.Module)[name]
+}
+
+// mappedKindsOf maps each qualified type name of a mapped module to its nominal kind.
+func (m *Module) mappedKindsOf(module string) map[string]byte {
+	if m.dm == nil {
+		return nil
+	}
 	if m.mappedKinds == nil {
 		m.mappedKinds = map[string]map[string]byte{}
 	}
-	kinds, ok := m.mappedKinds[mp.Module]
+	kinds, ok := m.mappedKinds[module]
 	if !ok {
 		var err error
-		kinds, err = m.dm.NominalKinds(mp.Module)
+		kinds, err = m.dm.NominalKinds(module)
 		if err != nil {
 			m.Unsup("mapped-kinds", err.Error(), "")
 			kinds = map[string]byte{}
 		}
-		m.mappedKinds[mp.Module] = kinds
+		m.mappedKinds[module] = kinds
 	}
-	return kinds[name]
+	return kinds
+}
+
+// mappedPropertyName is the Go name of an instance property of a mapped type, `<Owner><Prop>`, with the
+// suffix Of when a type of a module mapped to the same package flattens to that name: a type nested in
+// the owner (`value.storage` beside `DatabaseValue.Storage`) or one beside it (`request.body` beside
+// `RequestBody`).
+func (m *Module) mappedPropertyName(mp *Mapping, name string) string {
+	for _, other := range m.Mappings {
+		if other.ImportPath != mp.ImportPath {
+			continue
+		}
+		for q := range m.mappedKindsOf(other.Module) {
+			if mp.Alias()+"."+mappedOwner(q) == name {
+				return name + "Of"
+			}
+		}
+	}
+	return name
 }
 
 // mappedOwner flattens a declaring type's qualified name to the Go name prefix: "GRDB.Database.ColumnType"
@@ -326,18 +352,13 @@ func (e *fileEmitter) mappedMember(mp *Mapping, n, d, base ast.Node) string {
 	dem := e.m.demangle(d.Str("decl_usr"))
 	sig := parseDeclSig(dem)
 	name := e.mappedName(mp, sig, nil, false)
-	if e.m.mappedKind(sig.owner+"."+capitalize(sig.base)) != 0 {
-		// The property shares its flattened name with a type nested in its owner (`value.storage`
-		// and `DatabaseValue.Storage`): the property's function takes the suffix Of.
-		name += "Of"
-	}
 	if bt := e.m.typeOf(base.Type()); base.Kind() == "type_expr" || bt.Kind == types.Meta {
 		if e.m.mappedKind(sig.owner) == types.KindProtocol {
 			return name + e.mappedTypeArgs(d, dem, true) + "()"
 		}
 		return name
 	}
-	return name + "(" + e.recvArg(base) + ")"
+	return e.m.mappedPropertyName(mp, name) + "(" + e.recvArg(base) + ")"
 }
 
 // mappedSetter renders an assignment to a property of a mapped declaration as a call to its setter,
@@ -353,6 +374,38 @@ func (e *fileEmitter) mappedSetter(mp *Mapping, d, base ast.Node, value string) 
 		recv = "&" + recv
 	}
 	return name + "(" + recv + ", " + value + ")"
+}
+
+// mappedSubscriptLvalue writes through a subscript of a mapped type: the element is read with the getter
+// into a temporary that the statement changes, and stored back afterwards with
+// `<Owner>SetSubscript<suffix>(&recv, args..., value)`. The arguments are evaluated once.
+func (e *fileEmitter) mappedSubscriptLvalue(mp *Mapping, n ast.Node) string {
+	d, base := n.Child("decl"), n.Child("base")
+	for base.Kind() == "inout_expr" {
+		base = base.Child("sub_expr")
+	}
+	dem := e.m.demangle(d.Str("decl_usr"))
+	sig := parseDeclSig(dem)
+	ss, kept := e.argStrings(e.args(n.Child("args")), true)
+	for i, s := range ss {
+		k := e.newTmp("key")
+		e.w("%s := %s\n", k, s)
+		ss[i] = k
+	}
+	// The element is stored back before the base: writing it changes the base, which a base read
+	// through a mapped getter then stores in turn.
+	outer := len(e.post)
+	recv := e.lvalue(base)
+	ref := recv
+	if !e.m.isReferenceGo(e.m.typeOf(base.Type()), e.exprGoType(base)) {
+		ref = "&" + recv
+	}
+	owner := mp.Alias() + "." + mappedOwner(sig.owner)
+	suffix := e.suffix(sig, kept, sig.owner == mp.Module)
+	tmp := e.newTmp("wb")
+	e.w("%s := %sSubscript%s%s(%s)\n", tmp, owner, suffix, e.mappedTypeArgs(d, dem, false), strings.Join(append([]string{recv}, ss...), ", "))
+	e.post = slices.Insert(e.post, outer, owner+"SetSubscript"+suffix+"("+strings.Join(append(append([]string{ref}, ss...), tmp), ", ")+")")
+	return tmp
 }
 
 // mappedLiteral renders an array or dictionary literal of a mapped type as a call of the type's

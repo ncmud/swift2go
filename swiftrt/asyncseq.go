@@ -12,6 +12,11 @@ func AsyncIter[T any](s any) func() *T {
 	if a, ok := s.(AsyncSequence[T]); ok {
 		return a.AsyncNextFunc()
 	}
+	if g, ok := s.(*taskGroup); ok {
+		// `for await result in group`: each child's result as it finishes.
+		group := any(g)
+		return func() *T { return OptAnyAs[T](taskGroupNext(&group)) }
+	}
 	xs := Iterate[T](s)
 	i := 0
 	return func() *T {

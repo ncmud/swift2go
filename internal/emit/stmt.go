@@ -1201,7 +1201,7 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 				continue
 			}
 			p := item.Child("pattern")
-			if unwrapPattern(p).Kind() == "pattern_any" {
+			if unwrapPattern(p).Kind() == "pattern_any" && whereExpr(item) == nil {
 				isDefault = true
 				continue
 			}
@@ -1351,6 +1351,10 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 				if c, ok := e.elementCompare(st, "==", subj, e.expr(lit)); ok {
 					return c
 				}
+			}
+			if stripConv(lit).Kind() == "binary_expr" {
+				// `switch true { case a != nil: }` compares with the whole condition.
+				return subj + " == (" + e.expr(lit) + ")"
 			}
 			return subj + " == " + e.expr(lit)
 		}

@@ -804,6 +804,10 @@ func capitalize(s string) string {
 	if base, ok := strings.CutSuffix(s, "_"); ok && shadowedPkgs[base] {
 		s = base
 	}
+	if s[0] == '_' {
+		// Go exports no name that starts with an underscore.
+		return "X" + s
+	}
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 

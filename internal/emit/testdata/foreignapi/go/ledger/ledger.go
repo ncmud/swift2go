@@ -5,6 +5,7 @@ package ledger
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/ncmud/swift2go/swiftrt"
@@ -262,3 +263,76 @@ func HandlerBindIfAny[A any](fn any, _ swiftrt.TypeT[A]) Handler {
 	}
 	return HandlerBind(fn)
 }
+
+// FieldName is `FieldName`.
+type FieldName struct{ text string }
+
+// FieldNameKind is `FieldName.kind`.
+var FieldNameKind = FieldName{"kind"}
+
+// FieldNameTag is `FieldName.tag`.
+var FieldNameTag = FieldName{"tag"}
+
+// Fields is `Fields`.
+type Fields struct{ values map[string]string }
+
+// FieldsInit is `Fields()`.
+func FieldsInit() Fields { return Fields{} }
+
+// FieldsSubscript is the getter of `Fields.subscript(_: FieldName) -> String?`.
+func FieldsSubscript(f Fields, name FieldName) *string {
+	if v, ok := f.values[name.text]; ok {
+		return &v
+	}
+	return nil
+}
+
+// FieldsSetSubscript is the setter of `Fields.subscript(_: FieldName) -> String?`.
+func FieldsSetSubscript(f *Fields, name FieldName, v *string) {
+	if v == nil {
+		delete(f.values, name.text)
+		return
+	}
+	if f.values == nil {
+		f.values = map[string]string{}
+	}
+	f.values[name.text] = *v
+}
+
+// FieldsRendered is `Fields.rendered`.
+func FieldsRendered(f Fields) string {
+	keys := make([]string, 0, len(f.values))
+	for k := range f.values {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + f.values[k]
+	}
+	return strings.Join(parts, ";")
+}
+
+// Message is `Message`.
+type Message struct{ fields Fields }
+
+// MessageInit is `Message()`.
+func MessageInit() Message { return Message{} }
+
+// MessageFields is `Message.fields`.
+func MessageFields(m Message) Fields { return m.fields }
+
+// MessageSetFields sets `Message.fields`.
+func MessageSetFields(m *Message, f Fields) { m.fields = f }
+
+// FieldNameText is `FieldName.text`.
+func FieldNameText(n FieldName) string { return n.text }
+
+// MessageBody is `MessageBody`.
+type MessageBody struct{ text string }
+
+// MessageBodyText is `MessageBody.text`.
+func MessageBodyText(b MessageBody) string { return b.text }
+
+// MessageBodyOf is `Message.body`, named apart from the type MessageBody.
+func MessageBodyOf(m Message) MessageBody { return MessageBody{FieldsRendered(m.fields)} }

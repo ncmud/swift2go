@@ -30,3 +30,15 @@ public func xpDeliver(_ d: XPDescriptor, _ msg: String) -> String {
     d.send(msg)
     return d.kind() + ":" + d.label + ":" + d.output
 }
+
+public struct UnderscoredFields {
+    public var _type: String
+    public var _class: Int
+
+    public init(_type: String, _class: Int) {
+        self._type = _type
+        self._class = _class
+    }
+
+    public func _describe() -> String { "\(_type)/\(_class)" }
+}

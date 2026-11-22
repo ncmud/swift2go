@@ -153,3 +153,37 @@ public struct Handler {
         Handler(parameterType: fn == nil ? "none" : "\(A.self)")
     }
 }
+
+public struct FieldName: Hashable, Sendable {
+    public var text: String
+
+    public static let kind = FieldName(text: "kind")
+    public static let tag = FieldName(text: "tag")
+}
+
+public struct Fields {
+    var values: [String: String] = [:]
+
+    public init() {}
+
+    public subscript(_ name: FieldName) -> String? {
+        get { values[name.text] }
+        set { values[name.text] = newValue }
+    }
+
+    public var rendered: String { values.keys.sorted().map { "\($0)=\(values[$0]!)" }.joined(separator: ";") }
+}
+
+public struct Message {
+    public var fields = Fields()
+
+    public init() {}
+}
+
+public struct MessageBody {
+    public var text: String
+}
+
+extension Message {
+    public var body: MessageBody { MessageBody(text: fields.rendered) }
+}
