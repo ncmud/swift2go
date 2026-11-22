@@ -817,6 +817,9 @@ func (e *fileEmitter) stdFuncValue(dem string, n ast.Node) string {
 		// The C library's errno is a computed global in each platform's overlay.
 		return "swiftrt.CErrno()"
 	}
+	if sig.base == "environ" && (sig.owner == "Darwin" || sig.owner == "Glibc" || sig.owner == "Musl") {
+		return "swiftrt.CEnviron()"
+	}
 	return e.m.Unsup("std-func-value:"+sig.owner+"."+sig.base, e.where, e.exprGoType(n))
 }
 
