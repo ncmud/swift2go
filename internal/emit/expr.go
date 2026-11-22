@@ -481,7 +481,7 @@ func (e *fileEmitter) upcast(n ast.Node) string {
 		se, de := src[2:], dst[2:]
 		conv := "v"
 		if f, t := strings.TrimPrefix(se, "*"), strings.TrimPrefix(de, "*"); strings.HasPrefix(se, "*") && strings.HasPrefix(de, "*") && e.m.IsAncestor(t, f) {
-			conv = "v.As" + t + "()"
+			conv = "v." + upcastMethod(t) + "()"
 		}
 		return "swiftrt.SliceMap(" + e.expr(sub) + ", func(v " + se + ") " + de + " { return " + conv + " })"
 	}
@@ -2523,7 +2523,7 @@ func (e *fileEmitter) upcastClass(n ast.Node) string {
 	from := strings.TrimPrefix(e.exprGoType(sub), "*")
 	to := strings.TrimPrefix(e.exprGoType(n), "*")
 	if from != to && e.m.IsAncestor(to, from) {
-		return e.expr(sub) + ".As" + to + "()"
+		return e.expr(sub) + "." + upcastMethod(to) + "()"
 	}
 	return e.expr(sub)
 }
@@ -3068,7 +3068,7 @@ func (e *fileEmitter) paramConversion(n ast.Node) (string, bool) {
 		arg = "&v"
 	case fg != tg && strings.HasPrefix(fg, "*") && strings.HasPrefix(tg, "*") && e.m.IsAncestor(fg[1:], tg[1:]):
 		// A function taking a base class passed where one taking a subclass is expected: upcast the argument.
-		arg = "v.As" + fg[1:] + "()"
+		arg = "v." + upcastMethod(fg[1:]) + "()"
 	default:
 		return "", false
 	}
