@@ -143,7 +143,11 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	case "return_stmt":
 		e.returnStmt(n)
 	case "fail_stmt":
-		e.w("return nil\n")
+		if e.initFail != "" {
+			e.w("return %s\n", e.initFail)
+		} else {
+			e.w("return nil\n")
+		}
 	case "then_stmt":
 		if r := n.Child("result"); isVoidGo(e.exprGoType(r)) {
 			e.stmt(r)
@@ -1477,7 +1481,7 @@ func (e *fileEmitter) setterCall(dest ast.Node, value string) (string, bool) {
 	if info == nil || !(info.Settable || info.Observed) || info.Kind != "var_decl" {
 		return "", false
 	}
-	if info.Observed && e.inInit && (base == nil || isSelfRef(base)) {
+	if info.Observed && e.initializing(info) && (base == nil || isSelfRef(base)) {
 		return "", false
 	}
 	name := "Set" + info.GoName

@@ -1,0 +1,11 @@
+true 8 leaf3;leaf3;
+true twigt;twigt; T
+IDLeaf(7, 3, leaf-default)
+1 true kid! true
+1
+nil
+2 abcd
+IDNode.init sees IDLeaf(7, 3, leaf-default)
+IDLeaf.init after super sees IDLeaf(7, 3, leaf-default)
+IDNode.init sees IDLeaf(7, 3, leaf-default)
+IDLeaf.init after super sees IDLeaf(7, 3, leaf-default)

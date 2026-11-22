@@ -307,6 +307,9 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return "func() " + e.exprGoType(n) + " {\n" + body + "panic(\"unreachable\")\n}()"
 	case "rebind_self_in_constructor_expr":
 		sub := n.Child("sub_expr")
+		if e.initFail == "false" {
+			return e.classDelegation(sub)
+		}
 		call := e.expr(sub)
 		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind == types.Optional {
 			tmp := e.newTmp("delegated")
@@ -704,7 +707,7 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		case info.FreeSelf():
 			return pfx + info.GoName + "(" + e.expr(base) + ")"
 		case info.Computed:
-			return e.expr(base) + "." + info.GoName + "()"
+			return e.expr(base) + "." + e.superTarget(info, base) + "()"
 		default:
 			return e.recvExpr(base) + "." + info.GoName
 		}
@@ -820,7 +823,7 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		return e.declRef(d, n)
 	case "member_ref_expr":
 		info, pfx := e.lookup(n.Child("decl").Str("decl_usr"))
-		if info != nil && info.Kind == "var_decl" && !info.Computed && info.Observed && !info.Static && !e.inInit && e.observing != info {
+		if info != nil && info.Kind == "var_decl" && !info.Computed && info.Observed && !info.Static && !e.initializing(info) && e.observing != info {
 			// Mutating part of an observed property runs its observers: mutate a copy, then set it.
 			tmp := e.newTmp("wb")
 			e.w("%s := swiftrt.Copy(%s)\n", tmp, e.expr(n))
@@ -1824,7 +1827,7 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 			}
 			return pfx + info.GoName + "(" + strings.Join(append([]string{recv}, ss...), ", ") + ")"
 		default:
-			call := e.recvExpr(base) + "." + info.GoName + "(" + strings.Join(ss, ", ") + ")"
+			call := e.recvExpr(base) + "." + e.superTarget(info, base) + "(" + strings.Join(ss, ", ") + ")"
 			if info.OwnerKind != "protocol" && !info.ProtoExt {
 				// A witness for a requirement typed by an associated type returns any.
 				if _, erased := e.m.assocErasure(info.Node, info.Owner); erased {
@@ -2015,9 +2018,101 @@ func (e *fileEmitter) nativeMethod(recv, base string, self ast.Node, kept []arg,
 	return "", false
 }
 
+// classDelegation emits `super.init(...)` or `self.init(...)` inside a class initializer body as a
+// call to the delegated initializer's body on this object: super.init runs the superclass's own
+// initializer on the embedded base, and self.init dispatches to the most-derived override.
+func (e *fileEmitter) classDelegation(sub ast.Node) string {
+	call, forced := sub, false
+	for {
+		switch call.Kind() {
+		case "covariant_return_conversion_expr", "try_expr", "force_try_expr", "paren_expr", "load_expr", "inject_into_optional", "derived_to_base_expr":
+			call = call.Child("sub_expr")
+			continue
+		case "force_value_expr":
+			forced = true
+			call = call.Child("sub_expr")
+			continue
+		}
+		break
+	}
+	fn := stripConv(call.Child("fn"))
+	if call.Kind() != "call_expr" || fn == nil || fn.Kind() != "dot_syntax_call_expr" {
+		return e.m.Unsup("expr:class-init-delegation", e.where, "")
+	}
+	info, _ := e.lookup(stripConv(fn.Child("fn")).Child("decl").Str("decl_usr"))
+	selfArgs := fn.Child("args").List("args")
+	if info == nil || len(selfArgs) == 0 {
+		return e.m.Unsup("expr:class-init-delegation", e.where, "")
+	}
+	e.callee = info
+	ss, _ := e.argStrings(e.args(call.Child("args")), false)
+	args := strings.Join(ss, ", ")
+	invoke := e.initDispatch(info, args)
+	if target := stripConv(selfArgs[0].Child("expr")); target.Kind() == "super_ref_expr" {
+		invoke = "self." + strings.TrimPrefix(e.m.GoType(e.m.typeOf(target.Type()), e.generics), "*") + "." + e.initBodyName(info) + "(" + args + ")"
+	}
+	if !info.Node.Bool("failable") {
+		return invoke
+	}
+	if forced {
+		return "if !" + invoke + " {\nswiftrt.Trap(\"Unexpectedly found nil while unwrapping an Optional value\")\n}"
+	}
+	return "if !" + invoke + " {\nreturn false\n}"
+}
+
+// constructedClass is the Go name of the class an initializer call creates, from the metatype it is
+// called on.
+func (e *fileEmitter) constructedClass(n ast.Node) string {
+	fn := stripConv(n.Child("fn"))
+	if fn == nil || fn.Kind() != "constructor_ref_call_expr" {
+		return ""
+	}
+	as := fn.Child("args").List("args")
+	if len(as) == 0 {
+		return ""
+	}
+	meta := as[0].Child("expr")
+	for meta.Kind() == "metatype_conversion_expr" {
+		meta = meta.Child("sub_expr")
+	}
+	t := e.m.typeOf(meta.Type())
+	if t == nil || t.Kind != types.Meta || len(t.Args) != 1 {
+		return ""
+	}
+	return strings.TrimPrefix(e.m.GoType(t.Args[0], e.generics), "*")
+}
+
+// superTarget is the method a call to info on base names: `super.f()` reaches the superclass's own
+// implementation of an overridden member, not the dispatching method.
+func (e *fileEmitter) superTarget(info *DeclInfo, base ast.Node) string {
+	for base != nil && base.Kind() == "derived_to_base_expr" {
+		base = stripConv(base.Child("sub_expr"))
+	}
+	if base != nil && stripConv(base).Kind() == "super_ref_expr" && info.OwnerKind == "class_decl" {
+		if root := e.overrideRoot(info, &DeclInfo{Kind: "class_decl"}); root != nil {
+			return overrideHook(root)
+		}
+	}
+	return info.GoName
+}
+
 func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 	usr := d.Str("decl_usr")
 	info, pfx := e.lookup(usr)
+	if info != nil && pfx == "" && info.OwnerKind == "class_decl" {
+		owner := e.m.ownerGoName(info)
+		if made := e.constructedClass(n); made != owner && e.m.IsAncestor(owner, made) {
+			// An initializer a subclass inherits from its superclass runs on a new subclass object.
+			e.callee = info
+			ss, _ := e.argStrings(as, false)
+			obj := e.newTmp("obj")
+			call := obj + "." + classMethodName(info) + "(" + strings.Join(ss, ", ") + ")"
+			if info.Node.Bool("failable") {
+				call = "if !" + call + " {\nreturn nil\n}"
+			}
+			return "func() *" + made + " {\n" + obj + " := &" + made + "{}\n" + obj + ".SwiftSub = " + obj + "\n" + call + "\nreturn " + obj + "\n}()"
+		}
+	}
 	if info != nil {
 		e.callee = info
 		ss, _ := e.argStrings(as, false)

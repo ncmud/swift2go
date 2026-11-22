@@ -1,0 +1,27 @@
+t:derived+x:1
+default:derived+x:1
+nil
+code4:derived+x:1
+O:overriding(n-o):1
+DEFAULT:overriding(n-default):1
+CODE9:overriding(n-code9):1
+l:leaf3+derived+x:1
+default:leaf3+derived+x:1
+code2:leaf3+derived+x:1
+5b7
+5b
+IIBase.init(tag:) derived+x
+IIBase.init(tag:) derived+x
+IIBase.init()
+IIBase.init(tag:) derived+x
+IIBase.init(tag:) overriding(n-o)
+IIOverriding.init(tag:)
+IIBase.init(tag:) overriding(n-default)
+IIOverriding.init(tag:)
+IIBase.init()
+IIBase.init(tag:) overriding(n-code9)
+IIOverriding.init(tag:)
+IIBase.init(tag:) leaf3+derived+x
+IIBase.init(tag:) leaf3+derived+x
+IIBase.init()
+IIBase.init(tag:) leaf3+derived+x
