@@ -119,6 +119,28 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
 From a checkout, `just check <Target> <TestTarget>` transpiles a target and its tests and runs them
 with `go test`. Set `SWIFT_PKG` to the package directory.
 
+### Replacing a Swift file with hand-written Go
+
+`-overlay Target=dir` (repeatable) takes hand-written Go files for a target from `dir`. A Go file there
+replaces the Swift file of the same name, which is then not translated: `socket_lifecycle.go` replaces
+`SocketLifecycle.swift`. The other Go files in the directory are copied into the package as well.
+
+    go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
+        -overlay Server=path/to/overlay/server transpile Core Server
+
+- Use it for a file that is mostly calls into the platform (sockets, signals, process control), where
+  a Go implementation on the standard library is clearer than a translation of the C calls. The rest of
+  the target stays translated.
+- The replacement declares, under the names swift2go generates, everything the rest of the program uses
+  from the Swift file. Transpile once without `-overlay` to see those names.
+- A replacement belongs to the generated package, so it imports the other generated packages by their
+  paths in the output module. Keep overlay directories out of that module's own packages, for example
+  under a directory whose name starts with `_`.
+- The target's report lists the Swift files it left to the overlay. swift2go does not check that a
+  replacement still matches its Swift file: when the Swift file changes, the replacement is yours to update.
+- A test target takes the `_test.go` files of its target's overlay the same way.
+- To replace a whole module, use `-map`. A target cannot have both.
+
 ## What it translates
 
 | Swift | Go |
