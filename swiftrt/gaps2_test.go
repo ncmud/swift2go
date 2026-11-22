@@ -64,8 +64,24 @@ func TestNSRegularExpressionInitPattern(t *testing.T) {
 	if !errors.As(err, &ns) || ns.Code != 2048 {
 		t.Fatalf("a(b threw %v, want NSCocoaErrorDomain 2048", err)
 	}
-	mustPanic(t, "not supported by RE2", func() { NSRegularExpressionInitPattern(`a(?![a-z])`) })
-	mustPanic(t, "not supported by RE2", func() { NSRegularExpressionInitPattern(`(a)\1`) })
+	whole := func(re *Regex, s string) []string {
+		var out []string
+		for _, m := range NSRegularExpressionMatchesInRange(re, s, Range[int]{0, utf16Offset(s, len(s))}) {
+			r := RangeOptInitNSRangeIn(m.Ranges[0], s)
+			out = append(out, s[r.Lo:r.Hi])
+		}
+		return out
+	}
+	if got := whole(NSRegularExpressionInitPattern(`a(?![a-z])`), "ab a1 a"); strings.Join(got, ",") != "a,a" {
+		t.Errorf("lookahead matched %q", got)
+	}
+	if got := whole(NSRegularExpressionInitPattern(`(\w)\1`), "a😀😀bbc"); strings.Join(got, ",") != "bb" {
+		t.Errorf("backreference matched %q", got)
+	}
+	if got := whole(NSRegularExpressionInitPattern(`(?<!x)y`), "xy zy"); strings.Join(got, ",") != "y" {
+		t.Errorf("lookbehind matched %q", got)
+	}
+	mustPanic(t, "not supported by RE2 or regexp2", func() { NSRegularExpressionInitPattern(`\N{DIGIT ONE}`) })
 }
 
 func TestSHA256AndPBKDF2(t *testing.T) {
