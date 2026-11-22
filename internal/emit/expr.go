@@ -40,6 +40,7 @@ func (e *fileEmitter) expr(n ast.Node) string {
 	}
 	mark := len(e.slots)
 	out := e.exprRaw(n)
+	out = e.inlineOptUse(n, out)
 	if out == "swiftrt.IntMax" || out == "swiftrt.IntMin" {
 		if c, ok := intBound[e.exprGoType(n)+out[len("swiftrt.Int"):]]; ok {
 			return c
@@ -685,6 +686,95 @@ func (e *fileEmitter) interpolation(n ast.Node) string {
 }
 
 // lookup finds a declaration in this module or a dependency; prefix qualifies it for Go.
+// lookupModule finds the declaration usr names and the module that declares it.
+func (e *fileEmitter) lookupModule(usr string) (*DeclInfo, *Module) {
+	if usr == "" {
+		return nil, nil
+	}
+	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
+		if info := mod.decls[usr]; info != nil {
+			return info, mod
+		}
+	}
+	return nil, nil
+}
+
+// calleeUSR is the USR of the declaration a call, operator or method reference n applies, or "".
+func calleeUSR(n ast.Node) string {
+	fn := stripConv(n.Child("fn"))
+	if fn == nil {
+		return ""
+	}
+	if lhs := fn.Child("lhs"); fn.Kind() == "dot_syntax_base_ignored" && lhs.Kind() == "declref_expr" && lhs.Type() == "" {
+		fn = stripConv(fn.Child("rhs"))
+	}
+	switch fn.Kind() {
+	case "dot_syntax_call_expr":
+		return stripConv(fn.Child("fn")).Child("decl").Str("decl_usr")
+	case "declref_expr":
+		return fn.Child("decl").Str("decl_usr")
+	}
+	return ""
+}
+
+// inlineOptUse turns the Go form out of n into the Optional's pointer form where n reaches a
+// function that returns swiftrt.Opt: a call takes Ptr of the result, and a reference to the
+// function as a value forwards to it.
+func (e *fileEmitter) inlineOptUse(n ast.Node, out string) string {
+	switch n.Kind() {
+	case "call_expr", "binary_expr", "prefix_unary_expr", "postfix_unary_expr":
+		if info, mod := e.lookupModule(calleeUSR(n)); e.m.inlineOptResult(info, mod) && !strings.HasPrefix(out, "swiftrt.Unsupported") {
+			return e.optPtr(out)
+		}
+	case "declref_expr":
+		if n.Child("function_ref").Str("apply_level") != "unapplied" {
+			return out
+		}
+		if info, mod := e.lookupModule(n.Child("decl").Str("decl_usr")); e.m.inlineOptResult(info, mod) {
+			return e.inlineOptForwarder(n, out)
+		}
+	}
+	return out
+}
+
+// optPtr is opt, a swiftrt.Opt expression, in the Optional's pointer form. It remembers the result
+// so that inlineOpt can take the Opt back without matching on text.
+func (e *fileEmitter) optPtr(opt string) string {
+	if e.optPtrs == nil {
+		e.optPtrs = map[string]bool{}
+	}
+	out := opt + ".Ptr()"
+	e.optPtrs[out] = true
+	return out
+}
+
+// inlineOptForwarder wraps fn, a function value of n's Swift function type whose Go result is
+// swiftrt.Opt, as a function returning the Optional's pointer form. fn is evaluated once.
+func (e *fileEmitter) inlineOptForwarder(n ast.Node, fn string) string {
+	ft := e.m.typeOf(n.Type())
+	if ft == nil || ft.Kind != types.Func || ft.Result == nil || ft.Result.Kind != types.Optional {
+		return fn
+	}
+	var params, names []string
+	for i, a := range ft.Args {
+		pt := e.m.GoType(a, e.generics)
+		if i < len(ft.Inout) && ft.Inout[i] {
+			pt = "*" + pt
+		}
+		params = append(params, "p"+itoa(i)+" "+pt)
+		names = append(names, "p"+itoa(i))
+	}
+	res := e.m.GoType(ft.Result, e.generics)
+	if goIdent.MatchString(fn) {
+		// A function name: calling it directly lets Go infer a generic function's type arguments.
+		return "func(" + strings.Join(params, ", ") + ") " + res + " { return " + fn + "(" + strings.Join(names, ", ") + ").Ptr() }"
+	}
+	return "func() " + e.m.GoType(ft, e.generics) + " { f := " + fn + "; return func(" + strings.Join(params, ", ") + ") " +
+		res + " { return f(" + strings.Join(names, ", ") + ").Ptr() } }()"
+}
+
+var goIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
+
 func (e *fileEmitter) lookup(usr string) (*DeclInfo, string) {
 	if usr == "" {
 		return nil, ""
@@ -1399,6 +1489,14 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 	if rt == "*struct{}" {
 		// A `()?` value: nil when the chain stopped at a nil, else the empty tuple.
 		return "func() *struct{} {\n" + strings.ReplaceAll(pre.String(), chainReturn, "return nil") + body + "\n" + post.String() + "return &struct{}{}\n}()"
+	}
+	if opt := e.m.inlineOptGo(e.m.typeOf(n.Type()), e.generics); opt != "" {
+		// The closure returns the value inline, so a value it makes need not escape to the heap.
+		chainPre := strings.ReplaceAll(pre.String(), chainReturn, "return "+opt+"{}")
+		if post.Len() > 0 {
+			return e.optPtr("func() " + opt + " {\n" + chainPre + "res := " + e.inlineOpt(opt, body) + "\n" + post.String() + "return res\n}()")
+		}
+		return e.optPtr("func() " + opt + " {\n" + chainPre + "return " + e.inlineOpt(opt, body) + "\n}()")
 	}
 	chainPre := strings.ReplaceAll(pre.String(), chainReturn, "return nil")
 	if post.Len() > 0 {
@@ -2677,14 +2775,24 @@ func (e *fileEmitter) unappliedDot(n ast.Node) string {
 		return pfx + info.GoName
 	}
 	if info != nil && info.Kind == "func_decl" {
-		if base == nil || info.Static {
-			return pfx + info.GoName
-		}
-		if !info.FreeSelf() {
-			return e.recvExpr(base) + "." + info.GoName
+		_, mod := e.lookupModule(d.Str("decl_usr"))
+		inlineOpt := e.m.inlineOptResult(info, mod)
+		if base == nil || info.Static || !info.FreeSelf() {
+			fn := pfx + info.GoName
+			if base != nil && !info.Static {
+				fn = e.recvExpr(base) + "." + info.GoName
+			}
+			if inlineOpt {
+				return e.inlineOptForwarder(n, fn)
+			}
+			return fn
 		}
 		return e.boundMethod(n, base, func(recv string, ps []string) string {
-			return pfx + info.GoName + "(" + strings.Join(append([]string{recv}, ps...), ", ") + ")"
+			call := pfx + info.GoName + "(" + strings.Join(append([]string{recv}, ps...), ", ") + ")"
+			if inlineOpt {
+				call += ".Ptr()"
+			}
+			return call
 		})
 	}
 	if info == nil {
@@ -2738,6 +2846,27 @@ func (e *fileEmitter) boundMethod(n, base ast.Node, call func(recv string, param
 }
 
 // ---- operators ----
+
+// optionalEqual is the runtime function comparing two Optionals of Swift types lt and rt, when
+// both are the same Optional of a scalar or a payload-free enum, whose Go == is Swift's ==.
+func (e *fileEmitter) optionalEqual(lt, rt *types.Type) (string, bool) {
+	if lt == nil || rt == nil || lt.Kind != types.Optional || len(lt.Args) != 1 {
+		return "", false
+	}
+	inner := lt.Args[0]
+	gt := e.m.GoType(inner, e.generics)
+	if gt == "" || "*"+gt != e.m.GoType(rt, e.generics) || e.m.GoType(lt, e.generics) != "*"+gt || inner.Kind != types.Named {
+		return "", false
+	}
+	switch gt {
+	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "float32", "float64", "bool", "string":
+		return "swiftrt.OptEqual", true
+	}
+	if k := e.m.declKind(inner.Name); k == "enum_decl" && !e.m.IsPayloadEnum(inner.Name) && !e.m.declaresMember(inner.Name, "==") {
+		return "swiftrt.OptEqual", true
+	}
+	return "", false
+}
 
 func (e *fileEmitter) opDecl(n ast.Node) ast.Node {
 	fn := stripConv(n.Child("fn"))
@@ -2809,6 +2938,15 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		if rt := e.m.typeOf(r.Type()); lt.Kind == types.Named && rt != nil && rt.Kind == types.Named && isIntegerName(lt.Name) && isIntegerName(rt.Name) && lt.Name != rt.Name {
 			return "swiftrt.IntCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
+		}
+		if eq, ok := e.optionalEqual(lt, e.m.typeOf(r.Type())); ok {
+			// Both sides are pointers to a value Go's == compares as Swift does: no reflection, and
+			// neither pointer escapes.
+			s := eq + "(" + e.expr(l) + ", " + e.expr(r) + ")"
+			if op == "!=" {
+				return "!" + s
+			}
+			return s
 		}
 		if lt.Kind == types.Optional || !e.m.isGoComparable(lt) {
 			fn := "swiftrt.Equal"

@@ -234,6 +234,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 				continue
 			}
 			m.ImportPath = importPath
+			m.Mapped = true
 			fmt.Printf("%s: mapped to %s\n", name, importPath)
 			done = append(done, m)
 			byName[name] = m

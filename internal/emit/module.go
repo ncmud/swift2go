@@ -73,6 +73,8 @@ type Module struct {
 	retroFiles      map[string]*strings.Builder // dependency package → methods this module adds to its types
 	retroDone       map[string]bool             // pkg.Type.Method already added
 	ImportPath      string
+	Mapped          bool                       // read for its declarations only: a hand-written Go package replaces it
+	overlaid        map[string]bool            // USRs of the functions declared in Swift files an overlay replaces
 	Mappings        []Mapping                  // hand-written Go packages standing in for modules not transpiled in this run
 	mappedKinds     map[string]map[string]byte // nominal kinds of each mapped module's types, read on first use
 	adapters        map[string]bool            // adapter types emitted for retroactive conformances to local protocols
@@ -1107,6 +1109,32 @@ func (m *Module) overlayFiles() (map[string]bool, error) {
 		files[name] = true
 	}
 	return files, nil
+}
+
+// overlaidFunc reports whether the function usr is declared in a Swift file that a hand-written
+// overlay file replaces.
+func (m *Module) overlaidFunc(usr string) bool {
+	if m.overlaid == nil {
+		m.overlaid = map[string]bool{}
+		overlay, _ := m.overlayFiles()
+		for _, f := range m.Files {
+			suffix := ".go"
+			if m.Test {
+				suffix = "_test.go"
+			}
+			if !overlay[toSnake(strings.TrimSuffix(filepath.Base(f.Filename), ".swift"))+suffix] {
+				continue
+			}
+			for _, item := range f.Items {
+				ast.Walk(item, func(n ast.Node) {
+					if n.Kind() == "func_decl" && n.Str("usr") != "" {
+						m.overlaid[n.Str("usr")] = true
+					}
+				})
+			}
+		}
+	}
+	return m.overlaid[usr]
 }
 
 func toSnake(s string) string {

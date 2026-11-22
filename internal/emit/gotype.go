@@ -3,6 +3,7 @@ package emit
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/ncmud/swift2go/internal/types"
@@ -280,6 +281,44 @@ func (m *Module) isProtocol(q string) bool {
 	return false
 }
 
+// inlineOptGo is the Go type of a function result of Swift type t when the function returns it
+// inline as swiftrt.Opt, so that returning it does not allocate: t is the Optional of a value type,
+// not itself an Optional, a tuple or Void, and names no generic parameter or associated type. It is
+// "" otherwise, and the result is the pointer GoType gives.
+func (m *Module) inlineOptGo(t *types.Type, generics map[string]string) string {
+	if t == nil || t.Kind != types.Optional || len(t.Args) != 1 {
+		return ""
+	}
+	a := t.Args[0]
+	if a.Kind == types.Optional || a.Kind == types.Tuple || namesGeneric(a) {
+		return ""
+	}
+	// Eligibility must not depend on the generic scope, which a caller does not share: an associated
+	// type is any outside its constrained extension.
+	if bare := m.GoType(a, nil); bare == "" || bare == "any" || m.isReferenceGo(a, bare) {
+		return ""
+	}
+	inner := m.GoType(a, generics)
+	if inner == "" || inner == "any" || m.isReferenceGo(a, inner) {
+		return ""
+	}
+	return "swiftrt.Opt[" + inner + "]"
+}
+
+// namesGeneric reports whether t names a generic parameter anywhere.
+func namesGeneric(t *types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if t.Kind == types.Generic {
+		return true
+	}
+	if slices.ContainsFunc(t.Args, namesGeneric) {
+		return true
+	}
+	return namesGeneric(t.Result)
+}
+
 func (m *Module) isReferenceGo(t *types.Type, goType string) bool {
 	if t != nil && t.Kind == types.Optional && len(t.Args) == 1 && !isGenericParamType(t.Args[0]) {
 		// An Optional is never a reference, even when it wraps one: `Int??` is a pointer to the
@@ -553,6 +592,16 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 
 // declaresMember reports whether the local or dependency type q declares a method named name, in
 // its body or an extension. Members the compiler synthesizes do not count.
+// declKind is the declaration kind of the qualified type q in this module or a dependency.
+func (m *Module) declKind(q string) string {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if k := mod.typeKinds[q]; k != "" {
+			return k
+		}
+	}
+	return ""
+}
+
 func (m *Module) declaresMember(q, name string) bool {
 	for _, mod := range append([]*Module{m}, m.Deps...) {
 		if mod.typeKinds[q] == "" {
