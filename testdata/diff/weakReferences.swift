@@ -1,7 +1,8 @@
 // A weak stored property doesn't keep its object alive and reads nil once the object is freed.
-// Go frees it at a collection, so the case allocates until the reference clears or a bound is hit.
-// Each object is made and dropped in a function of its own, so no temporary in the caller's frame
-// keeps it reachable.
+// Go frees it at a collection, so the case allocates enough to run many collections before it reads
+// the reference once. It doesn't poll: reading a weak pointer while the collector is marking keeps
+// the object alive for that cycle. Each object is made and dropped in a function of its own, so no
+// temporary in the caller's frame keeps it reachable.
 
 protocol WRDelegate: AnyObject {
     var tag: String { get }
@@ -58,13 +59,14 @@ func wrChildGone(_ w: WRWorld) -> Bool { w.cache.last == nil && w.holder.value.n
 @inline(never)
 func wrNodeName(_ w: WRWorld) -> String { w.holder.value.node?.name ?? "nil" }
 
-func wrChurn(_ isGone: () -> Bool) -> Bool {
-    var rounds = 0
-    while !isGone() && rounds < 4000 {
-        let junk = [Int](repeating: rounds, count: 50_000)
-        rounds += junk.count > 0 ? 1 : 0
+@inline(never)
+func wrChurn() -> Int {
+    var total = 0
+    for round in 0..<1000 {
+        let junk = [Int](repeating: round, count: 50_000)
+        total += junk.count
     }
-    return isGone()
+    return total
 }
 
 public func weakReferences() {
@@ -72,9 +74,11 @@ public func weakReferences() {
     let w = WRWorld()
     out.append("cache starts nil: \(w.cache.last == nil)")
     out.append(wrAttach(w))
-    out.append("delegate gone: \(wrChurn { wrDelegateGone(w) })")
+    _ = wrChurn()
+    out.append("delegate gone: \(wrDelegateGone(w))")
     out.append("node kept: \(wrNodeName(w))")
     w.root.children.removeAll()
-    out.append("child gone: \(wrChurn { wrChildGone(w) })")
+    _ = wrChurn()
+    out.append("child gone: \(wrChildGone(w))")
     print(out.joined(separator: "\n"))
 }
