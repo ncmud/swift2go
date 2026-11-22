@@ -426,7 +426,37 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 		if gt := m.GoType(t, nil); strings.HasPrefix(gt, "[]") || strings.HasPrefix(gt, "map[") {
 			return false
 		}
+		if m.IsPayloadEnum(t.Name) {
+			return m.payloadEnumComparable(t.Name)
+		}
 	}
+	return true
+}
+
+// payloadEnumComparable reports whether Go's == can compare the sealed interface a payload enum is
+// emitted as: Go compares the dynamic case structs, which panics when a payload cannot be compared. An
+// enum that holds itself is reported not comparable.
+func (m *Module) payloadEnumComparable(name string) bool {
+	if ok, seen := m.enumComparable[name]; seen {
+		return ok
+	}
+	if m.enumComparable == nil {
+		m.enumComparable = map[string]bool{}
+	}
+	m.enumComparable[name] = false
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		for _, d := range mod.decls {
+			if d.Kind != "enum_element_decl" || d.Owner != name || d.Node == nil {
+				continue
+			}
+			for _, p := range d.Node.Child("params").List("params") {
+				if !m.isGoComparable(m.typeOf(p.Str("interface_type"))) {
+					return false
+				}
+			}
+		}
+	}
+	m.enumComparable[name] = true
 	return true
 }
 

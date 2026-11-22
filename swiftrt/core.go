@@ -176,13 +176,37 @@ func equalValues(a, b reflect.Value) bool {
 			}
 		}
 		return true
-	case reflect.Pointer:
+	case reflect.Pointer, reflect.Interface:
 		if a.IsNil() || b.IsNil() {
 			return a.IsNil() && b.IsNil()
 		}
 		return equalValues(a.Elem(), b.Elem())
+	case reflect.Struct:
+		// A struct's fields compare one by one, so a field whose type declares its own == uses it, as
+		// Swift's synthesized == does. A struct with unexported fields is a runtime type and compares
+		// deeply.
+		if a.Type() != b.Type() {
+			return false
+		}
+		if exportedFields(a.Type()) {
+			for i := range a.NumField() {
+				if !equalValues(a.Field(i), b.Field(i)) {
+					return false
+				}
+			}
+			return true
+		}
 	}
 	return reflect.DeepEqual(a.Interface(), b.Interface())
+}
+
+func exportedFields(t reflect.Type) bool {
+	for i := range t.NumField() {
+		if !t.Field(i).IsExported() {
+			return false
+		}
+	}
+	return true
 }
 
 // Clone copies a slice or map so a Swift `var` binding gets its own value.
