@@ -221,6 +221,10 @@ func (e *fileEmitter) member(n, mem ast.Node, self *DeclInfo) {
 			e.ctorDecl(mem, self, n)
 		case "var_decl":
 			info := e.info(mem)
+			if info != nil && info.Weak {
+				e.weakVar(mem, info, self)
+				break
+			}
 			if info != nil && info.Computed {
 				e.computedVar(mem, info, self)
 			}
@@ -317,6 +321,10 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 			continue
 		}
 		vi := e.info(mem)
+		if vi != nil && vi.Weak {
+			e.w("\t%s swiftrt.Weak[%s]\n", weakField(vi), e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics))
+			continue
+		}
 		if vi == nil || vi.Static || vi.Computed {
 			continue
 		}
@@ -1677,6 +1685,21 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	e.w("\n\n")
 }
 
+// weakField is the Go field holding the weak stored property info.
+func weakField(info *DeclInfo) string { return "weak_" + info.GoName }
+
+// weakVar emits the getter and SetX of a weak stored property.
+func (e *fileEmitter) weakVar(n ast.Node, info, self *DeclInfo) {
+	vt := e.m.GoType(e.m.typeOf(n.Str("interface_type")), e.generics)
+	recv := self.GoName + e.selfTypeArgs(self)
+	getRecv := recv
+	if self.Kind == "class_decl" {
+		getRecv = "*" + recv
+	}
+	e.w("func (self %s) %s() %s {\nreturn self.%s.Get()\n}\n\n", getRecv, info.GoName, vt, weakField(info))
+	e.w("func (self *%s) Set%s(newValue %s) {\nself.%s.Set(newValue)\n}\n\n", recv, info.GoName, vt, weakField(info))
+}
+
 // setterVar emits SetX for a computed property's setter or a stored property's observers.
 func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	var set, will, did ast.Node
@@ -1907,7 +1930,9 @@ func (e *fileEmitter) storedPropertyInits(typeNode ast.Node) {
 		}
 		for _, pe := range mem.List("pattern_entries") {
 			vi := e.findVar(typeNode, patternName(pe.Child("pattern")))
-			if vi != nil && !vi.Static && !vi.Computed && pe.Child("processed_init") != nil {
+			if vi != nil && vi.Weak && pe.Child("processed_init") != nil {
+				e.w("self.%s.Set(%s)\n", weakField(vi), e.expr(pe.Child("processed_init")))
+			} else if vi != nil && !vi.Static && !vi.Computed && pe.Child("processed_init") != nil {
 				e.w("self.%s = %s\n", vi.GoName, e.owned(pe.Child("processed_init"), sinkStore))
 			}
 		}
@@ -1991,7 +2016,9 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 		e.stmts(b.List("elements"))
 	} else {
 		for _, p := range n.Child("params").List("params") {
-			if vi := e.findVar(typeNode, p.Name()); vi != nil {
+			if vi := e.findVar(typeNode, p.Name()); vi != nil && vi.Weak {
+				e.w("self.%s.Set(%s)\n", weakField(vi), goSafe(p.Name()))
+			} else if vi != nil {
 				// The memberwise initializer keeps its arguments; its callers hand over values of their own.
 				e.w("self.%s = %s\n", vi.GoName, goSafe(p.Name()))
 			}

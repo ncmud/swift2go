@@ -1875,6 +1875,15 @@ func (e *fileEmitter) setterCall(dest ast.Node, value string) (string, bool) {
 	for dest.Kind() == "load_expr" || dest.Kind() == "paren_expr" || dest.Kind() == "inout_expr" {
 		dest = dest.Child("sub_expr")
 	}
+	if dest.Kind() == "member_ref_expr" {
+		if info, _ := e.lookup(dest.Child("decl").Str("decl_usr")); info != nil && info.Weak {
+			b := dest.Child("base")
+			for b.Kind() == "inout_expr" {
+				b = b.Child("sub_expr")
+			}
+			return e.lvalue(b) + ".Set" + info.GoName + "(" + value + ")", true
+		}
+	}
 	if dest.Bool("direct_to_storage") {
 		// Inside a property's own observers or accessors, Swift writes its storage directly.
 		return "", false

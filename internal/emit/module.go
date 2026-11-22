@@ -30,6 +30,9 @@ type DeclInfo struct {
 	NotWitness bool
 	// Overrides is the USR of the superclass member this member overrides.
 	Overrides string
+	// Weak marks a `weak` stored property, kept in a swiftrt.Weak field and read and written through
+	// a getter and SetX, as a computed property is.
+	Weak bool
 	// OpenOverridable marks a member that a subclass in another module can override: an open method
 	// or property, or a designated initializer of an open class visible outside its module.
 	OpenOverridable bool
@@ -622,6 +625,9 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				info.Computed = impl != "" && impl != "stored"
 				info.Settable = info.Computed && n.Str("writeImpl") == "setter"
 				info.Observed = n.Str("writeImpl") == "stored_with_observers"
+				if owner != "" && !info.Static && !info.Computed && !info.Observed && strings.HasPrefix(m.demangle(n.Str("interface_type")), "weak ") {
+					info.Weak, info.Computed, info.Settable = true, true, true
+				}
 			}
 			for _, a := range n.List("attrs") {
 				if a.Kind() == "mutating_attr" {

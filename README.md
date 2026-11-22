@@ -283,6 +283,9 @@ option.
   they were when it was made. Closures copy them.
 - Pointers and C interop cover what the code needs (`gettimeofday`, `clock_gettime`, C strings, pointer arithmetic over C characters, `argv`), not `UnsafePointer` in general. A pointer to C characters cannot move backwards.
 - A generic function that takes `swiftrt.TypeT[T]` for a protocol with static requirements cannot be called with a metatype known only at run time (`Self.self` in a protocol extension, an associated type's metatype); the call compiles and traps if it runs.
+- A `weak` stored property of a class or struct is a `swiftrt.Weak` field, which reads nil once the
+  collector frees the object. The collector frees it some time after Swift would. A `weak` static,
+  local or closure capture (`[weak self]`) is still a strong reference, and `unowned` is always strong.
 - A `deinit` becomes the method `SwiftDeinit`, which nothing calls, because Go has no deterministic
   destruction. A deinit that only deallocates pointer memory needs no call, since the collector frees it;
   any other deinit is reported, and code that relies on it has to call `SwiftDeinit` itself.
