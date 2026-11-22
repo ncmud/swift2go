@@ -59,6 +59,7 @@ type Module struct {
 	Target          string
 	dm              *types.Demangler
 	decls           map[string]*DeclInfo
+	sorted          []*DeclInfo       // decls ordered by key, built on first use after a change to decls
 	typeKinds       map[string]string // qualified Swift type name → decl kind
 	protoReqs       map[string][]ast.Node
 	protoParents    map[string][]string // a local protocol's directly inherited protocols
@@ -442,6 +443,7 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				}
 			}
 			m.decls[declKey(n)] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind}
+			m.sorted = nil
 			for _, c := range n.Child("inherits").List("conformances") {
 				if p := c.Str("protocol"); p != "" {
 					pn := m.demangle(p)
@@ -522,6 +524,7 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 			}
 			if n.Str("usr") != "" {
 				m.decls[n.Str("usr")] = info
+				m.sorted = nil
 			}
 		case "enum_case_decl":
 			m.index(n.List("elements"), owner, ownerKind)

@@ -536,13 +536,17 @@ func prefixComma(s string) string {
 	return ", " + s
 }
 
+// sortedDecls returns the module's declarations ordered by key. Callers must not modify the slice.
 func (m *Module) sortedDecls() []*DeclInfo {
-	keys := slices.Sorted(maps.Keys(m.decls))
-	out := make([]*DeclInfo, len(keys))
-	for i, k := range keys {
-		out[i] = m.decls[k]
+	if m.sorted != nil {
+		return m.sorted
 	}
-	return out
+	keys := slices.Sorted(maps.Keys(m.decls))
+	m.sorted = make([]*DeclInfo, len(keys))
+	for i, k := range keys {
+		m.sorted[i] = m.decls[k]
+	}
+	return m.sorted
 }
 
 // inheritedRequirementName is the Go name of the requirement that a default in an extension of proto
