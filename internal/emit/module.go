@@ -82,6 +82,7 @@ type Module struct {
 	mutatingTypes   map[string]bool
 	overridden      map[string]bool // USRs of class members some subclass overrides
 	superOf         map[string]string
+	methodNames     map[string]bool   // "owner name" of every function declared on a type
 	typeAliases     map[string]string // qualified typealias name → mangled aliased type
 	members         map[string][]*DeclInfo
 	protocolsByType map[string][]string

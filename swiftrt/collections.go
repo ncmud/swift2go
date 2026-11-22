@@ -89,7 +89,13 @@ func SliceAllSatisfy[T any](xs []T, f func(T) bool) bool {
 }
 
 // SliceContains is Sequence.contains(_:).
-func SliceContains[T comparable](xs []T, v T) bool { return slices.Contains(xs, v) }
+func SliceContains[T comparable](xs []T, v T) bool {
+	switch any(v).(type) {
+	case Substring, SwiftEqualer:
+		return slices.ContainsFunc(xs, func(x T) bool { return Equal(x, v) })
+	}
+	return slices.Contains(xs, v)
+}
 
 // SliceContainsWhere is Sequence.contains(where:).
 func SliceContainsWhere[T any](xs []T, f func(T) bool) bool { return slices.ContainsFunc(xs, f) }

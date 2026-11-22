@@ -420,8 +420,12 @@ func IntTrailingZeroBitCount[T Integer](v T) int {
 // PreconditionFailure is Swift `preconditionFailure`.
 func PreconditionFailure(msg ...string) { Trap("precondition failure " + Str(msg)) }
 
+// ObjectID is a Swift `ObjectIdentifier` of a class instance. It is not the reference itself, so
+// hashing it does not call the object's own hash(into:).
+type ObjectID struct{ obj any }
+
 // ObjectIdentifierInitAnyObject is Swift `ObjectIdentifier(obj)`: the object's identity.
-func ObjectIdentifierInitAnyObject(v any) any { return Dynamic(v) }
+func ObjectIdentifierInitAnyObject(v any) any { return ObjectID{Dynamic(v)} }
 
 // MutexInitState is Synchronization `Mutex(_:)` with a struct state.
 func MutexInitState[T any](v T) *Mutex[T] { return MutexInit(v) }
