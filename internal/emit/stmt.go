@@ -3,7 +3,7 @@ package emit
 import (
 	"maps"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -245,8 +245,8 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 		if strings.HasSuffix(n.Kind(), "_expr") {
 			s := e.expr(n)
 			for _, never := range []string{"swiftrt.FatalError(", "swiftrt.PreconditionFailure("} {
-				if strings.HasPrefix(s, never) {
-					s = "swiftrt.FatalError[struct{}](" + strings.TrimPrefix(s, never)
+				if after, ok := strings.CutPrefix(s, never); ok {
+					s = "swiftrt.FatalError[struct{}](" + after
 				}
 			}
 			if e.isCallLike(n) || isVoidGo(e.exprGoType(n)) && (strings.HasSuffix(s, ")") || strings.HasSuffix(s, "}()")) {
@@ -1421,11 +1421,7 @@ type doReturn struct {
 }
 
 func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(m))
 	return keys
 }
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -92,7 +91,7 @@ func (e *fileEmitter) emitFile() string {
 		imports = append(imports, `"math"`)
 	}
 	if len(imports) > 0 {
-		sort.Strings(imports)
+		slices.Sort(imports)
 		hdr.WriteString("import (\n")
 		for _, i := range imports {
 			hdr.WriteString("\t" + i + "\n")
@@ -339,11 +338,7 @@ func prefixComma(s string) string {
 }
 
 func (m *Module) sortedDecls() []*DeclInfo {
-	keys := make([]string, 0, len(m.decls))
-	for k := range m.decls {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(m.decls))
 	out := make([]*DeclInfo, len(keys))
 	for i, k := range keys {
 		out[i] = m.decls[k]
@@ -633,9 +628,7 @@ func (e *fileEmitter) globalBinding(n ast.Node) {
 // genericScope maps a function's generic parameters to Go types (protocol constraints become interfaces).
 func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 	g := map[string]string{}
-	for k, v := range e.generics {
-		g[k] = v
-	}
+	maps.Copy(g, e.generics)
 	e.typeParams = nil
 	e.typeBounds = map[string]string{}
 	own := map[string]bool{}
@@ -1590,9 +1583,7 @@ func paramNameSet(fn ast.Node) map[string]bool {
 // typeGenerics maps a generic type's parameters to themselves while its members are emitted.
 func (e *fileEmitter) typeGenerics(q string) map[string]string {
 	g := map[string]string{}
-	for k, v := range e.generics {
-		g[k] = v
-	}
+	maps.Copy(g, e.generics)
 	for _, p := range e.m.TypeParams(q) {
 		g[p] = p
 	}

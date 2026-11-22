@@ -431,9 +431,7 @@ func DumpAST(t Target, modulesDir string, extra ...string) ([]byte, error) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, runtime.NumCPU())
 	for i, src := range sources {
-		wg.Add(1)
-		go func(i int, src string) {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			var stdout, stderr bytes.Buffer
@@ -471,7 +469,7 @@ func DumpAST(t Target, modulesDir string, extra ...string) ([]byte, error) {
 				out = nil
 			}
 			outs[i] = out
-		}(i, src)
+		})
 	}
 	wg.Wait()
 	var all []byte

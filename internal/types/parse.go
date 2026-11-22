@@ -1,6 +1,7 @@
 package types
 
 import (
+	"slices"
 	"strings"
 )
 
@@ -119,10 +120,8 @@ func (p *parser) eat(tok string) bool {
 
 func (p *parser) parseType() *Type {
 	p.skipSpace()
-	for _, attr := range []string{"@escaping ", "@Sendable ", "@lvalue ", "inout ", "@noescape ", "@autoclosure ", "__owned ", "__shared ", "sending ", "@convention(block) ", "@convention(c) ", "@convention(thin) "} {
-		if p.eat(attr) {
-			return p.parseType()
-		}
+	if slices.ContainsFunc([]string{"@escaping ", "@Sendable ", "@lvalue ", "inout ", "@noescape ", "@autoclosure ", "__owned ", "__shared ", "sending ", "@convention(block) ", "@convention(c) ", "@convention(thin) "}, p.eat) {
+		return p.parseType()
 	}
 	var t *Type
 	switch {

@@ -210,8 +210,8 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			lit = strconv.Quote(text)
 		}
 		gt := e.exprGoType(n)
-		if strings.HasPrefix(gt, "swiftrt.SwiftRegex[") {
-			return "swiftrt.RegexLiteral[" + strings.TrimSuffix(strings.TrimPrefix(gt, "swiftrt.SwiftRegex["), "]") + "](" + lit + ")"
+		if after, ok := strings.CutPrefix(gt, "swiftrt.SwiftRegex["); ok {
+			return "swiftrt.RegexLiteral[" + strings.TrimSuffix(after, "]") + "](" + lit + ")"
 		}
 		return e.m.Unsup("regex-literal-type", e.where, gt)
 	case "string_literal_expr":
@@ -322,8 +322,8 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Named && e.m.IsOptionSet(t.Name) {
 			return "swiftrt.OptionSetOf[" + gt + "](" + strings.Join(parts, ", ") + ")"
 		}
-		if strings.HasPrefix(gt, "swiftrt.HSet[") {
-			return "swiftrt.HSetOf[" + strings.TrimSuffix(strings.TrimPrefix(gt, "swiftrt.HSet["), "]") + "](" + strings.Join(parts, ", ") + ")"
+		if after, ok := strings.CutPrefix(gt, "swiftrt.HSet["); ok {
+			return "swiftrt.HSetOf[" + strings.TrimSuffix(after, "]") + "](" + strings.Join(parts, ", ") + ")"
 		}
 		if strings.HasPrefix(gt, "map[") && strings.HasSuffix(gt, "]struct{}") {
 			for i := range parts {
@@ -1140,9 +1140,7 @@ func (e *fileEmitter) closure(n ast.Node) string {
 	saveR, saveT, saveI, saveDo := e.resultType, e.throws, e.inInit, e.doRet
 	e.doRet = nil
 	saveIO := map[string]bool{}
-	for k, v := range e.inoutParams {
-		saveIO[k] = v
-	}
+	maps.Copy(saveIO, e.inoutParams)
 	defer func() { e.resultType, e.throws, e.inInit, e.doRet, e.inoutParams = saveR, saveT, saveI, saveDo, saveIO }()
 	ft := e.m.typeOf(n.Type())
 	var params []string

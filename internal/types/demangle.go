@@ -179,21 +179,22 @@ func localWrappers(mangled, raw, norm string) string {
 	for end < len(norm) && (norm[end] == '.' || norm[end] == '_' || isAlnum(norm[end])) {
 		end++
 	}
-	out := norm[:end]
+	var out strings.Builder
+	out.WriteString(norm[:end])
 	rest := strings.TrimSuffix(mangled[i+3:], "D")
 	for rest != "" {
 		switch {
 		case strings.HasPrefix(rest, "Sg"):
-			out += "?"
+			out.WriteString("?")
 			rest = rest[2:]
 		case rest == "m":
-			out += ".Type"
+			out.WriteString(".Type")
 			rest = ""
 		default:
 			return norm
 		}
 	}
-	return out
+	return out.String()
 }
 
 func isAlnum(c byte) bool {

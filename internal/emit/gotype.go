@@ -228,8 +228,8 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		return "swiftrt.C" + capitalize(rest)
 	}
 	for _, pfx := range []string{"Foundation.", "__C.NS", "__C.", "Synchronization.", "Dispatch.", "_Concurrency.", "CryptoKit.", "Crypto.", "Logging.", "YYJSON.", "WSCore.", "WSClient.", "NIOSSL.", "NIOCore.", "NIOPosix."} {
-		if strings.HasPrefix(name, pfx) {
-			return "swiftrt." + strings.ReplaceAll(strings.TrimPrefix(name, pfx), ".", "")
+		if after, ok := strings.CutPrefix(name, pfx); ok {
+			return "swiftrt." + strings.ReplaceAll(after, ".", "")
 		}
 	}
 	parts := strings.SplitN(name, ".", 2)
