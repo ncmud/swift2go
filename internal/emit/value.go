@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"maps"
 	"strings"
 
 	"github.com/ncmud/swift2go/internal/ast"
@@ -127,10 +128,42 @@ func isFunctionLike(kind string) bool {
 // resolveLocals walks a file once and resolves every reference to a local variable to its declaration,
 // by Swift's lexical scoping over functions and closures. The dump names locals without a USR.
 func resolveLocals(items []ast.Node) *valueScopes {
-	vs := &valueScopes{refs: map[uintptr]localRef{}, within: map[uintptr]*valueFrame{}, varPats: map[uintptr]bool{}, stmtPats: map[uintptr]bool{},
-		patFrames: map[uintptr]*valueFrame{}, bodies: map[uintptr]*valueFrame{}}
+	vs := newValueScopes()
 	for _, it := range items {
 		vs.walk(map[string]any(it), nil, false)
+	}
+	return vs
+}
+
+func newValueScopes() *valueScopes {
+	return &valueScopes{refs: map[uintptr]localRef{}, within: map[uintptr]*valueFrame{}, varPats: map[uintptr]bool{}, stmtPats: map[uintptr]bool{},
+		patFrames: map[uintptr]*valueFrame{}, bodies: map[uintptr]*valueFrame{}}
+}
+
+// resolveLocalsParallel is [resolveLocals] over the items of many files, which resolve
+// independently: each item's scopes start at its top level.
+func resolveLocalsParallel(files []ast.File) *valueScopes {
+	shards := make([]*valueScopes, len(files))
+	parallel(len(files), func(i int) { shards[i] = resolveLocals(files[i].Items) })
+	var n [6]int
+	for _, sh := range shards {
+		n[0] += len(sh.refs)
+		n[1] += len(sh.within)
+		n[2] += len(sh.varPats)
+		n[3] += len(sh.stmtPats)
+		n[4] += len(sh.patFrames)
+		n[5] += len(sh.bodies)
+	}
+	vs := &valueScopes{refs: make(map[uintptr]localRef, n[0]), within: make(map[uintptr]*valueFrame, n[1]),
+		varPats: make(map[uintptr]bool, n[2]), stmtPats: make(map[uintptr]bool, n[3]),
+		patFrames: make(map[uintptr]*valueFrame, n[4]), bodies: make(map[uintptr]*valueFrame, n[5])}
+	for _, sh := range shards {
+		maps.Copy(vs.refs, sh.refs)
+		maps.Copy(vs.within, sh.within)
+		maps.Copy(vs.varPats, sh.varPats)
+		maps.Copy(vs.stmtPats, sh.stmtPats)
+		maps.Copy(vs.patFrames, sh.patFrames)
+		maps.Copy(vs.bodies, sh.bodies)
 	}
 	return vs
 }

@@ -303,12 +303,12 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 	t := c.t
 	start := time.Now()
 	derived := absPath(filepath.Join(c.outDir, "derived"))
-	d, err := swiftmod.NewDumper(t, c.mods, derived, c.extra...)
+	cacheDir := absPath(filepath.Join(c.outDir, ".cache", t.Name))
+	d, err := swiftmod.NewCachedDumper(cacheDir+".job", t, c.mods, derived, c.extra...)
 	if err != nil {
 		return nil, err
 	}
 	env := d.Key() + "\x00" + swiftmod.DependencyKey(t, c.targets, ifaces, c.searchDirs)
-	cacheDir := absPath(filepath.Join(c.outDir, ".cache", t.Name))
 	dump, err := swiftmod.DumpCached(cacheDir, env, d.Sources, d.Dump)
 	if err != nil {
 		return nil, err

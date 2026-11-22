@@ -491,13 +491,20 @@ type Dumper struct {
 
 // NewDumper asks the driver for the frontend command that dumps t's ASTs; see [DumpAST].
 func NewDumper(t Target, modulesDir, expandDir string, extra ...string) (*Dumper, error) {
+	return NewCachedDumper("", t, modulesDir, expandDir, extra...)
+}
+
+// NewCachedDumper is [NewDumper] with the driver's answer cached in jobFile, which a later call
+// reuses while the driver arguments, the target's sources and the toolchain stay the same. An
+// empty jobFile caches nothing.
+func NewCachedDumper(jobFile string, t Target, modulesDir, expandDir string, extra ...string) (*Dumper, error) {
 	args := []string{"-dump-ast", "-dump-ast-format", "json", "-module-name", t.Name, "-swift-version", "6", "-package-name", filepath.Base(t.Dir)}
 	if modulesDir != "" {
 		args = append(args, "-I", modulesDir)
 	}
 	args = append(args, extra...)
 	sources := t.SourcePaths()
-	job, err := frontendJob(t.Dir, append(append([]string{"-driver-print-jobs"}, args...), sources...), sources)
+	job, err := cachedFrontendJob(jobFile, t.Dir, append(append([]string{"-driver-print-jobs"}, args...), sources...), sources)
 	if err != nil {
 		return nil, err
 	}

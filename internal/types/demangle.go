@@ -3,10 +3,13 @@ package types
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
+	"sync"
 )
 
 // Demangler caches demangled names for mangled types ("$s…") and USRs ("s:…").
@@ -44,24 +47,49 @@ func (d *Demangler) Add(syms []string) error {
 	if len(todo) == 0 {
 		return nil
 	}
+	// swift-demangle answers one line per symbol; chunks of the list run in parallel.
+	n := max(1, min(runtime.NumCPU(), len(todo)/demangleChunk))
+	results := make([]string, len(todo))
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for c := range n {
+		lo, hi := c*len(todo)/n, (c+1)*len(todo)/n
+		wg.Go(func() { errs[c] = demangleInto(todo[lo:hi], results[lo:hi]) })
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	for i, s := range todo {
+		d.cache[s] = results[i]
+	}
+	return nil
+}
+
+// demangleChunk is the fewest symbols worth a swift-demangle process of their own.
+var demangleChunk = 4096
+
+// demangleInto demangles syms in one swift-demangle run and stores each one's normalized form at
+// the same index of out.
+func demangleInto(syms, out []string) error {
 	var in bytes.Buffer
-	for _, s := range todo {
+	for _, s := range syms {
 		in.WriteString(mangledForm(s))
 		in.WriteByte('\n')
 	}
 	cmd := exec.Command("xcrun", "swift-demangle", "--compact")
 	cmd.Stdin = &in
-	out, err := cmd.Output()
+	data, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("swift-demangle: %w", err)
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	if len(lines) != len(todo) {
-		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(todo))
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != len(syms) {
+		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(syms))
 	}
-	for i, s := range todo {
+	for i, s := range syms {
 		raw := privateName.ReplaceAllString(lines[i], "$1")
-		d.cache[s] = localWrappers(s, raw, normalizeLocal(raw))
+		out[i] = localWrappers(s, raw, normalizeLocal(raw))
 	}
 	return nil
 }
