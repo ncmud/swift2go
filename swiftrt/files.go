@@ -2,10 +2,14 @@ package swiftrt
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sync"
 	"syscall"
 )
 
@@ -103,24 +107,57 @@ func copyTree(from, to string) error {
 }
 
 // FileHandle is Foundation `FileHandle`.
-type FileHandle struct{ File *os.File }
+type FileHandle struct {
+	File *os.File
+	null bool
+}
+
+// NSFileHandleNullDevice is Foundation `FileHandle.nullDevice`: reads from it are empty, writes
+// to it are discarded, and closing it does nothing.
+var NSFileHandleNullDevice = FileHandle{null: true}
+
+var devNull = sync.OnceValue(func() *os.File {
+	f, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		panic("swiftrt: cannot open " + os.DevNull + ": " + err.Error())
+	}
+	return f
+})
+
+// file is the open file behind the handle, or nil once it is closed.
+func (h FileHandle) file() *os.File {
+	if h.null {
+		return devNull()
+	}
+	return h.File
+}
+
+// open is the handle's file, throwing the POSIX "bad file descriptor" error when it is closed.
+func (h FileHandle) open() *os.File {
+	f := h.file()
+	if f == nil {
+		panic(Throw(NSError{Domain: "NSPOSIXErrorDomain", Code: int(syscall.EBADF), Msg: "The operation could not be completed. Bad file descriptor"}))
+	}
+	return f
+}
 
 // NSFileHandleInitFileDescriptorCloseOnDealloc is Foundation `FileHandle(fileDescriptor:closeOnDealloc:)`.
 // The descriptor is closed when the handle is closed or garbage-collected.
 func NSFileHandleInitFileDescriptorCloseOnDealloc(fd int32, _ bool) FileHandle {
-	return FileHandle{os.NewFile(uintptr(fd), "")}
+	return FileHandle{File: os.NewFile(uintptr(fd), "")}
 }
 
 // NSFileHandleStandardError is Foundation `FileHandle.standardError`.
-var NSFileHandleStandardError = FileHandle{os.Stderr}
+var NSFileHandleStandardError = FileHandle{File: os.Stderr}
 
 // NSFileHandleWrite is Foundation `FileHandle.write(_:)`: it writes all of data and, like
 // `try! write(contentsOf:)` on Linux, traps when the write fails.
 func NSFileHandleWrite(h FileHandle, data []byte) {
-	if h.File == nil {
+	f := h.file()
+	if f == nil {
 		Trap("'try!' expression unexpectedly raised an error: the file handle is closed")
 	}
-	if _, err := h.File.Write(data); err != nil {
+	if _, err := f.Write(data); err != nil {
 		Trap("'try!' expression unexpectedly raised an error: " + err.Error())
 	}
 }
@@ -128,7 +165,7 @@ func NSFileHandleWrite(h FileHandle, data []byte) {
 // NSFileHandleClose is Foundation `FileHandle.close()`: it closes the descriptor, throwing when the
 // close fails.
 func NSFileHandleClose(h FileHandle) {
-	if h.File == nil {
+	if h.null || h.File == nil {
 		return
 	}
 	if err := h.File.Close(); err != nil {
@@ -185,4 +222,237 @@ func cocoaFileError(path string, err error) NSError {
 		return NSError{Domain: "NSCocoaErrorDomain", Code: 257, Msg: "The operation could not be completed. You don’t have permission."}
 	}
 	return NSError{Domain: "NSCocoaErrorDomain", Code: 256, Msg: "The operation could not be completed. (NSCocoaErrorDomain error 256.)"}
+}
+
+// cocoaWriteError is the NSError Foundation on Linux reports for a failed file-system write.
+func cocoaWriteError(path string, err error) NSError {
+	switch {
+	case path == "" || errors.Is(err, fs.ErrNotExist):
+		return NSError{Domain: "NSCocoaErrorDomain", Code: 4, Msg: "The operation could not be completed. The file doesn’t exist."}
+	case errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EACCES):
+		return NSError{Domain: "NSCocoaErrorDomain", Code: 513, Msg: "The operation could not be completed. You don’t have permission."}
+	case errors.Is(err, fs.ErrExist):
+		return NSError{Domain: "NSCocoaErrorDomain", Code: 516, Msg: "The operation could not be completed. The file already exists."}
+	}
+	return NSError{Domain: "NSCocoaErrorDomain", Code: 512, Msg: "The operation could not be completed. (NSCocoaErrorDomain error 512.)"}
+}
+
+// NSFileHandleInitForWritingTo is Foundation `FileHandle(forWritingTo:)`: it opens the existing
+// file at a file URL for writing from its start, without truncating it, and throws when the file
+// is missing or cannot be opened.
+func NSFileHandleInitForWritingTo(u URL) FileHandle {
+	path := fileURLPath(u)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		panic(Throw(cocoaWriteError(path, err)))
+	}
+	return FileHandle{File: f}
+}
+
+// NSFileHandleOptInitForWritingAtPath is Foundation `FileHandle(forWritingAtPath:)`: the existing
+// file opened for writing from its start, or nil when it cannot be opened.
+func NSFileHandleOptInitForWritingAtPath(path string) *FileHandle {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return nil
+	}
+	return &FileHandle{File: f}
+}
+
+// NSFileHandleOptInitForReadingAtPath is Foundation `FileHandle(forReadingAtPath:)`: the file
+// opened for reading, or nil when it cannot be opened.
+func NSFileHandleOptInitForReadingAtPath(path string) *FileHandle {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	return &FileHandle{File: f}
+}
+
+// NSFileHandleWriteContentsOf is Foundation `FileHandle.write(contentsOf:)`: it writes all of data
+// at the file's current offset, throwing when the write fails or the handle is closed.
+func NSFileHandleWriteContentsOf(h FileHandle, data []byte) {
+	if _, err := h.open().Write(data); err != nil {
+		panic(Throw(err))
+	}
+}
+
+// NSFileHandleSynchronize is Foundation `FileHandle.synchronize()`: it flushes the file's data to
+// its device, throwing when that fails.
+func NSFileHandleSynchronize(h FileHandle) {
+	if h.null {
+		return
+	}
+	if err := h.open().Sync(); err != nil {
+		panic(Throw(err))
+	}
+}
+
+// NSFileHandleSeekToOffset is Foundation `FileHandle.seek(toOffset:)`: it moves the file's offset
+// to that many bytes from its start, throwing when the file cannot seek.
+func NSFileHandleSeekToOffset(h FileHandle, offset uint64) {
+	if offset > math.MaxInt64 {
+		panic(Throw(NSError{Domain: "NSPOSIXErrorDomain", Code: int(syscall.EINVAL), Msg: "The operation could not be completed. Invalid argument"}))
+	}
+	if _, err := h.open().Seek(int64(offset), io.SeekStart); err != nil {
+		panic(Throw(err))
+	}
+}
+
+// NSFileHandleSeekToEnd is Foundation `FileHandle.seekToEnd()`: it moves the file's offset to its
+// end and returns that offset, throwing when the file cannot seek.
+func NSFileHandleSeekToEnd(h FileHandle) uint64 {
+	end, err := h.open().Seek(0, io.SeekEnd)
+	if err != nil {
+		panic(Throw(err))
+	}
+	return uint64(end)
+}
+
+// NSFileHandleSeekToEndOfFile is Foundation `FileHandle.seekToEndOfFile()`: seekToEnd() that
+// traps where it would throw.
+func NSFileHandleSeekToEndOfFile(h FileHandle) uint64 {
+	f := h.file()
+	if f == nil {
+		Trap("'try!' expression unexpectedly raised an error: the file handle is closed")
+	}
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		Trap("'try!' expression unexpectedly raised an error: " + err.Error())
+	}
+	return uint64(end)
+}
+
+// NSFileHandleReadDataToEndOfFile is Foundation `FileHandle.readDataToEndOfFile()`: the bytes from
+// the file's offset to its end, trapping when the read fails.
+func NSFileHandleReadDataToEndOfFile(h FileHandle) []byte {
+	if h.null {
+		return []byte{}
+	}
+	f := h.file()
+	if f == nil {
+		Trap("'try!' expression unexpectedly raised an error: the file handle is closed")
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		Trap("'try!' expression unexpectedly raised an error: " + err.Error())
+	}
+	return data
+}
+
+// NSFileHandleCloseFile is Foundation `FileHandle.closeFile()`: close() that ignores a failure.
+func NSFileHandleCloseFile(h FileHandle) {
+	if h.null || h.File == nil {
+		return
+	}
+	_ = h.File.Close()
+}
+
+// NSFileManagerCurrentDirectoryPath is Foundation `FileManager.currentDirectoryPath`.
+func NSFileManagerCurrentDirectoryPath(FileManager) string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// NSFileManagerCreateFileAtPathContents is Foundation `FileManager.createFile(atPath:contents:)`:
+// it writes the contents, or nothing for nil, to the file, replacing one already there, and
+// reports whether it could.
+func NSFileManagerCreateFileAtPathContents(_ FileManager, path string, contents *[]byte) bool {
+	var data []byte
+	if contents != nil {
+		data = *contents
+	}
+	return os.WriteFile(path, data, 0o644) == nil
+}
+
+// NSFileManagerRemoveItemAtPath is Foundation `FileManager.removeItem(atPath:)`: it removes the
+// file, or the directory and everything in it, throwing when nothing exists at the path.
+func NSFileManagerRemoveItemAtPath(_ FileManager, path string) {
+	if _, err := os.Lstat(path); err != nil {
+		panic(Throw(cocoaWriteError(path, err)))
+	}
+	if err := os.RemoveAll(path); err != nil {
+		panic(Throw(cocoaWriteError(path, err)))
+	}
+}
+
+// NSFileManagerMoveItemAtTo is Foundation `FileManager.moveItem(at:to:)`: it renames the item,
+// copying it across file systems when it must. It throws NSCocoaErrorDomain 516 when the
+// destination exists and 4 when the source does not.
+func NSFileManagerMoveItemAtTo(_ FileManager, src, dst URL) {
+	from, to := fileURLPath(src), fileURLPath(dst)
+	if _, err := os.Lstat(from); err != nil {
+		panic(Throw(cocoaWriteError(from, err)))
+	}
+	if _, err := os.Lstat(to); err == nil {
+		panic(Throw(cocoaWriteError(to, fs.ErrExist)))
+	}
+	err := os.Rename(from, to)
+	if errors.Is(err, syscall.EXDEV) {
+		if err = copyTree(from, to); err == nil {
+			err = os.RemoveAll(from)
+		}
+	}
+	if err != nil {
+		panic(Throw(cocoaWriteError(to, err)))
+	}
+}
+
+// FileAttributeKey is Foundation `FileAttributeKey`.
+type FileAttributeKey string
+
+// NSFileAttributeKeyCNSFilePosixPermissions is `FileAttributeKey.posixPermissions`: the item's
+// permission bits, as an integer.
+const NSFileAttributeKeyCNSFilePosixPermissions FileAttributeKey = "NSFilePosixPermissions"
+
+// NSFileManagerSetAttributesOfItemAtPath is Foundation `FileManager.setAttributes(_:ofItemAtPath:)`
+// for `.posixPermissions`, throwing when the item is missing or cannot be changed. Any other
+// attribute is not supported and panics.
+func NSFileManagerSetAttributesOfItemAtPath(_ FileManager, attributes map[FileAttributeKey]any, path string) {
+	for key, value := range attributes {
+		if key != NSFileAttributeKeyCNSFilePosixPermissions {
+			panic(fmt.Sprintf("swiftrt: setting file attribute %s is not supported", key))
+		}
+		var mode uint32
+		switch rv := reflect.ValueOf(value); {
+		case rv.CanInt():
+			mode = uint32(rv.Int())
+		case rv.CanUint():
+			mode = uint32(rv.Uint())
+		default:
+			panic(fmt.Sprintf("swiftrt: file attribute %s needs an integer, not %T", key, value))
+		}
+		if err := syscall.Chmod(path, mode&0o7777); err != nil {
+			panic(Throw(cocoaWriteError(path, err)))
+		}
+	}
+}
+
+// NSFileManagerCreateDirectoryAtWithIntermediateDirectoriesAttributes is Foundation
+// `FileManager.createDirectory(at:withIntermediateDirectories:attributes:)`. With intermediates it
+// creates missing parents and accepts an existing directory; without, it throws when the parent is
+// missing or the path exists. The attributes are set on the directory the URL names.
+func NSFileManagerCreateDirectoryAtWithIntermediateDirectoriesAttributes(fm FileManager, u URL, intermediates bool, attributes *map[FileAttributeKey]any) {
+	path := fileURLPath(u)
+	var err error
+	if intermediates {
+		err = os.MkdirAll(path, 0o777)
+	} else {
+		err = os.Mkdir(path, 0o777)
+	}
+	if err != nil {
+		panic(Throw(cocoaWriteError(path, err)))
+	}
+	if attributes != nil {
+		NSFileManagerSetAttributesOfItemAtPath(fm, *attributes, path)
+	}
+}
+
+// NSFileManagerCreateDirectoryAtWithIntermediateDirectories is Foundation
+// `FileManager.createDirectory(at:withIntermediateDirectories:)`.
+func NSFileManagerCreateDirectoryAtWithIntermediateDirectories(fm FileManager, u URL, intermediates bool) {
+	NSFileManagerCreateDirectoryAtWithIntermediateDirectoriesAttributes(fm, u, intermediates, nil)
 }

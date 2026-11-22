@@ -1,5 +1,12 @@
 package swiftrt
 
+// OptSome is Swift `Optional.some(_:)` used as a function: the value wrapped as a present optional.
+func OptSome[T any](v T) *T { return &v }
+
+// RefSome is Swift `Optional.some(_:)` around a value whose Go form is itself nil-able, such as an
+// optional or a class reference: the outer optional is present even when the value inside is nil.
+func RefSome[T any](v T) *T { return &v }
+
 // OptMap is Swift `Optional.map`.
 func OptMap[T, U any](p *T, f func(T) U) *U {
 	if p == nil {

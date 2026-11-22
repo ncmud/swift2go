@@ -463,6 +463,9 @@ type StringEncoding int
 // EncodingUtf8 is `.utf8`.
 const EncodingUtf8 StringEncoding = 4
 
+// EncodingIsoLatin1 is `.isoLatin1`.
+const EncodingIsoLatin1 StringEncoding = 5
+
 // StringOptInitDataEncoding is Foundation `String(data:encoding:)`.
 func StringOptInitDataEncoding(b []byte, e StringEncoding) *string {
 	return StringOptInitBytesEncoding(b, e)

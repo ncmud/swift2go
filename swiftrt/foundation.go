@@ -295,32 +295,6 @@ func NSDateFormatterDateFrom(f *DateFormatter, s string) *Date {
 	return &d
 }
 
-// ISO8601DateFormatter is Foundation `ISO8601DateFormatter`.
-type ISO8601DateFormatter struct{ FormatOptions ISO8601DateFormatOptions }
-
-// NSISO8601DateFormatterInit is Foundation `ISO8601DateFormatter()`, whose options default to `.withInternetDateTime`.
-func NSISO8601DateFormatterInit() *ISO8601DateFormatter {
-	return &ISO8601DateFormatter{ISO8601DateFormatOptions{NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithInternetDateTime}}
-}
-
-// NSISO8601DateFormatterStringFrom is `ISO8601DateFormatter.string(from:)` for internet date-time, optionally with fractional seconds.
-func NSISO8601DateFormatterStringFrom(f *ISO8601DateFormatter, d Date) string {
-	if f.FormatOptions.RawValue&NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithFractionalSeconds != 0 {
-		return d.Time().UTC().Round(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
-	}
-	return d.Time().UTC().Format("2006-01-02T15:04:05Z")
-}
-
-// NSISO8601DateFormatterDateFrom is `ISO8601DateFormatter.date(from:)`.
-func NSISO8601DateFormatterDateFrom(f *ISO8601DateFormatter, s string) *Date {
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return nil
-	}
-	d := dateOf(t)
-	return &d
-}
-
 // Lock is Foundation `NSLock`.
 type Lock struct{ mu sync.Mutex }
 

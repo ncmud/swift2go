@@ -585,6 +585,21 @@ func UnitFn1[A any](f func(A)) func(A) struct{} {
 	return func(a A) struct{} { f(a); return struct{}{} }
 }
 
+// UnitFn2 adapts a two-argument Void closure to a generic body that returns a value.
+func UnitFn2[A, B any](f func(A, B)) func(A, B) struct{} {
+	return func(a A, b B) struct{} { f(a, b); return struct{}{} }
+}
+
+// UnitFn3 adapts a three-argument Void closure to a generic body that returns a value.
+func UnitFn3[A, B, C any](f func(A, B, C)) func(A, B, C) struct{} {
+	return func(a A, b B, c C) struct{} { f(a, b, c); return struct{}{} }
+}
+
+// UnitFn4 adapts a four-argument Void closure to a generic body that returns a value.
+func UnitFn4[A, B, C, D any](f func(A, B, C, D)) func(A, B, C, D) struct{} {
+	return func(a A, b B, c C, d D) struct{} { f(a, b, c, d); return struct{}{} }
+}
+
 // AnyFn0 adapts a Void closure to a parameter whose generic result became `any`.
 func AnyFn0(f func()) func() any { return func() any { f(); return nil } }
 

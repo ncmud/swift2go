@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -234,10 +235,19 @@ func NSURLSessionDataFor(s URLSession, r URLRequest) struct {
 	}{data, HTTPURLResponse{Url: &final, StatusCode: resp.StatusCode, header: resp.Header}}
 }
 
-// URLComponents is Foundation `URLComponents`, parsed into the parts the runtime reads.
+// URLComponents is Foundation `URLComponents`. QueryItems is `queryItems`; the other parts are read
+// through the URLComponents functions.
 type URLComponents struct {
-	host *string
-	path string
+	QueryItems *[]URLQueryItem
+
+	scheme    *string
+	authority *string
+	host      *string
+	path      string
+	rawPath   string
+	rawQuery  *string
+	parsed    []URLQueryItem
+	fragment  *string
 }
 
 func isSchemeChar(r rune, first bool) bool {
@@ -266,36 +276,19 @@ func isHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' ||
 // characters a URL must percent-encode in the path, query and user info, and returns nil for an invalid
 // scheme, a host containing such characters, or a non-numeric port.
 func URLComponentsOptInitString(s string) *URLComponents {
-	rest := s
-	if i := strings.IndexAny(s, ":/?#"); i > 0 && s[i] == ':' {
-		for j, r := range s[:i] {
+	parts := splitURL(s)
+	c := &URLComponents{scheme: parts.scheme, authority: parts.authority, rawQuery: parts.query, fragment: parts.fragment}
+	if parts.scheme != nil {
+		for j, r := range *parts.scheme {
 			if !isSchemeChar(r, j == 0) {
 				return nil
 			}
 		}
-		rest = s[i+1:]
 	}
-	c := &URLComponents{}
-	if strings.HasPrefix(rest, "//") {
-		rest = rest[2:]
-		end := strings.IndexAny(rest, "/?#")
-		if end < 0 {
-			end = len(rest)
-		}
-		authority := rest[:end]
-		rest = rest[end:]
-		if at := strings.LastIndexByte(authority, '@'); at >= 0 {
-			authority = authority[at+1:]
-		}
-		host, port := authority, ""
-		if strings.HasPrefix(authority, "[") {
-			close := strings.IndexByte(authority, ']')
-			if close < 0 {
-				return nil
-			}
-			host, port = authority[:close+1], strings.TrimPrefix(authority[close+1:], ":")
-		} else if colon := strings.IndexByte(authority, ':'); colon >= 0 {
-			host, port = authority[:colon], authority[colon+1:]
+	if parts.authority != nil {
+		host, port := splitAuthority(*parts.authority)
+		if strings.HasPrefix(host, "[") && !strings.HasSuffix(host, "]") {
+			return nil
 		}
 		for _, r := range port {
 			if r < '0' || r > '9' {
@@ -310,10 +303,12 @@ func URLComponentsOptInitString(s string) *URLComponents {
 		host = percentDecodeLenient(host)
 		c.host = &host
 	}
-	if end := strings.IndexAny(rest, "?#"); end >= 0 {
-		rest = rest[:end]
+	c.rawPath = parts.path
+	c.path = percentDecodeLenient(parts.path)
+	if parts.query != nil {
+		c.parsed = parseQueryItems(*parts.query)
+		c.QueryItems = new(slices.Clone(c.parsed))
 	}
-	c.path = percentDecodeLenient(rest)
 	return c
 }
 
@@ -322,3 +317,6 @@ func URLComponentsHost(c URLComponents) *string { return c.host }
 
 // URLComponentsPath is `URLComponents.path`: percent-decoded.
 func URLComponentsPath(c URLComponents) string { return c.path }
+
+// NSURLSessionShared is Foundation `URLSession.shared`.
+var NSURLSessionShared = NSURLSessionInitConfiguration(NSURLSessionConfigurationEphemeral)

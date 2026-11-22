@@ -184,7 +184,7 @@ func TaskSleepFor(d any) {
 // TaskInitNameExecutorPreferenceOperation is Swift `Task(name:executorPreference:operation:)`. The
 // name and executor preference do not change what the operation does, so the task runs as
 // TaskInitOperation would run it.
-func TaskInitNameExecutorPreferenceOperation(name *string, executor *any, op any) *Task {
+func TaskInitNameExecutorPreferenceOperation(name *string, executor *any, op any) *TaskHandle {
 	return TaskInitOperation(op)
 }
 

@@ -1,13 +1,16 @@
 package swiftrt
 
 import (
+	"crypto/hmac"
 	"crypto/md5" //nolint:gosec // models CryptoKit Insecure.MD5
 	"crypto/pbkdf2"
+	"crypto/rand"
 	"crypto/sha1" //nolint:gosec // models CryptoKit Insecure.SHA1
 	"crypto/sha256"
 	"crypto/sha512"
 	"hash"
 	"math"
+	"slices"
 )
 
 // SHA256Digest is CryptoKit `SHA256.Digest`.
@@ -97,4 +100,53 @@ func PBKDF2DeriveKeyFromSaltUsingOutputByteCountUnsafeUncheckedRounds(password, 
 		panic(Throw(NSError{Domain: "CryptoKit.CryptoKitError", Code: 0, Msg: "internalBoringSSLError: " + err.Error()}))
 	}
 	return SymmetricKey{bytes: key}
+}
+
+// SHA256ByteCount is CryptoKit `SHA256.byteCount`: the length of a digest in bytes.
+const SHA256ByteCount = sha256.Size
+
+// SymmetricKeySize is CryptoKit `SymmetricKeySize`.
+type SymmetricKeySize struct{ BitCount int }
+
+// SymmetricKeySize members.
+var (
+	SymmetricKeySizeBits128 = SymmetricKeySize{128}
+	SymmetricKeySizeBits192 = SymmetricKeySize{192}
+	SymmetricKeySizeBits256 = SymmetricKeySize{256}
+)
+
+// SymmetricKeyInitSize is CryptoKit `SymmetricKey(size:)`: a new key of that many random bits.
+func SymmetricKeyInitSize(size SymmetricKeySize) SymmetricKey {
+	if size.BitCount <= 0 || size.BitCount%8 != 0 {
+		Trap("SymmetricKeySize must be a positive multiple of 8 bits")
+	}
+	key := make([]byte, size.BitCount/8)
+	_, _ = rand.Read(key)
+	return SymmetricKey{bytes: key}
+}
+
+// SymmetricKeyInitData is CryptoKit `SymmetricKey(data:)`: a key holding a copy of the bytes.
+func SymmetricKeyInitData(data []byte) SymmetricKey {
+	return SymmetricKey{bytes: slices.Clone(data)}
+}
+
+// HMACIsValidAuthenticationCodeAuthenticatingUsing is CryptoKit
+// `HMAC<H>.isValidAuthenticationCode(_:authenticating:using:)`, compared in constant time. The
+// generated call does not carry H, so it is taken from the code's length: SHA-256, SHA-384 or
+// SHA-512. A code of any other length is invalid for all three.
+func HMACIsValidAuthenticationCodeAuthenticatingUsing(code, data []byte, key SymmetricKey) bool {
+	var h func() hash.Hash
+	switch len(code) {
+	case sha256.Size:
+		h = sha256.New
+	case sha512.Size384:
+		h = sha512.New384
+	case sha512.Size:
+		h = sha512.New
+	default:
+		return false
+	}
+	mac := hmac.New(h, key.bytes)
+	mac.Write(data)
+	return hmac.Equal(mac.Sum(nil), code)
 }

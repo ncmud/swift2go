@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"regexp"
 	"slices"
@@ -9,19 +10,20 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
-// StringCompareOptions is Foundation `NSString.CompareOptions`.
-type StringCompareOptions uint
+// NSStringCompareOptions is Foundation `NSString.CompareOptions`.
+type NSStringCompareOptions uint
 
 // NSString.CompareOptions members, under the names the emitter gives imported Objective-C constants.
 const (
-	NSStringCompareOptionsCENSStringCompareOptionsNSCaseInsensitiveSearch   StringCompareOptions = 1
-	NSStringCompareOptionsCENSStringCompareOptionsNSLiteralSearch           StringCompareOptions = 2
-	NSStringCompareOptionsCENSStringCompareOptionsNSBackwardsSearch         StringCompareOptions = 4
-	NSStringCompareOptionsCENSStringCompareOptionsNSAnchoredSearch          StringCompareOptions = 8
-	NSStringCompareOptionsCENSStringCompareOptionsNSRegularExpressionSearch StringCompareOptions = 1024
+	NSStringCompareOptionsCENSStringCompareOptionsNSCaseInsensitiveSearch   NSStringCompareOptions = 1
+	NSStringCompareOptionsCENSStringCompareOptionsNSLiteralSearch           NSStringCompareOptions = 2
+	NSStringCompareOptionsCENSStringCompareOptionsNSBackwardsSearch         NSStringCompareOptions = 4
+	NSStringCompareOptionsCENSStringCompareOptionsNSAnchoredSearch          NSStringCompareOptions = 8
+	NSStringCompareOptionsCENSStringCompareOptionsNSRegularExpressionSearch NSStringCompareOptions = 1024
 )
 
 var icuRegexCache sync.Map
@@ -180,7 +182,7 @@ func foldIndex(s, needle string, lo, hi int, backwards bool) (int, int, bool) {
 	return 0, 0, false
 }
 
-func rangeOfOptions(s, needle string, opts StringCompareOptions, lo, hi int) *Range[int] {
+func rangeOfOptions(s, needle string, opts NSStringCompareOptions, lo, hi int) *Range[int] {
 	ci := opts&NSStringCompareOptionsCENSStringCompareOptionsNSCaseInsensitiveSearch != 0
 	back := opts&NSStringCompareOptionsCENSStringCompareOptionsNSBackwardsSearch != 0
 	anchored := opts&NSStringCompareOptionsCENSStringCompareOptionsNSAnchoredSearch != 0
@@ -223,17 +225,17 @@ func rangeOfOptions(s, needle string, opts StringCompareOptions, lo, hi int) *Ra
 }
 
 // StringRangeOfOptions is Foundation `range(of:options:)`.
-func StringRangeOfOptions(s, needle string, opts StringCompareOptions) *Range[int] {
+func StringRangeOfOptions(s, needle string, opts NSStringCompareOptions) *Range[int] {
 	return rangeOfOptions(s, needle, opts, 0, len(s))
 }
 
 // SubstringRangeOfOptions is Foundation `range(of:options:)` on a Substring; the range indexes the base string.
-func SubstringRangeOfOptions(s Substring, needle string, opts StringCompareOptions) *Range[int] {
+func SubstringRangeOfOptions(s Substring, needle string, opts NSStringCompareOptions) *Range[int] {
 	return rangeOfOptions(s.Base, needle, opts, s.Lo, s.Hi)
 }
 
 // StringReplacingOccurrencesOfWithOptions is Foundation `replacingOccurrences(of:with:options:)`.
-func StringReplacingOccurrencesOfWithOptions(s, target, repl string, opts StringCompareOptions) string {
+func StringReplacingOccurrencesOfWithOptions(s, target, repl string, opts NSStringCompareOptions) string {
 	ci := opts&NSStringCompareOptionsCENSStringCompareOptionsNSCaseInsensitiveSearch != 0
 	if opts&NSStringCompareOptionsCENSStringCompareOptionsNSRegularExpressionSearch != 0 {
 		return icuRegex(target, ci).ReplaceAllString(s, icuTemplate(repl))
@@ -309,8 +311,16 @@ func IntSamePositionIn(i int, s string) *int {
 	return nil
 }
 
-// StringOptInitBytesEncoding is Foundation `String(bytes:encoding:)`; invalid UTF-8 gives nil and a leading BOM is dropped.
-func StringOptInitBytesEncoding(b []byte, _ StringEncoding) *string {
+// StringOptInitBytesEncoding is Foundation `String(bytes:encoding:)`. As UTF-8, invalid bytes give
+// nil and a leading BOM is dropped; as ISO Latin-1, each byte is the scalar of the same value.
+func StringOptInitBytesEncoding(b []byte, e StringEncoding) *string {
+	if e == EncodingIsoLatin1 {
+		runes := make([]rune, len(b))
+		for i, c := range b {
+			runes[i] = rune(c)
+		}
+		return new(string(runes))
+	}
 	b = bytes.TrimPrefix(b, []byte("\xEF\xBB\xBF"))
 	if !utf8.Valid(b) {
 		return nil
@@ -466,3 +476,25 @@ func NSScannerScanFloat(sc *Scanner) *float32 {
 
 // StringOptInitString is `Optional<String>(_:)`: the string wrapped as a non-nil optional.
 func StringOptInitString(s string) *string { return new(s) }
+
+// compareUTF16 orders two strings by their UTF-16 code units, as NSString comparison does.
+func compareUTF16(a, b string) int {
+	return slices.Compare(utf16.Encode([]rune(a)), utf16.Encode([]rune(b)))
+}
+
+// StringCompareOptions is Foundation `String.compare(_:options:)`: -1, 0 or 1 as a orders before,
+// the same as, or after b. Canonically equivalent strings are the same unless the options include
+// `.literal`, and `.caseInsensitive` ignores case. Any other option is not supported and panics.
+func StringCompareOptions(a, b string, opts NSStringCompareOptions) int {
+	const caseInsensitive, literal = NSStringCompareOptionsCENSStringCompareOptionsNSCaseInsensitiveSearch, NSStringCompareOptionsCENSStringCompareOptionsNSLiteralSearch
+	if opts&^(caseInsensitive|literal) != 0 {
+		panic(fmt.Sprintf("swiftrt: String.compare(_:options:) does not support options %#x", uint(opts)))
+	}
+	if opts&literal == 0 {
+		a, b = StringDecomposedStringWithCanonicalMapping(a), StringDecomposedStringWithCanonicalMapping(b)
+	}
+	if opts&caseInsensitive != 0 {
+		a, b = strings.ToLower(a), strings.ToLower(b)
+	}
+	return compareUTF16(a, b)
+}

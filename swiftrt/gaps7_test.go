@@ -173,7 +173,7 @@ func TestFileManagerAndHandleGaps(t *testing.T) {
 	if err2 != nil {
 		t.Fatal(err2)
 	}
-	h := FileHandle{f}
+	h := FileHandle{File: f}
 	NSFileHandleWrite(h, []byte("hello"))
 	NSFileHandleClose(h)
 	if b, _ := os.ReadFile(filepath.Join(dir, "out")); string(b) != "hello" {
