@@ -521,6 +521,9 @@ func LazySequenceFlatMap[T, U any](xs []T, f func(T) []U) []U { return SliceFlat
 // ReversedCollectionFlatMap is `xs.reversed().flatMap`.
 func ReversedCollectionFlatMap[T, U any](xs []T, f func(T) []U) []U { return SliceFlatMap(xs, f) }
 
+// ReversedCollectionCompactMap is `xs.reversed().compactMap`.
+func ReversedCollectionCompactMap[T, U any](xs []T, f func(T) *U) []U { return SliceCompactMap(xs, f) }
+
 // ReversedCollectionIsEmpty is `reversed().isEmpty` on a value the emitter typed as `any`.
 func ReversedCollectionIsEmpty(xs any) bool { return reflect.ValueOf(xs).Len() == 0 }
 
