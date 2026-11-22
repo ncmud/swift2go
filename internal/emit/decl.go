@@ -584,6 +584,9 @@ func (e *fileEmitter) enumDecl(n ast.Node) {
 		e.w("func (self %s) SwiftCase() (string, []string) {\n\treturn [...]string{%s}[self], nil\n}\n\n", info.GoName, strings.Join(names, ", "))
 		e.w("func (%s) SwiftTypeName() string { return %q }\n\n", info.GoName, e.m.qualify(info.Owner, n.Name()))
 		e.rawValue(n, info, cases)
+		if !hasRawType(n) && e.synthesizesCodable(n) {
+			e.w("func init() { swiftrt.RegisterCaseEnum[%s](%s) }\n\n", info.GoName, strings.Join(names, ", "))
+		}
 		if conformsTo(n, "s:s9CodingKeyP") {
 			e.w("func (self %s) StringValue() string {\n\tswitch self {\n", info.GoName)
 			for _, c := range cases {
@@ -710,6 +713,19 @@ func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) 
 		}
 		e.w("func init() {\nswiftrt.RegisterPayloadEnum[%s](\n%s,\n)\n}\n\n", info.GoName, strings.Join(cs, ",\n"))
 	}
+}
+
+// hasRawType reports whether enum n has a raw type, which its Codable conformance encodes instead
+// of the case name.
+func hasRawType(n ast.Node) bool {
+	for _, mem := range n.List("members") {
+		if mem.Kind() == "constructor_decl" && mem.Implicit() {
+			if ps := mem.Child("params").List("params"); len(ps) == 1 && ps[0].Name() == "rawValue" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // synthesizesCodable reports whether Swift synthesizes the enum's Codable conformance: it conforms

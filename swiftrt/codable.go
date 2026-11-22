@@ -325,6 +325,11 @@ func EncodeValue(v any) any {
 	if c, ok := payloadCaseFor(rv.Type()); ok {
 		return encodePayloadCase(c, rv)
 	}
+	if names, ok := caseNamesFor(rv.Type()); ok && rv.CanInt() && rv.Int() >= 0 && int(rv.Int()) < len(names) {
+		outer := newEncodedObject(1)
+		outer.set(names[rv.Int()], newEncodedObject(0))
+		return outer
+	}
 	switch x := v.(type) {
 	case interface{ RawValue() string }:
 		return x.RawValue()
@@ -366,6 +371,13 @@ func EncodeValue(v any) any {
 			out := make([]any, 0, rv.Len())
 			for _, k := range rv.MapKeys() {
 				out = append(out, EncodeValue(k.Interface()))
+			}
+			return out
+		}
+		if !keyedDictionary(rv.Type()) {
+			out := make([]any, 0, 2*rv.Len())
+			for it := rv.MapRange(); it.Next(); {
+				out = append(out, EncodeValue(it.Key().Interface()), EncodeValue(it.Value().Interface()))
 			}
 			return out
 		}
@@ -419,6 +431,18 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 	if cases, ok := payloadCasesFor(t); ok {
 		decodePayloadEnum(dst, cases, raw, path)
 		return
+	}
+	if names, ok := caseNamesFor(t); ok {
+		obj, ok := treeObject(raw)
+		if ok && len(obj) == 1 {
+			for i, name := range names {
+				if _, ok := obj[name]; ok {
+					dst.SetInt(int64(i))
+					return
+				}
+			}
+		}
+		codingFail("typeMismatch: expected one case key at %s", strings.Join(path, "."))
 	}
 	if t == reflect.TypeFor[UUID]() {
 		s, _ := raw.(string)
@@ -526,6 +550,22 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 			dst.Set(out)
 			return
 		}
+		if !keyedDictionary(t) {
+			xs, ok := raw.([]any)
+			if !ok || len(xs)%2 != 0 {
+				codingFail("expected an array of key-value pairs at %s", strings.Join(path, "."))
+			}
+			out := reflect.MakeMapWithSize(t, len(xs)/2)
+			for i := 0; i < len(xs); i += 2 {
+				kv := reflect.New(t.Key()).Elem()
+				decodeInto(kv, xs[i], append(path, "Index "+strconv.Itoa(i)))
+				vv := reflect.New(t.Elem()).Elem()
+				decodeInto(vv, xs[i+1], append(path, "Index "+strconv.Itoa(i+1)))
+				out.SetMapIndex(kv, vv)
+			}
+			dst.Set(out)
+			return
+		}
 		m, ok := treeObject(raw)
 		if !ok {
 			codingFail("expected a dictionary at %s", strings.Join(path, "."))
@@ -574,12 +614,22 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 	}
 }
 
-// decodeRawInt sets an Int-raw enum from its raw value when T has RawValue() int.
+// decodeRawInt sets an Int-raw enum from its raw value when T has RawValue() int, through the
+// enum's init(rawValue:), since a case's raw value need not be its position.
 func decodeRawInt(dst reflect.Value, n int) bool {
 	if _, ok := dst.Interface().(interface{ RawValue() int }); !ok {
 		return false
 	}
-	dst.SetInt(int64(n))
+	f, ok := rawInitReg.Load(dst.Type())
+	if !ok {
+		dst.SetInt(int64(n))
+		return true
+	}
+	out := reflect.ValueOf(f).Call([]reflect.Value{reflect.ValueOf(n)})[0]
+	if out.IsNil() {
+		codingFail("cannot initialize %s from invalid Int value %d", dst.Type(), n)
+	}
+	dst.Set(out.Elem())
 	return true
 }
 
@@ -661,6 +711,13 @@ func JSONDecoderDecodeFrom[T any](d *JSONDecoder, _ TypeT[T], data []byte) T {
 		codingFail("The data couldn't be read because it isn't in the correct format: %v", err)
 	}
 	return DecodeValue[T](tree, nil)
+}
+
+// keyedDictionary reports whether Swift encodes a Dictionary of map type t as a JSON object: only a
+// String or Int key does. Any other key, including an enum with a String raw value, makes an array
+// that alternates keys and values.
+func keyedDictionary(t reflect.Type) bool {
+	return t.Key() == reflect.TypeFor[string]() || t.Key() == reflect.TypeFor[int]()
 }
 
 // isSetType reports whether t is the Go form of a Swift `Set`, a map to struct{}.
