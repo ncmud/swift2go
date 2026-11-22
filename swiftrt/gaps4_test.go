@@ -91,9 +91,9 @@ func TestYYJSONOptions(t *testing.T) {
 		return string(YYJSONEncoderEncode(e, v))
 	}
 	cases := []struct{ got, want string }{
-		{enc(YYJSONWriteOptionsDefault), `{"a":"x/y","b":[1,2],"c":{}}`},
-		{enc(YYJSONWriteOptionsPrettyPrinted), "{\n    \"a\": \"x/y\",\n    \"b\": [\n        1,\n        2\n    ],\n    \"c\": {}\n}"},
-		{enc(YYJSONWriteOptionsIndentationTwoSpaces), "{\n  \"a\": \"x/y\",\n  \"b\": [\n    1,\n    2\n  ],\n  \"c\": {}\n}"},
+		{enc(YYJSONWriteOptionsDefault), `{"b":[1,2],"a":"x/y","c":{}}`},
+		{enc(YYJSONWriteOptionsPrettyPrinted), "{\n    \"b\": [\n        1,\n        2\n    ],\n    \"a\": \"x/y\",\n    \"c\": {}\n}"},
+		{enc(YYJSONWriteOptionsIndentationTwoSpaces), "{\n  \"b\": [\n    1,\n    2\n  ],\n  \"a\": \"x/y\",\n  \"c\": {}\n}"},
 		{enc(OptionSetUnion(YYJSONWriteOptionsEscapeSlashes, OptionSetUnion(YYJSONWriteOptionsSortedKeys, YYJSONWriteOptionsNewlineAtEnd))), "{\"a\":\"x\\/y\",\"b\":[1,2],\"c\":{}}\n"},
 		{string(YYJSONSerializationDataWithJSONObjectOptions("a/b", WritingOptionsFragmentsAllowed)), `"a\/b"`},
 		{string(YYJSONSerializationDataWithJSONObjectOptions(map[string]any{"k": []any{1, 2}}, OptionSetUnion(WritingOptionsPrettyPrinted, WritingOptionsNewlineAtEnd))), "{\n    \"k\": [\n        1,\n        2\n    ]\n}\n"},

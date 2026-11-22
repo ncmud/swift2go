@@ -1,9 +1,6 @@
 package swiftrt
 
-import (
-	"reflect"
-	"testing"
-)
+import "testing"
 
 type shape interface{ isShape() }
 type shapeCircle struct{ F0 int }
@@ -17,10 +14,8 @@ func (shapeRect) isShape()   {}
 
 func TestPayloadEnumCoding(t *testing.T) {
 	RegisterPayloadEnum[shape](CaseOf[shapeCircle]("circle", "_0"), CaseOf[shapeRect]("rect", "w", "label"))
-	enc := EncodeValue(shape(shapeRect{F0: 3}))
-	want := map[string]any{"rect": map[string]any{"w": EncodeValue(3)}}
-	if !reflect.DeepEqual(enc, want) {
-		t.Fatalf("encoded %#v", enc)
+	if enc := string(YYJSONEncoderEncode(YYJSONEncoderInit(), shape(shapeRect{F0: 3}))); enc != `{"rect":{"w":3}}` {
+		t.Fatalf("encoded %s", enc)
 	}
 	got := DecodeValue[shape](map[string]any{"circle": map[string]any{"_0": EncodeValue(7)}}, nil)
 	if c, ok := got.(shapeCircle); !ok || c.F0 != 7 {
