@@ -36,6 +36,23 @@ func RegisterPayloadEnum[E any](cases ...PayloadCase) {
 	}
 }
 
+var caseEnums = map[reflect.Type][]string{}
+
+// RegisterCaseEnum records the case names of E, an enum without associated values or a raw type
+// whose Codable conformance Swift synthesizes. A value encodes as {"case": {}}.
+func RegisterCaseEnum[E any](names ...string) {
+	payloadMu.Lock()
+	defer payloadMu.Unlock()
+	caseEnums[reflect.TypeFor[E]()] = names
+}
+
+func caseNamesFor(t reflect.Type) ([]string, bool) {
+	payloadMu.RLock()
+	defer payloadMu.RUnlock()
+	names, ok := caseEnums[t]
+	return names, ok
+}
+
 func payloadCaseFor(t reflect.Type) (PayloadCase, bool) {
 	payloadMu.RLock()
 	defer payloadMu.RUnlock()
