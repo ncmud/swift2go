@@ -37,6 +37,28 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage transpil
 - A test target joins the package of the target it tests, as `_test.go` files.
 - Each target prints a report of constructs it could not translate. Those compile to
   `swiftrt.Unsupported[T]("kind")`, which panics if it runs.
+- A target that fails to compile or translate is reported, and every target in the run that depends
+  on it is skipped. The run goes on with the others and exits non-zero.
+
+### Dependencies and generated sources
+
+- Targets can come from the root package or from any package in its dependency graph, including
+  remote checkouts under `.build/checkouts`. `-pkg` may also point at a package checked out under
+  another package's `.build/checkouts`.
+- Dependencies that are not in the run are imported from the modules SwiftPM built, so the package
+  must have been built with `swift build`. The build directory defaults to the package's `.build`, or
+  to the enclosing package's for a checkout; `-build` overrides it. A dependency module older than
+  any of its sources stops the target with an error: transpile that dependency in the same run, or
+  rebuild it.
+- C targets in the dependency graph are importable without a build. Their own module maps are used,
+  and for those without one swift2go writes the module map SwiftPM would generate under `out/modulemaps`.
+- A target with resources gets the `Bundle.module` accessor SwiftPM generates, written to
+  `out/derived/<Target>`. It looks for the `<package>_<Target>.bundle` resource bundle next to the
+  executable.
+- Sources that build-tool plugins generate (for example swift-openapi-generator) are read from
+  `<build>/plugins/outputs`, where `swift build` writes them. swift2go does not run plugins. Run
+  `swift build --target <Target>` first; if the outputs are missing, or older than a non-Swift file in
+  the target's directory (such as the plugin's input), the target fails and names the command to run.
 
 From a checkout, `just check <Target> <TestTarget>` transpiles a target and its tests and runs them
 with `go test`. Set `SWIFT_PKG` to the package directory.
