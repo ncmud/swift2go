@@ -39,11 +39,7 @@ func (m *Module) declOf(usr string) *DeclInfo {
 // valueScopes resolves the local variables of every file of the module, once.
 func (m *Module) valueScopes() *valueScopes {
 	if m.scopes == nil {
-		var items []ast.Node
-		for _, f := range m.Files {
-			items = append(items, f.Items...)
-		}
-		m.scopes = resolveLocals(items)
+		m.scopes = resolveLocalsParallel(m.Files)
 	}
 	return m.scopes
 }

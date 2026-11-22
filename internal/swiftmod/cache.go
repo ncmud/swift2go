@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -423,6 +422,5 @@ func DependencyKey(t Target, targets map[string]Target, ifaces map[string]string
 
 // Key identifies the frontend command, apart from the files it reads, and the compiler that runs it.
 func (d *Dumper) Key() string {
-	version, _ := exec.Command(d.job[0], "-frontend", "-version").CombinedOutput()
-	return fmt.Sprintf("%s\x00%s\x00%s", strings.Join(d.job, "\x00"), version, modTime(d.job[0]))
+	return fmt.Sprintf("%s\x00%s\x00%s", strings.Join(d.job, "\x00"), frontendVersion(d.job[0]), modTime(d.job[0]))
 }

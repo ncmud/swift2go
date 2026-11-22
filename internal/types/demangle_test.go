@@ -1,6 +1,10 @@
 package types
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ncmud/swift2go/internal/swifttest"
+)
 
 func TestNormalizeLocal(t *testing.T) {
 	cases := map[string]string{
@@ -42,6 +46,36 @@ func TestLocalWrappersInClosureResult(t *testing.T) {
 	for mangled, want := range cases {
 		if got := localWrappers(mangled, raw, normalizeLocal(raw)); got != want {
 			t.Errorf("localWrappers(%q) = %q, want %q", mangled, got, want)
+		}
+	}
+}
+
+// TestDemanglerSplitsLargeBatches checks that symbols demangled in parallel chunks get the same names
+// as in one swift-demangle run.
+func TestDemanglerSplitsLargeBatches(t *testing.T) {
+	swifttest.Require(t, "xcrun")
+	syms := []string{
+		"s:4GRDB8DatabaseC10ColumnTypeV4textAEvpZ",
+		"$s4GRDB8DatabaseC15TransactionKindOD",
+		"$sSaySiGD",
+		"$sSDySSSiGD",
+		"$sSiSgD",
+		"s:5World13AbandonedGearO",
+		"$s5World13AbandonedGearOmD",
+	}
+	whole, err := NewDemangler(syms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func(n int) { demangleChunk = n }(demangleChunk)
+	demangleChunk = 2
+	split, err := NewDemangler(syms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range syms {
+		if whole.Get(s) != split.Get(s) || split.Get(s) == s {
+			t.Errorf("%s: %q in chunks, %q in one run", s, split.Get(s), whole.Get(s))
 		}
 	}
 }

@@ -137,3 +137,29 @@ func TestDumperKeyNamesTheTarget(t *testing.T) {
 		t.Errorf("the host and Linux dumps share a cache key")
 	}
 }
+
+// TestCachedDumperReusesTheDriversJob checks that a cached frontend command stands in for asking the
+// driver again, and that one with other driver arguments does not.
+func TestCachedDumperReusesTheDriversJob(t *testing.T) {
+	swifttest.Require(t, "xcrun", "swiftc")
+	pkg := t.TempDir()
+	write(t, filepath.Join(pkg, "Sources/Core/Core.swift"), "public let x = 1\n", time.Now())
+	tg := Target{Name: "Core", Path: "Sources/Core", Sources: []string{"Core.swift"}, Dir: pkg}
+	jobFile := filepath.Join(t.TempDir(), "Core.job")
+	first, err := NewCachedDumper(jobFile, tg, "", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without a swiftc to run, only the cached job can answer.
+	t.Setenv("PATH", t.TempDir())
+	again, err := NewCachedDumper(jobFile, tg, "", t.TempDir())
+	if err != nil {
+		t.Fatalf("the cached job was not reused: %v", err)
+	}
+	if first.Key() != again.Key() {
+		t.Errorf("the cached job differs from the driver's")
+	}
+	if _, err := NewCachedDumper(jobFile, tg, "", t.TempDir(), "-DOTHER"); err == nil {
+		t.Errorf("a job cached for other driver arguments was reused")
+	}
+}

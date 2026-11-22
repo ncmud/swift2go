@@ -122,14 +122,19 @@ func Load(data []byte) ([]File, error) {
 			break
 		}
 		data = data[i:]
-		dec := json.NewDecoder(bytes.NewReader(data))
 		var m map[string]any
-		if err := dec.Decode(&m); err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, fmt.Errorf("decode AST: %w", err)
+		if v, end, err := decodeValue(data); err == nil {
+			m, _ = v.(map[string]any)
+			data = data[end:]
+		} else {
+			dec := json.NewDecoder(bytes.NewReader(data))
+			if err := dec.Decode(&m); err == io.EOF {
+				break
+			} else if err != nil {
+				return nil, fmt.Errorf("decode AST: %w", err)
+			}
+			data = data[dec.InputOffset():]
 		}
-		data = data[dec.InputOffset():]
 		n := Node(m)
 		files = append(files, File{Filename: n.Str("filename"), Items: n.List("items")})
 	}

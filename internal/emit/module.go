@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ncmud/swift2go/internal/ast"
 	"github.com/ncmud/swift2go/internal/types"
@@ -422,19 +424,33 @@ func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module,
 	for _, o := range opts {
 		o(m)
 	}
-	var syms []string
-	for _, f := range files {
-		for _, it := range f.Items {
+	type fileSyms struct {
+		syms []string
+		objc [][2]string // decl_usr, base_name
+	}
+	found := make([]fileSyms, len(files))
+	parallel(len(files), func(i int) {
+		seen := map[string]bool{}
+		fs := &found[i]
+		for _, it := range files[i].Items {
 			ast.Walk(it, func(n ast.Node) {
-				for _, k := range []string{"type", "usr", "decl_usr", "interface_type", "result", "extended_type", "type_usr", "first_type", "second_type", "protocol", "generic_param", "replacement_type"} {
-					if s := n.Str(k); strings.HasPrefix(s, "$s") || strings.HasPrefix(s, "s:") {
-						syms = append(syms, s)
+				for _, k := range symbolKeys {
+					if s := n.Str(k); (strings.HasPrefix(s, "$s") || strings.HasPrefix(s, "s:")) && !seen[s] {
+						seen[s] = true
+						fs.syms = append(fs.syms, s)
 					}
 				}
 				if usr := n.Str("decl_usr"); strings.HasPrefix(usr, "c:objc(") && n.Str("base_name") != "" {
-					m.objcNames[usr] = n.Str("base_name")
+					fs.objc = append(fs.objc, [2]string{usr, n.Str("base_name")})
 				}
 			})
+		}
+	})
+	var syms []string
+	for _, fs := range found {
+		syms = append(syms, fs.syms...)
+		for _, o := range fs.objc {
+			m.objcNames[o[0]] = o[1]
 		}
 	}
 	dm, err := types.NewDemangler(syms)
@@ -451,6 +467,23 @@ func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module,
 	m.markGenericFree()
 	m.assignNames()
 	return m, nil
+}
+
+// symbolKeys are the fields that hold the mangled types and USRs a module's demangler answers for.
+var symbolKeys = []string{"type", "usr", "decl_usr", "interface_type", "result", "extended_type", "type_usr", "first_type", "second_type", "protocol", "generic_param", "replacement_type"}
+
+// parallel calls f for 0..n-1, on as many goroutines at a time as there are CPUs.
+func parallel(n int, f func(i int)) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.NumCPU())
+	for i := range n {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			f(i)
+		})
+	}
+	wg.Wait()
 }
 
 // SetTarget marks the module as a test target whose code joins the package of under. Package-level names the
