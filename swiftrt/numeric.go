@@ -195,3 +195,22 @@ func ClosedRangeUpperBound[T Ordered](r ClosedRange[T]) T { return r.Hi }
 
 // ClosedRangeLowerBound is Swift `ClosedRange.lowerBound`.
 func ClosedRangeLowerBound[T Ordered](r ClosedRange[T]) T { return r.Lo }
+
+// Shl is Swift's smart `<<`: a negative count shifts right instead.
+func Shl[T Integer, U Integer](a T, n U) T {
+	if n < 0 {
+		return a >> negatedCount(n)
+	}
+	return a << uint64(n)
+}
+
+// Shr is Swift's smart `>>`: a negative count shifts left instead.
+func Shr[T Integer, U Integer](a T, n U) T {
+	if n < 0 {
+		return a << negatedCount(n)
+	}
+	return a >> uint64(n)
+}
+
+// negatedCount returns -n for a negative shift count, without overflowing at the type's minimum.
+func negatedCount[U Integer](n U) uint64 { return uint64(-(int64(n) + 1)) + 1 }

@@ -176,7 +176,7 @@ swift-log, CryptoKit and a few C library calls that the driving codebase uses.
 These are choices made for the codebase that drives the project. Each fits it, and each could become an
 option.
 
-- **Overflow traps.** `Int` arithmetic panics on overflow, as a Swift debug build does. `&+` and the other wrapping operators wrap.
+- **Overflow traps.** `Int` arithmetic and negation panic on overflow, as a Swift debug build does. `&+` and the other wrapping operators wrap. A range whose upper bound is below its lower bound, and a zero `stride`, trap as in Swift. Shifts are Swift's smart shifts: a negative count shifts the other way.
 - **Optionals are pointers.** `T?` is `*T`, and a class's Optional is the class pointer itself. A generic `T?` instantiated with a class is unwrapped at call sites, so callers see `*C`, not `**C`.
 - **Value semantics by copying.** Struct values, arrays, dictionaries and sets are deep-copied (`swiftrt.Copy`) wherever Swift would copy them. Class references, which embed a marker, are never copied.
 - **Statics are lazy.** Static and global stored properties become `swiftrt.Lazy` cells initialized on first use, as Swift does, so initialization cycles that Swift allows still work in Go.
