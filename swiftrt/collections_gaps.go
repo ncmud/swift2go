@@ -834,3 +834,14 @@ func SliceInitKeyValuePairs[S ~[]E, E any](kv any) S { return S(slices.Clone(key
 
 // KeyValuePairsMap is Swift `KeyValuePairs.map(_:)`.
 func KeyValuePairsMap[E, U any](kv any, f func(E) U) []U { return SliceMap(keyValuePairs[E](kv), f) }
+
+// RangeCountWhere is `(lo..<hi).count(where:)`.
+func RangeCountWhere[T Integer](r Range[T], f func(T) bool) int {
+	n := 0
+	for i := r.Lo; i < r.Hi; i++ {
+		if f(i) {
+			n++
+		}
+	}
+	return n
+}

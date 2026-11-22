@@ -97,6 +97,12 @@ func Throw(err any) Thrown {
 	return Thrown{thrownValue{err}}
 }
 
+// ErrorOf is a Swift value stored as `any Error`. A value whose Go type is not an error is carried
+// whole, as Throw carries it, so casts and catch patterns still see it.
+func ErrorOf(v any) error {
+	return Throw(v).Err
+}
+
 // thrownValue is the error carrying a thrown Swift value that does not implement Go's error.
 type thrownValue struct{ value any }
 

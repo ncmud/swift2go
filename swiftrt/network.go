@@ -320,3 +320,12 @@ func URLComponentsPath(c URLComponents) string { return c.path }
 
 // NSURLSessionShared is Foundation `URLSession.shared`.
 var NSURLSessionShared = NSURLSessionInitConfiguration(NSURLSessionConfigurationEphemeral)
+
+// Data is `URLSession.data(for:)` as a method, so a URLSession satisfies a protocol whose
+// requirement is that method (`extension URLSession: Transport {}`).
+func (s URLSession) Data(request URLRequest) struct {
+	F0 []byte
+	F1 URLResponse
+} {
+	return NSURLSessionDataFor(s, request)
+}

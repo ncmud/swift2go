@@ -59,3 +59,13 @@ func OptDo[T any](p *T, f func(T)) *struct{} {
 	f(*p)
 	return &struct{}{}
 }
+
+// OptDoRef is OptDo for an Optional reference, which is the reference itself: it runs f on v
+// unless v is nil.
+func OptDoRef[T any](v T, f func(T)) *struct{} {
+	if isNil(v) {
+		return nil
+	}
+	f(v)
+	return &struct{}{}
+}

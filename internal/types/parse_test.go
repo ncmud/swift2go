@@ -9,6 +9,8 @@ func TestParse(t *testing.T) {
 		"(token: Swift.String, next: Swift.Int)":    "(token: Swift.String, next: Swift.Int)",
 		"(Swift.UInt8) -> Swift.Bool":               "(Swift.UInt8) -> Swift.Bool",
 		"Swift.Int?":                                "Swift.Int?",
+		"Commands.ProtocolMudCommand.Type":          "Commands.ProtocolMudCommand.Type",
+		"Commands.TypeTable":                        "Commands.TypeTable",
 		"[Swift.Character : Swift.String]":          "[Swift.Character : Swift.String]",
 		"Swift.Range<Swift.Int>":                    "Swift.Range<Swift.Int>",
 		"A":                                         "A",

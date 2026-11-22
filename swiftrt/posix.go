@@ -173,3 +173,69 @@ func CFStrlen(p any) int {
 	}
 	return n
 }
+
+// cElements is the C memory a character pointer addresses, as a slice that shares it.
+func cElements(p any) any {
+	for {
+		v, ok := p.(*any)
+		if !ok {
+			return p
+		}
+		if v == nil {
+			Trap("unexpectedly found nil while unwrapping an Optional value")
+		}
+		p = *v
+	}
+}
+
+// PointerAdvanced is Swift `pointer + n` and `pointer - n` for a pointer to C characters: a pointer
+// n elements further into the same memory, so a write through either pointer is seen through both.
+// The runtime's pointers do not know what precedes them, so moving one backwards traps.
+func PointerAdvanced(p any, n int) *any {
+	if n < 0 {
+		Trap("a C character pointer cannot move backwards")
+	}
+	var out any
+	switch v := cElements(p).(type) {
+	case []byte:
+		out = v[n:]
+	case []int8:
+		out = v[n:]
+	case string:
+		out = v[n:]
+	default:
+		panic(fmt.Sprintf("swiftrt: %T is not a C character pointer", v))
+	}
+	return &out
+}
+
+// UnsafeMutablePointerSetSubscriptInt is Swift `pointer[i] = c` for a pointer to C characters.
+func UnsafeMutablePointerSetSubscriptInt(p any, i int, c int8) {
+	switch v := cElements(p).(type) {
+	case []byte:
+		v[i] = byte(c) //nolint:gosec // reinterprets the C character's bits
+	case []int8:
+		v[i] = c
+	default:
+		panic(fmt.Sprintf("swiftrt: %T is not a mutable C character pointer", v))
+	}
+}
+
+// UnsafeMutablePointerAllocateCapacity is Swift `UnsafeMutablePointer<CChar>.allocate(capacity:)`:
+// memory for n C characters. Swift leaves it uninitialized; here it starts as zeros.
+func UnsafeMutablePointerAllocateCapacity(n int) *any {
+	var v any = make([]byte, n)
+	return &v
+}
+
+// UnsafeMutablePointerInitializeRepeatingCount is Swift `pointer.initialize(repeating:count:)` for
+// a pointer to C characters.
+func UnsafeMutablePointerInitializeRepeatingCount(p any, c int8, n int) {
+	for i := range n {
+		UnsafeMutablePointerSetSubscriptInt(p, i, c)
+	}
+}
+
+// UnsafeMutablePointerDeallocate is Swift `pointer.deallocate()`. The garbage collector frees the
+// memory once no pointer into it remains.
+func UnsafeMutablePointerDeallocate(any) {}

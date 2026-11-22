@@ -881,7 +881,8 @@ func StringLastIndexWhere(s string, f func(Character) bool) *int {
 // StringFirstRangeOf is Swift `Collection.firstRange(of:)` on a String: the range of the first run
 // of Characters equal to needle's, comparing each by canonical equivalence. An empty needle
 // matches at the start.
-func StringFirstRangeOf(s, needle string) *Range[int] {
+func StringFirstRangeOf[S ~string | Substring](s string, needleText S) *Range[int] {
+	needle := stringOf(needleText)
 	want := StringChars(needle)
 	chars := StringChars(s)
 	for i, at := 0, 0; i+len(want) <= len(chars); i++ {
@@ -939,3 +940,45 @@ func ScalarInitInt(v uint8) rune { return rune(v) }
 
 // StringInitScalar is Swift `String(_: Unicode.Scalar)`.
 func StringInitScalar(r rune) string { return string(r) }
+
+// StringScalarAt is `s.unicodeScalars[i]` for a String index i: the scalar that starts at that
+// byte offset.
+func StringScalarAt(s string, i int) rune {
+	if i < 0 || i >= len(s) {
+		Trap("String index is out of bounds")
+	}
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return r
+}
+
+// StringScalarIndexAfter is `s.unicodeScalars.index(after: i)`: the index of the next scalar.
+func StringScalarIndexAfter(s string, i int) int {
+	if i < 0 || i >= len(s) {
+		Trap("String index is out of bounds")
+	}
+	_, n := utf8.DecodeRuneInString(s[i:])
+	return i + n
+}
+
+// StringScalarIndicesFrom is `s.unicodeScalars[r].indices` for `r = i...`: the String index of
+// each scalar from i to the end.
+func StringScalarIndicesFrom(s string, r PartialRangeFrom[int]) []int {
+	if r.Lo < 0 || r.Lo > len(s) {
+		Trap("String index is out of bounds")
+	}
+	out := []int{}
+	for i := r.Lo; i < len(s); {
+		out = append(out, i)
+		_, n := utf8.DecodeRuneInString(s[i:])
+		i += n
+	}
+	return out
+}
+
+// StringScalarsFrom is `s.unicodeScalars[i...]` as the scalars themselves.
+func StringScalarsFrom(s string, r PartialRangeFrom[int]) []rune {
+	if r.Lo < 0 || r.Lo > len(s) {
+		Trap("String index is out of bounds")
+	}
+	return []rune(s[r.Lo:])
+}
