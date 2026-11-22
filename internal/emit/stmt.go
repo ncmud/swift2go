@@ -29,6 +29,7 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 		}, func(body string) { e.w("func() %s()\n", body) })
 		return
 	}
+	defer e.scopeLocalGetters(list)()
 	opened := 0
 	for _, s := range list {
 		names := declaredNames(s)
@@ -150,6 +151,9 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	case "pattern_binding_decl":
 		e.localBinding(n)
 	case "var_decl":
+		if isLocalGetter(n) {
+			e.localGetter(n)
+		}
 	case "struct_decl", "class_decl", "enum_decl":
 		e.hoisted = append(e.hoisted, n)
 	case "func_decl":
@@ -315,6 +319,60 @@ func (e *fileEmitter) localFunc(n ast.Node) {
 	e.generics = saveG
 }
 
+// isLocalGetter reports whether a var_decl in a function body is a computed variable, such as
+// `var rooms: [Room] { all.filter(...) }`, whose value its getter recomputes at every use.
+func isLocalGetter(n ast.Node) bool {
+	return n.Kind() == "var_decl" && n.Str("readImpl") == "getter" && localGetterAccessor(n) != nil
+}
+
+func localGetterAccessor(n ast.Node) ast.Node {
+	for _, a := range n.List("accessors") {
+		if a.Bool("get") {
+			return a
+		}
+	}
+	return nil
+}
+
+// scopeLocalGetters makes the computed local variables a statement list declares read through their
+// getter functions while the list is emitted, and returns the function that ends that scope.
+func (e *fileEmitter) scopeLocalGetters(list []ast.Node) func() {
+	saveR, saveG := e.renames, e.localGetters
+	cloned := false
+	for _, s := range list {
+		if !isLocalGetter(s) {
+			continue
+		}
+		if !cloned {
+			cloned = true
+			e.renames, e.localGetters = maps.Clone(e.renames), maps.Clone(e.localGetters)
+			if e.renames == nil {
+				e.renames = map[string]string{}
+			}
+			if e.localGetters == nil {
+				e.localGetters = map[string]bool{}
+			}
+		}
+		e.renames[s.Name()] = goSafe(s.Name()) + "()"
+		e.localGetters[s.Name()] = true
+	}
+	return func() { e.renames, e.localGetters = saveR, saveG }
+}
+
+// localGetter declares a computed local variable as a Go function of no arguments.
+func (e *fileEmitter) localGetter(n ast.Node) {
+	acc := localGetterAccessor(n)
+	res := e.resultGo(acc)
+	name := goSafe(n.Name())
+	sig := "func() " + res
+	e.w("var %s %s\n%s = %s ", name, sig, name, sig)
+	saveInit := e.inInit
+	e.inInit = false
+	e.body(acc, res)
+	e.inInit = saveInit
+	e.w("\n")
+}
+
 func (e *fileEmitter) returnStmt(n ast.Node) {
 	r := n.Child("result")
 	if e.doRet != nil {
@@ -372,6 +430,9 @@ func (e *fileEmitter) localBinding(n ast.Node) {
 		if init == nil {
 			ast.Walk(p, func(x ast.Node) {
 				if x.Kind() == "pattern_named" {
+					if e.localGetters[x.Name()] {
+						return // its var_decl emits the getter
+					}
 					name := goSafe(x.Child("name").Child("base_name").Str("name"))
 					e.w("var %s %s\n_ = %s\n", name, e.m.GoType(e.m.typeOf(x.Type()), e.generics), name)
 				}
@@ -1203,6 +1264,12 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			if lg := e.m.GoType(lt, e.generics); st != nil && e.m.GoType(st, e.generics) == "error" && lg != "error" && lg != "" {
 				// A caught error matched against a value of a concrete error type (`catch E.empty`).
 				return "func() bool { v := swiftrt.As[" + lg + "](" + subj + "); return v != nil && *v == " + e.expr(lit) + " }()"
+			}
+			if st != nil && st.Kind == types.Optional {
+				// An Optional subject is a Go pointer: `case "active"` compares the values it points at.
+				if c, ok := e.elementCompare(st, "==", subj, e.expr(lit)); ok {
+					return c
+				}
 			}
 			return subj + " == " + e.expr(lit)
 		}
