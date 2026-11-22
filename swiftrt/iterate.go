@@ -3,7 +3,8 @@ package swiftrt
 import (
 	"fmt"
 	"reflect"
-	"sort"
+	"slices"
+	"strings"
 )
 
 // Iterate turns any Swift sequence the emitter has no direct loop for into a slice of its elements.
@@ -32,7 +33,7 @@ func Iterate[T any](seq any) []T {
 		return out
 	case reflect.Map:
 		keys := rv.MapKeys()
-		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j]) })
+		slices.SortFunc(keys, func(a, b reflect.Value) int { return strings.Compare(fmt.Sprint(a), fmt.Sprint(b)) })
 		out := make([]T, 0, len(keys))
 		for _, k := range keys {
 			if v, ok := k.Interface().(T); ok {

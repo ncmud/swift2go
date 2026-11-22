@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,7 +155,7 @@ func foldIndex(s, needle string, lo, hi int, backwards bool) (int, int, bool) {
 	}
 	try := func(i int) (int, bool) {
 		j := i
-		for k := 0; k < n; k++ {
+		for range n {
 			if j >= hi {
 				return 0, false
 			}
@@ -164,9 +165,9 @@ func foldIndex(s, needle string, lo, hi int, backwards bool) (int, int, bool) {
 		return j, strings.EqualFold(s[i:j], needle)
 	}
 	if backwards {
-		for k := len(starts) - 1; k >= 0; k-- {
-			if j, ok := try(starts[k]); ok {
-				return starts[k], j, true
+		for _, start := range slices.Backward(starts) {
+			if j, ok := try(start); ok {
+				return start, j, true
 			}
 		}
 		return 0, 0, false
@@ -464,4 +465,4 @@ func NSScannerScanFloat(sc *Scanner) *float32 {
 }
 
 // StringOptInitString is `Optional<String>(_:)`: the string wrapped as a non-nil optional.
-func StringOptInitString(s string) *string { return &s }
+func StringOptInitString(s string) *string { return new(s) }

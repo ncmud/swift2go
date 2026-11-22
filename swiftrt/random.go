@@ -1,7 +1,7 @@
 package swiftrt
 
 import (
-	crand "crypto/rand"
+	"crypto/rand"
 	"encoding/binary"
 	"math"
 	"math/bits"
@@ -17,9 +17,7 @@ type SystemRandomNumberGenerator struct{}
 // Next is `SystemRandomNumberGenerator.next()`.
 func (*SystemRandomNumberGenerator) Next() uint64 {
 	var b [8]byte
-	if _, err := crand.Read(b[:]); err != nil {
-		Trap("SystemRandomNumberGenerator: " + err.Error())
-	}
+	rand.Read(b[:])
 	return binary.LittleEndian.Uint64(b[:])
 }
 

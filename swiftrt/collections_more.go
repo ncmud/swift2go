@@ -3,6 +3,7 @@ package swiftrt
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 )
 
@@ -54,9 +55,8 @@ func SliceFirstWhere[T any](xs []T, f func(T) bool) *T {
 
 // SliceLastWhere is Swift `last(where:)`.
 func SliceLastWhere[T any](xs []T, f func(T) bool) *T {
-	for i := len(xs) - 1; i >= 0; i-- {
-		if f(xs[i]) {
-			v := xs[i]
+	for _, v := range slices.Backward(xs) {
+		if f(v) {
 			return &v
 		}
 	}
@@ -282,7 +282,7 @@ func Zip[A, B any](a []A, b []B) []struct {
 		F0 A
 		F1 B
 	}, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out[i].F0, out[i].F1 = a[i], b[i]
 	}
 	return out
@@ -430,10 +430,7 @@ func SetIsDisjointWith[T comparable](a map[T]struct{}, b any) bool {
 
 // MapKeys is Swift `Dictionary.keys`.
 func MapKeys[K comparable, V any](m map[K]V) []K {
-	out := make([]K, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
+	out := slices.Collect(maps.Keys(m))
 	SortKeys(out)
 	return out
 }

@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -107,12 +108,7 @@ func StringContains(s string, c Character) bool {
 	if graphemeLen(c) != len(c) {
 		return strings.Contains(s, c)
 	}
-	for _, ch := range StringChars(s) {
-		if ch == c {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(StringChars(s), c)
 }
 
 // StringContainsString is the Foundation/StringProtocol String.contains(_:) for a substring.
@@ -218,9 +214,8 @@ func StringDropLast(s string, ns ...int) Substring {
 // StringLastIndexOf is String.lastIndex(of:).
 func StringLastIndexOf(s string, c Character) *int {
 	idx := StringIndices(s)
-	for k := len(idx) - 1; k >= 0; k-- {
-		if StringSubscriptInt(s, idx[k]) == c {
-			v := idx[k]
+	for _, v := range slices.Backward(idx) {
+		if StringSubscriptInt(s, v) == c {
 			return &v
 		}
 	}

@@ -242,8 +242,7 @@ func (h *wsHandler) readLoop(br *bufio.Reader) {
 	for {
 		f, err := readWSFrame(br, h.maxFrameSize)
 		if err != nil {
-			var we NIOWebSocketError
-			if errors.As(err, &we) {
+			if we, ok := errors.AsType[NIOWebSocketError](err); ok {
 				code := WebSocketErrorCodeProtocolError
 				if we == NIOWebSocketErrorInvalidFrameLength {
 					code = WebSocketErrorCodeMessageTooLarge
@@ -334,9 +333,7 @@ func (h *wsHandler) writeFrame(f wsFrame) error {
 		buf = binary.BigEndian.AppendUint64(append(buf, 0x80|127), uint64(n))
 	}
 	var key [4]byte
-	if _, err := rand.Read(key[:]); err != nil {
-		return err
-	}
+	rand.Read(key[:])
 	buf = append(buf, key[:]...)
 	for i, c := range f.data {
 		buf = append(buf, c^key[i%4])
@@ -736,8 +733,7 @@ func WebSocketClientConnectUrlConfigurationTlsConfigurationEventLoopGroupLoggerH
 	closeCode := WebSocketErrorCodeNormalClosure
 	clientErr := Catch(func() { handler(inbound, outbound, ctx) })
 	if clientErr != nil {
-		var ic wsInternalClose
-		if errors.As(clientErr, &ic) {
+		if ic, ok := errors.AsType[wsInternalClose](clientErr); ok {
 			closeCode = ic.code
 		} else {
 			closeCode = WebSocketErrorCodeUnexpectedServerError
@@ -771,8 +767,7 @@ func WebSocketClientConnectUrlConfigurationTlsConfigurationEventLoopGroupLoggerH
 		}
 	}
 	if clientErr != nil {
-		var ic wsInternalClose
-		if errors.As(clientErr, &ic) {
+		if ic, ok := errors.AsType[wsInternalClose](clientErr); ok {
 			switch ic.code {
 			case WebSocketErrorCodeMessageTooLarge:
 				panic(Throw(WebSocketClientErrorServerSentMessageTooLarge))
@@ -797,9 +792,7 @@ func WebSocketClientConnectUrlConfigurationTlsConfigurationEventLoopGroupLoggerH
 // holds any frame bytes sent after the response.
 func wsUpgrade(conn net.Conn, u *url.URL, scheme, host string) *bufio.Reader {
 	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		panic(Throw(err))
-	}
+	rand.Read(nonce[:])
 	key := base64.StdEncoding.EncodeToString(nonce[:])
 	target := u.EscapedPath()
 	if target == "" {

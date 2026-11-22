@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"strconv"
+	"strings"
 )
 
 // Integer is every Go integer type a Swift integer maps to.
@@ -81,7 +82,7 @@ func Mul[T Integer](a, b T) T {
 }
 
 // Some wraps a value as a present optional.
-func Some[T any](v T) *T { return &v }
+func Some[T any](v T) *T { return new(v) }
 
 // Force is Swift's postfix `!` on a value optional.
 func Force[T any](p *T) *T {
@@ -122,7 +123,7 @@ func Coalesce[T any](p *T, d T) T {
 // Equal is Swift `==` for values Go cannot compare with `==` (slices, maps, optionals).
 func Equal[T any](a, b T) bool { return equalValues(reflect.ValueOf(a), reflect.ValueOf(b)) }
 
-var substringType = reflect.TypeOf(Substring{})
+var substringType = reflect.TypeFor[Substring]()
 
 // equalValues is reflect.DeepEqual except that Substrings compare by content, as Swift's do.
 func equalValues(a, b reflect.Value) bool {
@@ -206,14 +207,15 @@ func Str(v any) string {
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.Slice:
-		s := "["
+		var s strings.Builder
+		s.WriteString("[")
 		for i := 0; i < rv.Len(); i++ {
 			if i > 0 {
-				s += ", "
+				s.WriteString(", ")
 			}
-			s += debugStr(rv.Index(i).Interface())
+			s.WriteString(debugStr(rv.Index(i).Interface()))
 		}
-		return s + "]"
+		return s.String() + "]"
 	case reflect.Pointer:
 		if rv.IsNil() {
 			return "nil"
@@ -315,7 +317,7 @@ func Dynamic(v any) any {
 }
 
 // Ref boxes a struct value for an existential whose methods need a pointer receiver.
-func Ref[T any](v T) *T { return &v }
+func Ref[T any](v T) *T { return new(v) }
 
 // derefAs matches v against T when v is a boxed *T.
 func derefAs[T any](v any) (T, bool) {

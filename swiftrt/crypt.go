@@ -110,7 +110,7 @@ var (
 func desCrypt(key, salt string) string {
 	var keyBits [64]byte
 	for i := 0; i < 8 && i < len(key) && key[i] != 0; i++ {
-		for j := 0; j < 7; j++ {
+		for j := range 7 {
 			keyBits[8*i+j] = (key[i] >> (6 - j)) & 1
 		}
 	}
