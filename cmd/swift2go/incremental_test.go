@@ -78,7 +78,7 @@ public func greeting() -> String {
 	transpile(outDir, true)
 
 	steps := []struct {
-		name, file, old, new string
+		name, file, old, new string   // old is "" for a new file
 		emits                []string // the targets whose modules are emitted again
 	}{
 		{"a body edit", "Sources/App/App.swift", `"hello "`, `"hi "`, nil},
@@ -87,11 +87,12 @@ public func greeting() -> String {
 		{"a new type for a variable another file uses", "Sources/Core/Names.swift", `"kernel"`, `7`, []string{"Core", "App"}},
 		{"a new declaration in a dependency", "Sources/Core/Names.swift", "7\n", "7\npublic func shout(_ s: String) -> String { s + \"!\" }\n", []string{"Core", "App"}},
 		{"a use of the new declaration", "Sources/App/App.swift", `return "hi "`, `return shout("hi") + " "`, nil},
+		{"a new file", "Sources/App/Extra.swift", "", "func extra() -> Int { helper() + 1 }\n", []string{"App"}},
 	}
 	for _, step := range steps {
 		path := filepath.Join(pkgDir, step.file)
 		src, err := os.ReadFile(path)
-		if err != nil {
+		if err != nil && step.old != "" {
 			t.Fatal(err)
 		}
 		if !strings.Contains(string(src), step.old) {
