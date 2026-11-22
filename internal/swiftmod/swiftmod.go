@@ -4,6 +4,7 @@ package swiftmod
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -62,8 +63,8 @@ func (t Target) SourcePaths() []string {
 
 // Describe returns the targets of the package rooted at pkgDir and of every package in its
 // dependency graph: local packages and remote checkouts alike. A target of the root package
-// shadows a same-named target of a dependency. Remote dependencies are those checked out in buildDir
-// when it holds checkouts, and otherwise in pkgDir/.build.
+// shadows a same-named target of a dependency. Remote dependencies are those checked out in buildDir,
+// which are resolved there when it is not pkgDir/.build and holds none yet.
 func Describe(pkgDir, buildDir string) (map[string]Target, error) {
 	pkgDir, err := filepath.Abs(pkgDir)
 	if err != nil {
@@ -125,6 +126,10 @@ func dependencyDirs(pkgDir, buildDir, scratch string) []string {
 	switch {
 	case buildDir != "" && exists(filepath.Join(buildDir, "checkouts")):
 		args = append([]string{"package", "--scratch-path", buildDir}, args[1:]...)
+	case buildDir != "" && buildDir != filepath.Join(pkgDir, ".build"):
+		// A build directory of its own that is still empty: the checkouts resolved into it stay, for
+		// the build of the dependencies and the targets described from them.
+		args = []string{"package", "--scratch-path", buildDir, "show-dependencies", "--format", "json"}
 	case !exists(filepath.Join(pkgDir, ".build")):
 		args = append([]string{"package", "--scratch-path", filepath.Join(scratch, "graph")}, args[1:]...)
 	}
@@ -165,6 +170,10 @@ func describeOne(pkgDir, scratch string, root bool) (map[string]Target, error) {
 	cmd.Dir = pkgDir
 	out, err := cmd.Output()
 	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return nil, fmt.Errorf("swift package describe: %w\n%s", err, exit.Stderr)
+		}
 		return nil, fmt.Errorf("swift package describe: %w", err)
 	}
 	var d struct {
