@@ -2316,6 +2316,17 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 			}
 		}
 		fn := lastComponent(owner) + capitalize(sig.base) + e.suffix(sig, kept, false)
+		if fn == "OptSome" && len(ss) == 1 {
+			// `.some(x)`: name the wrapped type, which Go cannot infer from an argument such as nil.
+			if rt := e.m.typeOf(n.Type()); rt != nil && rt.Kind == types.Optional && len(rt.Args) == 1 {
+				inner := e.m.GoType(rt.Args[0], e.generics)
+				if rt.Args[0].Kind != types.Optional && e.m.isReferenceGo(rt.Args[0], inner) {
+					// A class reference is its own Optional.
+					return ss[0]
+				}
+				return "swiftrt.OptSome[" + inner + "](" + ss[0] + ")"
+			}
+		}
 		return "swiftrt." + fn + e.mappedResultTypeArg(fn, dem, n, true) + "(" + strings.Join(ss, ", ") + ")"
 	}
 	bt := e.m.typeOf(base.Type())
