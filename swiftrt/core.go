@@ -478,7 +478,7 @@ func Is[T any](v any) bool {
 	if _, ok := derefAs[T](v); ok {
 		return true
 	}
-	if _, ok := Dynamic(v).(T); ok {
+	if _, ok := dynamicAs[T](v); ok {
 		return true
 	}
 	if _, ok := bridgeAs[T](v); ok {
@@ -493,7 +493,7 @@ func As[T any](v any) *T {
 	if t, ok := v.(T); ok {
 		return &t
 	}
-	if t, ok := Dynamic(v).(T); ok {
+	if t, ok := dynamicAs[T](v); ok {
 		return &t
 	}
 	if t, ok := derefAs[T](v); ok {
@@ -512,7 +512,7 @@ func As[T any](v any) *T {
 func MustAs[T any](v any) T {
 	t, ok := v.(T)
 	if !ok {
-		t, ok = Dynamic(v).(T)
+		t, ok = dynamicAs[T](v)
 	}
 	if !ok {
 		t, ok = derefAs[T](v)
@@ -559,6 +559,24 @@ func Dynamic(v any) any {
 		return d.SwiftDynamic()
 	}
 	return v
+}
+
+// dynamicAs matches the most-derived object behind a class reference against T, or one of its
+// superclass parts when T is a class between the reference's static and dynamic types.
+func dynamicAs[T any](v any) (T, bool) {
+	d := Dynamic(v)
+	if t, ok := d.(T); ok {
+		return t, true
+	}
+	if b, ok := d.(interface{ SwiftBases() []any }); ok && !isNil(d) {
+		for _, p := range b.SwiftBases() {
+			if t, ok := p.(T); ok {
+				return t, true
+			}
+		}
+	}
+	var zero T
+	return zero, false
 }
 
 // Ref boxes a struct value for an existential whose methods need a pointer receiver.

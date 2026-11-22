@@ -282,7 +282,6 @@ option.
 - A nested function that outlives its parent sees the parent's constants as they are when it runs, not as
   they were when it was made. Closures copy them.
 - Pointers and C interop cover what the code needs (`gettimeofday`, `clock_gettime`, C strings, pointer arithmetic over C characters, `argv`), not `UnsafePointer` in general. A pointer to C characters cannot move backwards.
-- A class cannot subclass a class of another package (an `open class` of a dependency).
 - A generic function that takes `swiftrt.TypeT[T]` for a protocol with static requirements cannot be called with a metatype known only at run time (`Self.self` in a protocol extension, an associated type's metatype); the call compiles and traps if it runs.
 - Every untranslated construct is reported, never silently dropped. `swift2go stats` and the
   per-target report list them by kind.

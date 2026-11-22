@@ -339,8 +339,20 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	if n.Kind() == "class_decl" && e.m.HasSubclass(info.GoName) && e.m.Superclass(info.GoName) == "" {
 		e.w("// SwiftDynamic returns the most-derived object, for downcasts and identity.\nfunc (self *%s) SwiftDynamic() any {\n\tif self != nil && self.SwiftSub != nil {\n\t\treturn self.SwiftSub\n\t}\n\treturn self\n}\n\n", recvT)
 	}
-	for sup := e.m.Superclass(info.GoName); sup != ""; sup = e.m.Superclass(sup) {
-		e.w("// As%s upcasts to the superclass.\nfunc (self *%s) As%s() *%s {\n\tif self == nil {\n\t\treturn nil\n\t}\n\treturn &self.%s\n}\n\n", sup, recvT, sup, sup, sup)
+	for _, sup := range e.m.ancestors(info.GoName) {
+		if pkg, _, ok := strings.Cut(sup, "."); ok {
+			if dep := e.m.depByPkg(pkg); dep != nil {
+				e.m.importPkgs[pkg] = dep.ImportPath
+			}
+		}
+		e.w("// %s upcasts to the superclass.\nfunc (self *%s) %s() *%s {\n\tif self == nil {\n\t\treturn nil\n\t}\n\treturn &self.%s\n}\n\n", upcastMethod(sup), recvT, upcastMethod(sup), sup, embeddedField(sup))
+	}
+	if sups := e.m.ancestors(info.GoName); len(sups) > 0 {
+		var parts []string
+		for _, sup := range sups {
+			parts = append(parts, "&self."+embeddedField(sup))
+		}
+		e.w("// SwiftBases returns the superclass parts, nearest first, for casts to a superclass.\nfunc (self *%s) SwiftBases() []any {\n\treturn []any{%s}\n}\n\n", recvT, strings.Join(parts, ", "))
 	}
 	e.members(n, info)
 	e.codingKeyOmissionDefaults(n, recvT, keys)
@@ -1950,12 +1962,12 @@ func (e *fileEmitter) exprGoType(n ast.Node) string {
 // overrideRoot returns the member at the top of info's override chain, or nil when info is not a
 // class member that overrides or is overridden.
 func (e *fileEmitter) overrideRoot(info, self *DeclInfo) *DeclInfo {
-	if self == nil || self.Kind != "class_decl" || info.Static || !e.m.overridden[e.usrOf(info)] && info.Overrides == "" {
+	if self == nil || self.Kind != "class_decl" || info.Static || !e.m.overridden[e.usrOf(info)] && info.Overrides == "" && !info.OpenOverridable {
 		return nil
 	}
 	root := info
-	for root.Overrides != "" && e.m.decls[root.Overrides] != nil {
-		root = e.m.decls[root.Overrides]
+	for root.Overrides != "" && e.m.declOf(root.Overrides) != nil {
+		root = e.m.declOf(root.Overrides)
 	}
 	return root
 }

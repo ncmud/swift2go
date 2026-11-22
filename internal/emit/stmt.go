@@ -888,7 +888,12 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 		for _, name := range patternNames(p) {
 			boundHere[name] = true
 		}
-		switch p.Kind() {
+		kind := p.Kind()
+		if kind == "pattern_optional_some" && refutable(p.Child("sub_pattern")) {
+			// `guard case .a(let x?) = optional`: the payload's case is tested as well as the Optional.
+			kind = "refutable"
+		}
+		switch kind {
 		case "pattern_optional_some":
 			tmp := e.newTmp("opt")
 			e.w("%s := %s\nif %s == nil ", tmp, e.expr(init), tmp)
