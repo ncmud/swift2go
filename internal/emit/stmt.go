@@ -319,10 +319,17 @@ func (e *fileEmitter) localFunc(n ast.Node) {
 	e.generics = saveG
 }
 
-// isLocalGetter reports whether a var_decl in a function body is a computed variable, such as
-// `var rooms: [Room] { all.filter(...) }`, whose value its getter recomputes at every use.
+// isLocalGetter reports whether a var_decl in a function body is a get-only computed variable, such
+// as `var rooms: [Room] { all.filter(...) }`, whose value its getter recomputes at every use. A lazy
+// local also reads through a getter, but keeps its emission as a stored variable.
 func isLocalGetter(n ast.Node) bool {
-	return n.Kind() == "var_decl" && n.Str("readImpl") == "getter" && localGetterAccessor(n) != nil
+	if n.Kind() != "var_decl" || n.Bool("lazy") || n.Str("readImpl") != "getter" {
+		return false
+	}
+	if w := n.Str("writeImpl"); w != "" && w != "immutable" {
+		return false
+	}
+	return localGetterAccessor(n) != nil
 }
 
 func localGetterAccessor(n ast.Node) ast.Node {
