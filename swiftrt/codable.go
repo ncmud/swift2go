@@ -130,8 +130,17 @@ func KeyedDecodingContainerContains(c KeyedDecodingContainer, key any) bool {
 	return ok
 }
 
-// KeyedDecodingContainerAllKeys is `container.allKeys` as strings.
-func KeyedDecodingContainerAllKeys(c KeyedDecodingContainer) []string { return MapKeys(c.M) }
+// KeyedDecodingContainerAllKeys is `container.allKeys`: the keys present that the CodingKey type's
+// `init?(stringValue:)` accepts, in sorted order.
+func KeyedDecodingContainerAllKeys[K any](c KeyedDecodingContainer, key func(string) *K) []K {
+	out := []K{}
+	for _, s := range MapKeys(c.M) {
+		if k := key(s); k != nil {
+			out = append(out, *k)
+		}
+	}
+	return out
+}
 
 // KeyedDecodingContainerDecodeForKey is `container.decode(_:forKey:)`.
 func KeyedDecodingContainerDecodeForKey[T any](c KeyedDecodingContainer, _ TypeT[T], key any) T {

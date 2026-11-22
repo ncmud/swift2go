@@ -689,7 +689,45 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		return name
 	}
 	recv := e.m.Recv(bt)
+	if recv == "KeyedDecodingContainer" && sig.base == "allKeys" {
+		if bt.Kind != types.Named || len(bt.Args) != 1 {
+			return e.m.Unsup("allKeys-untyped", e.where, e.exprGoType(n))
+		}
+		ctor := e.stringValueInit(bt.Args[0].Name)
+		if ctor == "" {
+			return e.m.Unsup("allKeys-no-init-stringValue", e.where, e.exprGoType(n))
+		}
+		return "swiftrt.KeyedDecodingContainerAllKeys(" + e.recvArg(base) + ", " + ctor + ")"
+	}
 	return "swiftrt." + recv + capitalize(sig.base) + "(" + e.recvArg(base) + ")"
+}
+
+// stringValueInit names the Go function for a CodingKey type's `init?(stringValue:)`, or "" when it isn't declared.
+func (e *fileEmitter) stringValueInit(owner string) string {
+	find := func(decls map[string]*DeclInfo) *DeclInfo {
+		for _, info := range decls {
+			if info.Kind != "constructor_decl" || info.Owner != owner {
+				continue
+			}
+			if ps := info.Node.Child("params").List("params"); len(ps) == 1 && ps[0].Name() == "stringValue" {
+				return info
+			}
+		}
+		return nil
+	}
+	if info := find(e.m.decls); info != nil {
+		return info.GoName
+	}
+	for _, d := range e.m.Deps {
+		if info := find(d.decls); info != nil {
+			if d.Pkg == e.m.Pkg {
+				return info.GoName
+			}
+			e.m.importPkgs[d.Pkg] = d.ImportPath
+			return d.Pkg + "." + info.GoName
+		}
+	}
+	return ""
 }
 
 // recvExpr renders a receiver for field access or a Go method call.
@@ -1849,6 +1887,10 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 		}
 	}
 	recv := e.m.Recv(e.m.typeOf(n.Type()))
+	if recv == "Map" && len(kept) == 2 && len(ss) == 2 && kept[0].label == "grouping" && e.m.Recv(e.m.typeOf(kept[0].node.Type())) == "Map" {
+		// Grouping a dictionary groups its (key, value) elements.
+		ss[0] = "swiftrt.MapOrdered(" + ss[0] + ")"
+	}
 	suffix := ""
 	for _, a := range kept {
 		if a.label != "" {
