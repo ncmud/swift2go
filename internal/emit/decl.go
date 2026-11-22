@@ -285,8 +285,28 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 			defined[funcSignatureKey(mem)] = true
 		}
 	}
+	var conformed []string
 	for _, c := range n.Child("inherits").List("conformances") {
-		proto := e.m.demangle(c.Str("protocol"))
+		conformed = append(conformed, e.m.demangle(c.Str("protocol")))
+	}
+	// overridden reports whether a protocol that refines proto, and that the type also conforms to,
+	// supplies its own default for the same requirement: Swift picks the more specific one.
+	overridden := func(proto string, impl ast.Node) bool {
+		for _, other := range conformed {
+			if other == proto || !e.m.refines(other, proto) {
+				continue
+			}
+			for _, pm := range append([]*Module{e.m}, e.m.Deps...) {
+				for _, d := range pm.decls {
+					if d.ProtoExt && d.Owner == other && d.Kind == "func_decl" && funcSignatureKey(d.Node) == funcSignatureKey(impl) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	for _, proto := range conformed {
 		for _, pm := range append([]*Module{e.m}, e.m.Deps...) {
 			if !strings.HasPrefix(proto, pm.Name+".") {
 				continue
@@ -301,8 +321,8 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				if !info.ProtoExt || info.Owner != proto || info.Kind != "func_decl" || defined[funcSignatureKey(info.Node)] {
 					continue
 				}
-				req := pm.requirementName(proto, info.Node)
-				if req == "" {
+				req := e.m.inheritedRequirementName(proto, info.Node)
+				if req == "" || overridden(proto, info.Node) {
 					continue
 				}
 				params, args := e.paramList(info.Node)
@@ -341,6 +361,52 @@ func (m *Module) sortedDecls() []*DeclInfo {
 		out[i] = m.decls[k]
 	}
 	return out
+}
+
+// inheritedRequirementName is the Go name of the requirement that a default in an extension of proto
+// implements, declared by proto or by a protocol it inherits from.
+func (m *Module) inheritedRequirementName(proto string, impl ast.Node) string {
+	seen := map[string]bool{}
+	var find func(p string) string
+	find = func(p string) string {
+		if seen[p] {
+			return ""
+		}
+		seen[p] = true
+		for _, mod := range append([]*Module{m}, m.Deps...) {
+			if name := mod.requirementName(p, impl); name != "" {
+				return name
+			}
+			for _, parent := range mod.protoParents[p] {
+				if name := find(parent); name != "" {
+					return name
+				}
+			}
+		}
+		return ""
+	}
+	return find(proto)
+}
+
+// refines reports whether the local protocol sub inherits from proto, directly or indirectly.
+func (m *Module) refines(sub, proto string) bool {
+	seen := map[string]bool{}
+	var walk func(p string) bool
+	walk = func(p string) bool {
+		if seen[p] {
+			return false
+		}
+		seen[p] = true
+		for _, mod := range append([]*Module{m}, m.Deps...) {
+			for _, parent := range mod.protoParents[p] {
+				if parent == proto || walk(parent) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(sub)
 }
 
 func (m *Module) requirementName(proto string, impl ast.Node) string {
@@ -1398,8 +1464,13 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 		e.w("func (self %s) Get%s() %s { return %s }\n\n", recv, req.GoName, res, body)
 		// A settable requirement met by a stored property of a class gets a setter; computed and
 		// observed properties already have one.
-		if r.Str("writeImpl") == "setter" && stored != "" && strings.HasPrefix(recv, "*") {
-			e.w("func (self %s) Set%s(newValue %s) { %s = newValue }\n\n", recv, req.GoName, res, stored)
+		if r.Str("writeImpl") == "setter" && stored != "" {
+			setRecv := recv
+			if !strings.HasPrefix(setRecv, "*") {
+				// A struct sets through a pointer, so *T satisfies the protocol.
+				setRecv = "*" + recv
+			}
+			e.w("func (self %s) Set%s(newValue %s) { %s = newValue }\n\n", setRecv, req.GoName, res, stored)
 		}
 	}
 }
