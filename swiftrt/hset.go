@@ -76,7 +76,7 @@ func writeKey(b *strings.Builder, v reflect.Value) {
 func HSetOf[T any](xs ...T) HSet[T] {
 	s := HSet[T]{M: map[string]T{}}
 	for _, x := range xs {
-		s.M[hkey(x)] = x
+		s.M[hkey(x)] = Copy(x)
 	}
 	return s
 }
@@ -96,7 +96,7 @@ func HSetInsert[T any](s *HSet[T], v T) struct {
 			F1 T
 		}{false, old}
 	}
-	s.M[k] = v
+	s.M[k] = Copy(v)
 	return struct {
 		F0 bool
 		F1 T

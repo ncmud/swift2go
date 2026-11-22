@@ -26,3 +26,19 @@ func TestHSet(t *testing.T) {
 		t.Fatal("a copied set should not share storage")
 	}
 }
+
+func TestHSetInsertCopiesMember(t *testing.T) {
+	var s HSet[[]int]
+	v := []int{1, 2}
+	HSetInsert(&s, v)
+	v[0] = 9
+	if got := s.Elements()[0]; got[0] != 1 {
+		t.Fatal("mutating the inserted value changed the stored member")
+	}
+	w := []int{3}
+	lit := HSetOf(w)
+	w[0] = 4
+	if got := lit.Elements()[0]; got[0] != 3 {
+		t.Fatal("mutating a literal's element changed the stored member")
+	}
+}

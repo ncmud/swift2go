@@ -1049,7 +1049,7 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		}
 		return test
 	case "pattern_enum_element":
-		if t, ok := e.optionalCase(p, subj, st); ok {
+		if t, ok := e.optionalCase(p, subj, st, false); ok {
 			return t
 		}
 		el := e.enumElement(p, st)
@@ -1079,7 +1079,19 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		if t := e.m.typeOf(p.Child("sub_pattern").Type()); t != nil && t.Kind != types.Optional && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
 			val = subj
 		}
-		inner := e.patternTest(p.Child("sub_pattern"), val, st)
+		inner, derefed := "", val != subj
+		if up := unwrapPattern(p.Child("sub_pattern")); derefed && up != nil && up.Kind() == "pattern_enum_element" {
+			if t, ok := e.optionalCase(up, val, st, true); ok {
+				inner = t
+			}
+		}
+		if inner == "" {
+			it := st
+			if derefed && st != nil && st.Kind == types.Optional && len(st.Args) == 1 {
+				it = st.Args[0]
+			}
+			inner = e.patternTest(p.Child("sub_pattern"), val, it)
+		}
 		if inner == "true" {
 			return subj + " != nil"
 		}
@@ -1514,8 +1526,9 @@ func stripLoads(n ast.Node) ast.Node {
 }
 
 // optionalCase tests an enum pattern against an Optional subject: `.none`/`nil`, `.some(p)`, or a case of
-// the wrapped enum, which Swift matches through an implicit `.some`.
-func (e *fileEmitter) optionalCase(p ast.Node, subj string, st *types.Type) (string, bool) {
+// the wrapped enum, which Swift matches through an implicit `.some`. derefed marks a subj of the form
+// `(*ptr)` that an enclosing `?` pattern already unwrapped from st, so ptr is the Optional tested.
+func (e *fileEmitter) optionalCase(p ast.Node, subj string, st *types.Type, derefed bool) (string, bool) {
 	t := st
 	if t == nil || t.Kind == types.Unknown {
 		t = e.m.typeOf(p.Type())
@@ -1526,7 +1539,7 @@ func (e *fileEmitter) optionalCase(p ast.Node, subj string, st *types.Type) (str
 	name := p.Child("element").Child("base_name").Str("name")
 	val := e.optionalValue(subj, t)
 	ptr := subj
-	if strings.HasPrefix(subj, "(*") && strings.HasSuffix(subj, ")") {
+	if derefed {
 		ptr, val = subj[2:len(subj)-1], subj
 		if name != "none" && name != "some" {
 			return "", false
