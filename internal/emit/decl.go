@@ -19,6 +19,8 @@ type fileEmitter struct {
 	b        strings.Builder
 	generics map[string]string
 	tmp      int
+	// chainStmt is set while an optional chain is emitted as a statement, whose `()?` value is unused.
+	chainStmt bool
 	// function context
 	inInit        bool
 	preamble      string                  // statements body() writes first, then clears

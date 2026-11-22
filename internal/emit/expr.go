@@ -1294,6 +1294,9 @@ func (e *fileEmitter) forceUnwrap(sub ast.Node) string {
 }
 
 func (e *fileEmitter) optionalChain(n ast.Node) string {
+	stmt := e.chainStmt
+	e.chainStmt = false
+	defer func() { e.chainStmt = stmt }()
 	var binds []ast.Node
 	var find func(x ast.Node)
 	find = func(x ast.Node) {
@@ -1374,8 +1377,12 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 		post.WriteString(p + "\n")
 	}
 	e.b, e.post = savedB, savedPost
-	if rt == "" || rt == "*" || rt == "*struct{}" {
+	if rt == "" || rt == "*" || rt == "*struct{}" && stmt {
 		return "func() { " + strings.ReplaceAll(pre.String(), chainReturn, "return") + body + "\n" + post.String() + " }()"
+	}
+	if rt == "*struct{}" {
+		// A `()?` value: nil when the chain stopped at a nil, else the empty tuple.
+		return "func() *struct{} {\n" + strings.ReplaceAll(pre.String(), chainReturn, "return nil") + body + "\n" + post.String() + "return &struct{}{}\n}()"
 	}
 	chainPre := strings.ReplaceAll(pre.String(), chainReturn, "return nil")
 	if post.Len() > 0 {
