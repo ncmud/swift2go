@@ -68,6 +68,7 @@ type fileEmitter struct {
 	keeps         int                 // owned is emitting a call whose result is stored or returned
 	lent          map[uintptr]bool    // closures a library call holds only inside its result
 	sliceLos      map[string]string   // local ArraySlice constant → the Go variable holding its start index
+	sliceDry      bool                // sliceBase only reports whether a start index can be told
 }
 
 func (e *fileEmitter) w(format string, args ...any) { fmt.Fprintf(&e.b, format, args...) }
@@ -170,6 +171,9 @@ func (e *fileEmitter) topDecl(n ast.Node, owner string) {
 			e.setterVar(n, info, nil)
 		}
 	case "import_decl", "top_level_code_decl", "typealias", "enum_case_decl":
+	case "macro_decl", "infix_operator_decl", "prefix_operator_decl", "postfix_operator_decl", "precedence_group_decl":
+		// Uses of a macro are expanded where they appear, and an operator's implementations are
+		// functions; the declarations themselves have nothing to emit.
 	default:
 		e.m.Unsup("decl:"+n.Kind(), shortPath(e.file.Filename), "")
 		e.w("// swift2go: unsupported declaration %s\n\n", n.Kind())
@@ -243,6 +247,8 @@ func (e *fileEmitter) member(n, mem ast.Node, self *DeclInfo) {
 		case "enum_case_decl", "typealias", "enum_element_decl":
 		case "subscript_decl":
 			e.subscriptDecl(mem, self)
+		case "destructor_decl":
+			e.deinitDecl(mem, self)
 		default:
 			e.m.Unsup("member:"+mem.Kind(), shortPath(e.file.Filename), "")
 		}
@@ -1796,6 +1802,52 @@ func (e *fileEmitter) classCtor(n ast.Node, info, self *DeclInfo, typeNode ast.N
 	if ps := n.Child("params").List("params"); len(ps) == 1 && !failable && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Decoder" && !n.Implicit() && !strings.Contains(ret, "[") {
 		e.w("func init() { swiftrt.RegisterDecoder(func(d *swiftrt.Decoder) %s { return %s(d) }) }\n\n", ret, info.GoName)
 	}
+}
+
+// deinitDecl emits a class's deinit as the method SwiftDeinit, which runs the body and then the
+// superclass's deinit. Go has no deterministic destruction, so nothing calls it; a deinit that only
+// deallocates pointer memory, which the garbage collector frees, needs no call. Any other deinit is
+// reported, since code that relies on it running has to call SwiftDeinit itself.
+func (e *fileEmitter) deinitDecl(n ast.Node, self *DeclInfo) {
+	if self == nil || self.Kind != "class_decl" {
+		e.m.Unsup("member:"+n.Kind(), shortPath(e.file.Filename), "")
+		return
+	}
+	e.where = shortPath(e.file.Filename) + ":" + self.Owner + ".deinit"
+	if !onlyFreesMemory(n.Child("body")) {
+		e.m.Unsup("deinit-runs-only-when-called", e.where, "")
+	}
+	e.w("// SwiftDeinit runs the class's deinit. Nothing calls it when the object is collected.\n")
+	e.w("func (self *%s%s) SwiftDeinit() {\n", self.GoName, e.selfTypeArgs(self))
+	if b := n.Child("body"); b != nil {
+		e.paramNames = map[string]bool{}
+		e.stmts(b.List("elements"))
+	}
+	if sup := e.m.Superclass(self.GoName); sup != "" {
+		e.w("if d, ok := any(&self.%s).(interface{ SwiftDeinit() }); ok {\nd.SwiftDeinit()\n}\n", embeddedField(sup))
+	}
+	e.w("}\n\n")
+}
+
+// onlyFreesMemory reports whether a deinit body does nothing but deallocate pointers.
+func onlyFreesMemory(body ast.Node) bool {
+	if body == nil {
+		return true
+	}
+	for _, st := range body.List("elements") {
+		call := stripConv(st)
+		if call == nil || call.Kind() != "call_expr" {
+			return false
+		}
+		fn := stripConv(call.Child("fn"))
+		if fn == nil || fn.Kind() != "dot_syntax_call_expr" {
+			return false
+		}
+		if d := stripConv(fn.Child("fn")).Child("decl"); d.Str("base_name") != "deallocate" || !strings.HasPrefix(d.Str("decl_usr"), "s:Sp") && !strings.HasPrefix(d.Str("decl_usr"), "s:Sv") && !strings.HasPrefix(d.Str("decl_usr"), "s:Sr") && !strings.HasPrefix(d.Str("decl_usr"), "s:SW") {
+			return false
+		}
+	}
+	return true
 }
 
 // isUnimplementedInitStub reports whether n is an initializer the compiler adds to a subclass that
