@@ -1,14 +1,13 @@
 package types
 
 import (
-	"os/exec"
 	"testing"
+
+	"github.com/ncmud/swift2go/internal/swifttest"
 )
 
 func TestNominalKinds(t *testing.T) {
-	if _, err := exec.LookPath("xcrun"); err != nil {
-		t.Skip("needs swift-demangle")
-	}
+	swifttest.Require(t, "xcrun")
 	d, err := NewDemangler([]string{
 		"s:4GRDB8DatabaseC10ColumnTypeV4textAEvpZ",
 		"s:4GRDB11TableRecordPAAE6filteryAA21QueryInterfaceRequestVyxGqd__AA22SQLSpecificExpressibleRd__lFZ",

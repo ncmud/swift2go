@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ncmud/swift2go/internal/swiftmod"
+	"github.com/ncmud/swift2go/internal/swifttest"
 )
 
 // TestMappedModules transpiles testdata/mapping/swift with Toy replaced by a hand-written Go package and Glue,
@@ -18,9 +19,7 @@ func TestMappedModules(t *testing.T) {
 	if testing.Short() {
 		t.Skip("transpiles a Swift package")
 	}
-	if _, err := exec.LookPath("xcrun"); err != nil {
-		t.Skip("needs the Xcode Swift toolchain (swiftc and swift-demangle through xcrun)")
-	}
+	swifttest.Require(t, "xcrun", "swift", "swiftc")
 	pkgDir, err := filepath.Abs("testdata/mapping/swift")
 	if err != nil {
 		t.Fatal(err)
@@ -67,9 +66,7 @@ func TestOverlay(t *testing.T) {
 	if testing.Short() {
 		t.Skip("transpiles a Swift package")
 	}
-	if _, err := exec.LookPath("xcrun"); err != nil {
-		t.Skip("needs the Xcode Swift toolchain (swiftc and swift-demangle through xcrun)")
-	}
+	swifttest.Require(t, "xcrun", "swift", "swiftc")
 	pkgDir, err := filepath.Abs("testdata/overlay/swift")
 	if err != nil {
 		t.Fatal(err)
