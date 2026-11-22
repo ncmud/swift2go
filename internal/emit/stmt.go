@@ -232,7 +232,10 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 		e.doCatch(n)
 	case "discard_assignment_expr":
 	case "optional_evaluation_expr":
+		saved := e.chainStmt
+		e.chainStmt = true
 		s := e.expr(n)
+		e.chainStmt = saved
 		if strings.HasPrefix(s, "func() {") || isVoidGo(e.exprGoType(n)) && strings.HasSuffix(s, ")") {
 			e.w("%s\n", s)
 		} else {
@@ -349,12 +352,6 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 	savePost := e.post
 	e.post = nil
 	v := e.owned(r, sinkReturn)
-	if e.resultType == "*struct{}" && strings.HasPrefix(v, "func() {") && strings.HasSuffix(v, "}()") {
-		// An optional chain ending in a Void call (`x?.f()`) returned as `()?`: run it, then return
-		// a value. Whether the chain reached the call is not kept.
-		e.w("%s\n", v)
-		v = "&struct{}{}"
-	}
 	if len(e.post) > 0 {
 		// Write-backs must run before leaving the function.
 		tmp := e.newTmp("res")
