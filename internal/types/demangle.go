@@ -60,7 +60,8 @@ func (d *Demangler) Add(syms []string) error {
 		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(todo))
 	}
 	for i, s := range todo {
-		d.cache[s] = normalizeLocal(privateName.ReplaceAllString(lines[i], "$1"))
+		raw := privateName.ReplaceAllString(lines[i], "$1")
+		d.cache[s] = localWrappers(s, raw, normalizeLocal(raw))
 	}
 	return nil
 }
@@ -98,27 +99,35 @@ func normalizeLocal(s string) string {
 				}
 			}
 			if strings.HasPrefix(s[i:], " -> ") {
-				i += len(" -> ")
-				depth := 0
-				for i < len(s) {
-					c := s[i]
-					if c == '(' || c == '[' || c == '<' {
-						depth++
-					} else if c == ')' || c == ']' || c == '>' {
-						if depth == 0 {
-							break
-						}
-						depth--
-					} else if c == ',' && depth == 0 || c == ' ' && depth == 0 && strings.HasPrefix(s[i:], " : ") {
-						// The return type ends at a dictionary's key-value separator too.
-						break
-					}
-					i++
-				}
+				i = skipType(s, i+len(" -> "))
 			}
+		} else if strings.HasPrefix(s[i:], " : ") {
+			// Declared in a computed property's getter: "Foo #1 in Mod.Type.prop : Swift.String".
+			i = skipType(s, i+len(" : "))
 		}
 		s = s[:loc[0]] + mod + "." + name + s[i:]
 	}
+}
+
+// skipType returns the end of the type that starts at s[i:], which ends at a closing bracket,
+// a comma, or a dictionary's key-value separator at its own depth.
+func skipType(s string, i int) int {
+	depth := 0
+	for i < len(s) {
+		c := s[i]
+		if c == '(' || c == '[' || c == '<' {
+			depth++
+		} else if c == ')' || c == ']' || c == '>' {
+			if depth == 0 {
+				break
+			}
+			depth--
+		} else if c == ',' && depth == 0 || c == ' ' && depth == 0 && strings.HasPrefix(s[i:], " : ") {
+			break
+		}
+		i++
+	}
+	return i
 }
 
 func skipBalanced(s string, i int) int {
@@ -135,4 +144,40 @@ func skipBalanced(s string, i int) int {
 		}
 	}
 	return i
+}
+
+// localWrappers restores the optionals and metatype around a type declared in a function, which
+// the demangler prints ambiguously ("Foo #1 in f() -> Swift.Int?" for Foo?): it reads them from the
+// mangled suffix that follows the local type ("…L_VSgD" is Foo?, "…L_VmD" is Foo.Type).
+func localWrappers(mangled, raw, norm string) string {
+	if loc := localStart.FindStringIndex(raw); loc == nil || loc[0] != 0 || !strings.HasSuffix(mangled, "D") {
+		return norm
+	}
+	i := strings.LastIndex(mangled, "L_")
+	if i < 0 || i+3 > len(mangled) || !strings.ContainsRune("VCO", rune(mangled[i+2])) {
+		return norm
+	}
+	end := 0
+	for end < len(norm) && (norm[end] == '.' || norm[end] == '_' || isAlnum(norm[end])) {
+		end++
+	}
+	out := norm[:end]
+	rest := strings.TrimSuffix(mangled[i+3:], "D")
+	for rest != "" {
+		switch {
+		case strings.HasPrefix(rest, "Sg"):
+			out += "?"
+			rest = rest[2:]
+		case rest == "m":
+			out += ".Type"
+			rest = ""
+		default:
+			return norm
+		}
+	}
+	return out
+}
+
+func isAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }

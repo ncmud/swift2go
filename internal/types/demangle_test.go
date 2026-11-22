@@ -8,11 +8,27 @@ func TestNormalizeLocal(t *testing.T) {
 		"Entry #1 in static Mod.Router.shortestPaths(from: Swift.Int, map: Mod.Map) -> [Swift.Int : Swift.Int]":        "Mod.Entry",
 		"[Swift.String : [Appearance #1 in static Mod.Search.dropDuplicates([Mod.Search.Slot]) -> [Mod.Search.Slot]]]": "[Swift.String : [Mod.Appearance]]",
 		"Swift.Int": "Swift.Int",
+		"Permanent #1 in Mod.Instance.fingerprint : Swift.String":                             "Mod.Permanent",
+		"[Permanent #1 in Mod.Instance.fingerprint : Swift.String]":                           "[Mod.Permanent]",
 		"[GroupKey #1 in Mod.Exporter.Result.report() -> Swift.String : [Mod.Exporter.Item]]": "[Mod.GroupKey : [Mod.Exporter.Item]]",
 	}
 	for in, want := range cases {
 		if got := normalizeLocal(in); got != want {
 			t.Errorf("normalizeLocal(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLocalWrappers(t *testing.T) {
+	raw := "Named #1 in static Mod.Lines.existingName(Mod.Instance) -> Swift.String?"
+	cases := map[string]string{
+		"$s3Mod5LinesO12existingNameySSSgAA8InstanceCFZ5NamedL_VD":   "Mod.Named",
+		"$s3Mod5LinesO12existingNameySSSgAA8InstanceCFZ5NamedL_VSgD": "Mod.Named?",
+		"$s3Mod5LinesO12existingNameySSSgAA8InstanceCFZ5NamedL_VmD":  "Mod.Named.Type",
+	}
+	for mangled, want := range cases {
+		if got := localWrappers(mangled, raw, normalizeLocal(raw)); got != want {
+			t.Errorf("localWrappers(%q) = %q, want %q", mangled, got, want)
 		}
 	}
 }
