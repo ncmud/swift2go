@@ -24,10 +24,18 @@ func ccDescribe(_ v: Any) -> String {
     return parts.isEmpty ? "none" : parts.joined(separator: " ")
 }
 
-// Collections whose keys are arrays. AnyHashable is a Go interface, which cannot key a Go map
-// with an array, so these are not cast to AnyHashable-keyed collections here.
+struct CCKey: Hashable { var path: [Int] }
+
+// Collections whose keys are arrays, cast to their own types and to AnyHashable-keyed ones.
 func ccHashed(_ v: Any) -> String {
     var parts: [String] = []
+    if let s = v as? Set<AnyHashable> {
+        parts.append("setAnyHashable=\(s.count) has12=\(s.contains(AnyHashable([1, 2]))) has9=\(s.contains(AnyHashable([9])))")
+    }
+    if let d = v as? [AnyHashable: Int] {
+        parts.append("anyHashableInt=\(d.count) at23=\(d[AnyHashable([2, 3])] ?? -1) atKey=\(d[AnyHashable(CCKey(path: [4]))] ?? -1)")
+    }
+    if let d = v as? [AnyHashable: Any] { parts.append("anyHashableAny=\(d.count)") }
     if let d = v as? [[Int]: Any] { parts.append("arrKeyedAny=\(d.count)") }
     if let d = v as? [[Int]: Int] { parts.append("arrKeyedInt=\(d.keys.sorted { $0.count < $1.count })") }
     if let d = v as? [[Int]: String] { parts.append("arrKeyedString=\(d.count)") }
@@ -67,6 +75,8 @@ public func collectionCasts() {
         ("arrKeyed", [[1]: 1, [2, 3]: 2] as [[Int]: Int]),
         ("arrKeyedAny", [[1]: "a"] as [[Int]: Any]),
         ("setOfArr", Set([[1], [2]])),
+        ("setOfArr12", Set([[1, 2], [3]])),
+        ("structKeyed", [CCKey(path: [4]): 7, CCKey(path: []): 8] as [CCKey: Int]),
         ("arrInt", [1]),
     ]
     for (name, v) in hashed {
@@ -78,4 +88,8 @@ public func collectionCasts() {
     let arr = ([1, 2, 3] as [Int]) as Any
     let anys = arr as! [Any]
     print("forcedArr \(anys.compactMap { $0 as? Int }.reduce(0, +))")
+    let wide: Set<AnyHashable> = Set([[1, 2], [3]] as [[Int]])
+    var mixed: [AnyHashable: String] = [AnyHashable([1]): "arr", AnyHashable("s"): "str", AnyHashable(5): "int"]
+    mixed[AnyHashable([1])] = "arr2"
+    print("wide \(wide.count) \(wide.contains(AnyHashable([3]))) mixed \(mixed.count) \(mixed[AnyHashable([1])] ?? "-") \(mixed[AnyHashable(5)] ?? "-")")
 }
