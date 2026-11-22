@@ -384,15 +384,21 @@ func TestScalingDictionary(t *testing.T) {
 				}
 			}
 		}},
-		{name: "removeValue(forKey:) until empty", n: 20_000, prepare: func(n int) func() {
+		{name: "removeValue(forKey:) until empty", n: 2_000, prepare: func(n int) func() {
+			// Removing every key of a map larger than the CPU's caches is bound by memory latency,
+			// which grows with the map and differs between machines. The map stays small enough to
+			// stay in cache at 10n, and the work repeats so it takes long enough to time.
+			const passes = 100
 			keys := scalingKeys(n)
-			d := map[string]int{}
-			for i, k := range keys {
-				d[k] = i
-			}
+			d := make(map[string]int, n)
 			return func() {
-				for _, k := range keys {
-					_ = MapRemoveValueForKey(&d, k)
+				for range passes {
+					for i, k := range keys {
+						d[k] = i
+					}
+					for _, k := range keys {
+						_ = MapRemoveValueForKey(&d, k)
+					}
 				}
 			}
 		}},
