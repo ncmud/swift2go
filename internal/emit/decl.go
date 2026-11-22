@@ -306,11 +306,8 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				if req == "" {
 					continue
 				}
-				saveM := e.m
-				e.m = pm
 				params, args := e.paramList(info.Node)
 				res := e.resultGo(info.Node)
-				e.m = saveM
 				recv := e.m.GoType(&types.Type{Kind: types.Named, Name: q}, nil)
 				if info.Mutating && !strings.HasPrefix(recv, "*") && n.Kind() == "struct_decl" {
 					recv = "*" + recv
@@ -1532,8 +1529,6 @@ func (e *fileEmitter) staticForwarders(q, proto string, pm *Module, pfx string) 
 		if req == nil {
 			continue
 		}
-		saveM := e.m
-		e.m = pm
 		var params, args, res string
 		if r.Kind() == "func_decl" {
 			params, args = e.paramList(r)
@@ -1541,7 +1536,6 @@ func (e *fileEmitter) staticForwarders(q, proto string, pm *Module, pfx string) 
 		} else {
 			res = e.m.GoType(e.m.typeOf(r.Str("interface_type")), nil)
 		}
-		e.m = saveM
 		target, isDefault := "", false
 		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
 			mpfx := ""

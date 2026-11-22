@@ -233,7 +233,16 @@ func (m *Module) demangle(s string) string {
 			return d
 		}
 	}
-	return m.dm.Get(s)
+	if d, ok := m.dm.Lookup(s); ok {
+		return d
+	}
+	// Signatures of a dependency's declarations carry symbols only its demangler has seen.
+	for _, dep := range m.Deps {
+		if d, ok := dep.dm.Lookup(s); ok {
+			return d
+		}
+	}
+	return s
 }
 
 // objcMember matches an Objective-C member USR: c:objc(cs)Class(kind)selector.
