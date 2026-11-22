@@ -25,6 +25,8 @@ func main() {
 	buildDir := flag.String("build", "", "SwiftPM build directory with the package's built dependencies (default: the package's .build)")
 	maps := mapFlag{}
 	flag.Var(maps, "map", "use the Go package `Module=importpath` for a Swift module instead of transpiling it (repeatable)")
+	overlays := overlayFlag{}
+	flag.Var(overlays, "overlay", "`Target=dir`: hand-written Go files in dir replace the target's Swift files of the same name (repeatable)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: swift2go [flags] dump|transpile|stats <Target> [<TestTarget>]")
 		flag.PrintDefaults()
@@ -37,7 +39,7 @@ func main() {
 	if *buildDir == "" {
 		*buildDir = swiftmod.BuildDir(*pkgDir)
 	}
-	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps); err != nil {
+	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays); err != nil {
 		fmt.Fprintln(os.Stderr, "swift2go:", err)
 		os.Exit(1)
 	}
@@ -57,7 +59,21 @@ func (f mapFlag) Set(v string) error {
 	return nil
 }
 
-func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag) error {
+// overlayFlag collects -overlay Target=dir pairs.
+type overlayFlag map[string]string
+
+func (o overlayFlag) String() string { return "" }
+
+func (o overlayFlag) Set(v string) error {
+	target, dir, ok := strings.Cut(v, "=")
+	if !ok || target == "" || dir == "" {
+		return fmt.Errorf("want Target=dir, got %q", v)
+	}
+	o[target] = absPath(dir)
+	return nil
+}
+
+func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag) error {
 	pkgDir = absPath(pkgDir)
 	targets, err := swiftmod.Describe(pkgDir)
 	if err != nil {
@@ -115,6 +131,14 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 	var done []*emit.Module
 	byName := map[string]*emit.Module{}
 	failed := map[string]string{}
+	for target := range overlays {
+		if !slices.Contains(names, target) {
+			return fmt.Errorf("-overlay %s: the target is not in this run", target)
+		}
+		if _, mapped := maps[target]; mapped {
+			return fmt.Errorf("-overlay %s: the target is mapped to a Go package, which replaces all of it", target)
+		}
+	}
 	var failures []string
 	fail := func(name string, err error) {
 		failed[name] = name
@@ -148,6 +172,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			continue
 		}
 		m.Deps = done
+		m.Overlay = overlays[name]
 		m.Mappings = mappings
 		if importPath, ok := maps[name]; ok {
 			// A mapped target is read for its declarations only: dependents import the hand-written package.
@@ -173,6 +198,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 				continue
 			}
 			m.SetTarget(under)
+			m.Overlay = overlays[t.Deps[0]]
 			pkgOut = filepath.Join(outDir, under.Pkg)
 		}
 		m.ImportPath = path.Join(goModule, filepath.ToSlash(pkgOut))

@@ -50,7 +50,9 @@ type Module struct {
 	Pkg            string
 	RTPath         string // import path of swiftrt
 	Files          []ast.File
-	Test           bool // transpiling a test target into the package under test
+	Overlay        string   // directory of hand-written Go files that replace Swift files of the same name
+	Replaced       []string // Swift files WriteGo left to the overlay
+	Test           bool     // transpiling a test target into the package under test
 	Target         string
 	dm             *types.Demangler
 	decls          map[string]*DeclInfo
@@ -726,21 +728,32 @@ func (m *Module) Unsup(kind, where, goType string) string {
 	return fmt.Sprintf("swiftrt.Unsupported[%s](%q)", goType, kind)
 }
 
-// WriteGo writes one Go file per Swift file into dir and returns their paths.
+// WriteGo writes one Go file per Swift file into dir and returns their paths. A Swift file with a
+// hand-written replacement in the Overlay directory is not translated: the replacement is copied in
+// its place, along with any other Go file in the directory.
 func (m *Module) WriteGo(dir string) ([]string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	overlay, err := m.overlayFiles()
+	if err != nil {
+		return nil, err
+	}
 	var paths []string
 	for _, f := range m.Files {
-		fe := &fileEmitter{m: m, file: f, lvSubst: map[string]string{}}
-		src := fe.emitFile()
 		base := strings.TrimSuffix(filepath.Base(f.Filename), ".swift")
 		suffix := ".go"
 		if m.Test {
 			suffix = "_test.go"
 		}
-		out := filepath.Join(dir, toSnake(base)+suffix)
+		name := toSnake(base) + suffix
+		if overlay[name] {
+			m.Replaced = append(m.Replaced, filepath.Base(f.Filename))
+			continue
+		}
+		fe := &fileEmitter{m: m, file: f, lvSubst: map[string]string{}}
+		src := fe.emitFile()
+		out := filepath.Join(dir, name)
 		src = strings.ReplaceAll(src, "for _, _ := range ", "for range ")
 		formatted, err := format.Source([]byte(src))
 		if err != nil {
@@ -752,7 +765,39 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 		}
 		paths = append(paths, out)
 	}
+	for _, name := range slices.Sorted(maps.Keys(overlay)) {
+		data, err := os.ReadFile(filepath.Join(m.Overlay, name))
+		if err != nil {
+			return nil, err
+		}
+		out := filepath.Join(dir, name)
+		if err := os.WriteFile(out, data, 0o644); err != nil { //nolint:gosec // name is a directory entry of the overlay
+			return nil, err
+		}
+		paths = append(paths, out)
+	}
 	return paths, nil
+}
+
+// overlayFiles is the set of Go files in the Overlay directory that belong to this target: test
+// files for a test target, the others otherwise.
+func (m *Module) overlayFiles() (map[string]bool, error) {
+	files := map[string]bool{}
+	if m.Overlay == "" {
+		return files, nil
+	}
+	entries, err := os.ReadDir(m.Overlay)
+	if err != nil {
+		return nil, fmt.Errorf("overlay for %s: %w", m.Name, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") != m.Test {
+			continue
+		}
+		files[name] = true
+	}
+	return files, nil
 }
 
 func toSnake(s string) string {
@@ -785,6 +830,9 @@ func (m *Module) Report() string {
 	slices.SortFunc(all, func(a, b kv) int { return cmp.Or(cmp.Compare(b.v, a.v), strings.Compare(a.k, b.k)) })
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %d unsupported\n", m.Name, total)
+	if len(m.Replaced) > 0 {
+		fmt.Fprintf(&b, "  replaced by overlay: %s\n", strings.Join(m.Replaced, ", "))
+	}
 	for _, e := range all {
 		fmt.Fprintf(&b, "  %5d %s   e.g. %s\n", e.v, e.k, strings.Join(m.UnsupportedAt[e.k], "; "))
 	}
