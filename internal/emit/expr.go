@@ -120,7 +120,8 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			}
 			return "*new(" + gt + ")"
 		}
-		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind == types.Named && e.m.HasMutatingMethods(t.Name) {
+		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind == types.Named && e.m.HasMutatingMethods(t.Name) && !e.m.isProtocol(t.Name) {
+			// An existential is already an interface value; boxing it again would lose its identity.
 			return "swiftrt.Ref(" + e.expr(sub) + ")"
 		}
 		if e.exprGoType(n) == "error" && e.exprGoType(sub) != "error" {
@@ -625,7 +626,16 @@ func (e *fileEmitter) interpolation(n ast.Node) string {
 	tap := n.Child("appending_expr")
 	var parts []string
 	var ops []ast.Node
+	var elements []ast.Node
 	for _, el := range tap.Child("body").List("elements") {
+		// An existential argument, such as `\(error)` of an `any Error`, arrives opened around its call.
+		for el.Kind() == "open_existential_expr" {
+			e.opaque[el.Child("opaque_value").Str("identity")] = e.expr(el.Child("existential_value"))
+			el = el.Child("sub_expr")
+		}
+		elements = append(elements, el)
+	}
+	for _, el := range elements {
 		if mc := callOf(el); mc != nil && mc.method == "appendInterpolation" {
 			if args := el.Child("args").List("args"); len(args) == 1 {
 				ops = append(ops, args[0].Child("expr"))
@@ -639,7 +649,7 @@ func (e *fileEmitter) interpolation(n ast.Node) string {
 			delete(e.pinned, nodeKey(op))
 		}
 	}
-	for _, el := range tap.Child("body").List("elements") {
+	for _, el := range elements {
 		if el.Kind() != "call_expr" {
 			continue
 		}
@@ -1708,6 +1718,10 @@ func (e *fileEmitter) defaultArg(n ast.Node) string {
 		if ex := params[idx].Child("expression"); ex != nil {
 			if s, ok := emptyAtCallSite(ex); ok {
 				return s
+			}
+			if ex.Kind() == "magic_identifier_literal_expr" {
+				// `line: Int = #line` takes the caller's line, file and function.
+				return e.magicLiteralAt(ex.Str("kind"), n)
 			}
 			if body := ex.Child("single_expr_body"); ex.Kind() == "autoclosure_expr" && len(ex.Child("params").List("params")) == 0 && body.Kind() == "call_expr" && body.Implicit() {
 				// A function named as the default (`= Type.method`) arrives as a thunk that calls it.
@@ -3208,9 +3222,13 @@ func (e *fileEmitter) upcastClass(n ast.Node) string {
 
 // magicLiteral renders #line, #column, #file, #fileID and #function at the call site.
 func (e *fileEmitter) magicLiteral(n ast.Node) string {
-	kind := n.Str("kind")
+	return e.magicLiteralAt(n.Str("kind"), n)
+}
+
+// magicLiteralAt is the value of the magic literal `kind` written where at stands.
+func (e *fileEmitter) magicLiteralAt(kind string, at ast.Node) string {
 	off := -1
-	if r := n.Child("range"); r != nil {
+	if r := at.Child("range"); r != nil {
 		if f, ok := r["start"].(float64); ok {
 			off = int(f)
 		}
