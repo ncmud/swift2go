@@ -299,6 +299,7 @@ func TestFileManagerGaps(t *testing.T) {
 	}
 }
 
+// The date cases are what swift-foundation writes on Linux, where Locale.current is en_001.
 func TestDateAndDurationFormatStyles(t *testing.T) {
 	previous := time.Local
 	time.Local = time.FixedZone("EST", -5*3600)
@@ -311,14 +312,15 @@ func TestDateAndDurationFormatStyles(t *testing.T) {
 		clock TimeStyle
 		want  string
 	}{
-		{morning, DateStyleAbbreviated, TimeStyleOmitted, "Feb 22, 2022"},
-		{morning, DateStyleAbbreviated, TimeStyleShortened, "Feb 22, 2022, 2:22 AM"},
-		{evening, DateStyleAbbreviated, TimeStyleShortened, "Feb 22, 2022, 6:22 PM"},
-		{evening, DateStyleLong, TimeStyleStandard, "February 22, 2022 at 6:22:25 PM"},
-		{evening, DateStyleComplete, TimeStyleComplete, "Tuesday, February 22, 2022 at 6:22:25 PM EST"},
-		{morning, DateStyleNumeric, TimeStyleOmitted, "2/22/2022"},
-		{morning, DateStyleOmitted, TimeStyleShortened, "2:22 AM"},
-		{morning, DateStyleOmitted, TimeStyleOmitted, "2/22/2022, 2:22 AM"},
+		{morning, DateStyleAbbreviated, TimeStyleOmitted, "22 Feb 2022"},
+		{morning, DateStyleAbbreviated, TimeStyleShortened, "22 Feb 2022 at 2:22\u202fAM"},
+		{evening, DateStyleAbbreviated, TimeStyleShortened, "22 Feb 2022 at 6:22\u202fPM"},
+		{evening, DateStyleLong, TimeStyleStandard, "22 February 2022 at 6:22:25\u202fPM"},
+		{evening, DateStyleComplete, TimeStyleComplete, "Tuesday, 22 February 2022 at 6:22:25\u202fPM GMT-5"},
+		{morning, DateStyleNumeric, TimeStyleOmitted, "22/02/2022"},
+		{morning, DateStyleNumeric, TimeStyleShortened, "22/02/2022, 2:22\u202fAM"},
+		{morning, DateStyleOmitted, TimeStyleShortened, "2:22\u202fAM"},
+		{morning, DateStyleOmitted, TimeStyleOmitted, "22/02/2022, 2:22\u202fAM"},
 	}
 	for _, c := range cases {
 		if got := DateFormattedDateTime(c.d, c.date, c.clock); got != c.want {
