@@ -181,6 +181,12 @@ func bridgeValue(t reflect.Type, v any) (reflect.Value, bool) {
 
 func bridgeAs[T any](v any) (T, bool) {
 	var zero T
+	if n, ok := nsNumberOf(v); ok {
+		// A Swift Bool, integer or floating-point value bridges to NSNumber, as `x as? NSNumber` does.
+		if t, ok := any(n).(T); ok {
+			return t, true
+		}
+	}
 	switch v.(type) {
 	case NSNumber, []any, map[string]any:
 	default:
@@ -191,6 +197,26 @@ func bridgeAs[T any](v any) (T, bool) {
 		return zero, false
 	}
 	return out.Interface().(T), true
+}
+
+// nsNumberOf is the NSNumber Foundation bridges a Swift Bool or number to.
+func nsNumberOf(v any) (NSNumber, bool) {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || rv.Type().PkgPath() != "" {
+		// A named Go type is a Swift enum or struct, which does not bridge.
+		return NSNumber{}, false
+	}
+	switch rv.Kind() {
+	case reflect.Bool:
+		return NSNumberBool(rv.Bool()), true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return NSNumberInt64(rv.Int()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return NSNumberUInt64(rv.Uint()), true
+	case reflect.Float32, reflect.Float64:
+		return NSNumberDouble(rv.Float()), true
+	}
+	return NSNumber{}, false
 }
 
 // YYJSONError is swift-yyjson's `YYJSONError`.
@@ -863,6 +889,9 @@ func NSNumberIntValue(n NSNumber) int {
 	}
 	return int(n.i)
 }
+
+// NSNumberInt64Value is Foundation `NSNumber.int64Value`, converted as [NSNumberIntValue] does.
+func NSNumberInt64Value(n NSNumber) int64 { return int64(NSNumberIntValue(n)) }
 
 // CFTypeID is Core Foundation `CFTypeID`.
 type CFTypeID = uint
