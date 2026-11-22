@@ -121,6 +121,14 @@ func Coalesce[T any](p *T, d T) T {
 	return *p
 }
 
+// CoalesceFunc is Swift's `??` with a right side that runs only when p is nil.
+func CoalesceFunc[T any](p *T, d func() T) T {
+	if p == nil {
+		return d()
+	}
+	return *p
+}
+
 // Equal is Swift `==` for values Go cannot compare with `==` (slices, maps, optionals).
 func Equal[T any](a, b T) bool { return equalValues(reflect.ValueOf(a), reflect.ValueOf(b)) }
 
@@ -536,10 +544,26 @@ func CoalesceRef[T any](p, d T) T {
 	return p
 }
 
+// CoalesceRefFunc is [CoalesceRef] with a right side that runs only when p is nil.
+func CoalesceRefFunc[T any](p T, d func() T) T {
+	if isNil(p) {
+		return d()
+	}
+	return p
+}
+
 // CoalesceOpt is Swift `??` whose right side is itself optional.
 func CoalesceOpt[T any](p, q T) T {
 	if isNil(p) {
 		return q
+	}
+	return p
+}
+
+// CoalesceOptFunc is [CoalesceOpt] with a right side that runs only when p is nil.
+func CoalesceOptFunc[T any](p T, q func() T) T {
+	if isNil(p) {
+		return q()
 	}
 	return p
 }
@@ -569,3 +593,7 @@ func AnyFn1[A any](f func(A)) func(A) any { return func(a A) any { f(a); return 
 
 // AnyFn2 adapts a two-argument Void closure to a parameter whose generic result became `any`.
 func AnyFn2[A, B any](f func(A, B)) func(A, B) any { return func(a A, b B) any { f(a, b); return nil } }
+
+// Eval returns v. Wrapping an operand in it makes Go read the operand before the calls to its
+// right, as Swift does.
+func Eval[T any](v T) T { return v }

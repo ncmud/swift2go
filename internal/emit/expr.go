@@ -32,6 +32,9 @@ func (e *fileEmitter) wrapSlots(n ast.Node, call string, mark int) string {
 }
 
 func (e *fileEmitter) expr(n ast.Node) string {
+	if v, ok := e.exprSubst[nodeKey(n)]; ok && n != nil {
+		return v
+	}
 	mark := len(e.slots)
 	out := e.exprRaw(n)
 	if out == "swiftrt.IntMax" || out == "swiftrt.IntMin" {
@@ -49,6 +52,9 @@ func (e *fileEmitter) expr(n ast.Node) string {
 		case "call_expr", "binary_expr", "prefix_unary_expr", "postfix_unary_expr":
 			out = e.wrapSlots(n, out, mark)
 		}
+	}
+	if e.pinned != nil {
+		out = e.pin(n, out)
 	}
 	if n != nil && n.Kind() == "call_expr" && !strings.HasPrefix(out, "swiftrt.") && e.returnsGenericOptional(n) {
 		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && t.Args[0].Kind != types.Optional && e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) {
@@ -333,6 +339,7 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return "self = " + call
 	case "array_expr":
 		var parts []string
+		e.pinOperands(n.List("elements")...)
 		for _, el := range n.List("elements") {
 			parts = append(parts, e.expr(el))
 		}
@@ -353,6 +360,11 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		}
 		return "(" + gt + "{" + strings.Join(parts, ", ") + "})"
 	case "dictionary_expr":
+		var ops []ast.Node
+		for _, el := range n.List("elements") {
+			ops = append(ops, el.List("elements")...)
+		}
+		e.pinOperands(ops...)
 		if lit, ok := e.literalInit(n, "dictionaryLiteral"); ok {
 			return lit
 		}
@@ -539,6 +551,21 @@ func (e *fileEmitter) stringLiteral(n ast.Node) string {
 func (e *fileEmitter) interpolation(n ast.Node) string {
 	tap := n.Child("appending_expr")
 	var parts []string
+	var ops []ast.Node
+	for _, el := range tap.Child("body").List("elements") {
+		if mc := callOf(el); mc != nil && mc.method == "appendInterpolation" {
+			if args := el.Child("args").List("args"); len(args) == 1 {
+				ops = append(ops, args[0].Child("expr"))
+			}
+		}
+	}
+	e.pinOperands(ops...)
+	for _, op := range ops {
+		if e.m.Recv(e.m.typeOf(op.Type())) != "String" {
+			// swiftrt.Str is a call, which Go already orders.
+			delete(e.pinned, nodeKey(op))
+		}
+	}
 	for _, el := range tap.Child("body").List("elements") {
 		if el.Kind() != "call_expr" {
 			continue
@@ -1171,6 +1198,7 @@ func (e *fileEmitter) tuple(n ast.Node) string {
 		return "struct{}{}"
 	}
 	var parts []string
+	e.pinOperands(els...)
 	for _, el := range els {
 		parts = append(parts, e.expr(el))
 	}
@@ -1537,6 +1565,11 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 	if callee != nil && callee.Node != nil {
 		params = callee.Node.Child("params").List("params")
 	}
+	ops := make([]ast.Node, len(as))
+	for i, a := range as {
+		ops[i] = a.node
+	}
+	e.pinOperands(ops...)
 	for i, a := range as {
 		if foreign && a.node.Kind() == "default_argument_expr" {
 			continue
@@ -2324,6 +2357,11 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		return e.m.Unsup("binary-arity", e.where, e.exprGoType(n))
 	}
 	l, r := as[0].node, as[1].node
+	switch op {
+	case "&&", "||", "??", "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=":
+	default:
+		e.pinOperands(l, r)
+	}
 	if info, pfx := e.lookup(d.Str("decl_usr")); info != nil {
 		return pfx + info.GoName + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 	}
@@ -2353,24 +2391,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 	case "...":
 		return "(swiftrt.ClosedRange[" + e.m.GoType(lt, e.generics) + "]{Lo: " + e.expr(l) + ", Hi: " + e.expr(r) + "})"
 	case "??":
-		if lt.Kind == types.Optional && len(lt.Args) == 1 && lt.Args[0].Kind == types.Optional {
-			// T?? ?? T? unwraps one level, unless `try?` already flattened it to T?.
-			ls := e.expr(l)
-			if strings.HasPrefix(strings.TrimLeft(ls, "("), "swiftrt.TryFlat(") {
-				return "swiftrt.CoalesceOpt(" + ls + ", " + e.expr(r) + ")"
-			}
-			return "swiftrt.Coalesce(" + ls + ", " + e.expr(r) + ")"
-		}
-		if rt := e.m.typeOf(n.Type()); rt != nil && rt.Kind == types.Optional {
-			return "swiftrt.CoalesceOpt(" + e.expr(l) + ", " + e.expr(r) + ")"
-		}
-		if lt.Kind == types.Optional && len(lt.Args) == 1 {
-			inner := e.m.GoType(lt.Args[0], e.generics)
-			if e.m.isReferenceGo(lt.Args[0], inner) {
-				return "swiftrt.CoalesceRef(" + e.expr(l) + ", " + e.expr(r) + ")"
-			}
-		}
-		return "swiftrt.Coalesce(" + e.expr(l) + ", " + e.expr(r) + ")"
+		return e.coalesce(n, lt, l, r)
 	case "~=":
 		return e.expr(l) + " == " + e.expr(r)
 	case "==", "!=":
@@ -2488,6 +2509,65 @@ func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
 	if l.Kind() == "inout_expr" {
 		l = l.Child("sub_expr")
 	}
+	hoisted := e.hoistLvalue(l)
+	if len(hoisted) > 0 && !e.isEagerSafe(as[1].node) {
+		// Swift evaluates the right side after the subscripts, then reads the destination.
+		hoisted = append(hoisted, e.hoist(as[1].node))
+	}
+	defer func() {
+		for _, key := range hoisted {
+			delete(e.exprSubst, key)
+		}
+	}()
+	return e.compoundAssignOnce(n, d, op, as, l)
+}
+
+// hoist writes a statement evaluating n into a temporary, which later emissions of n use, and
+// returns n's key in exprSubst.
+func (e *fileEmitter) hoist(n ast.Node) uintptr {
+	tmp := e.newTmp("v")
+	e.w("%s := %s\n", tmp, e.expr(n))
+	if e.exprSubst == nil {
+		e.exprSubst = map[uintptr]string{}
+	}
+	e.exprSubst[nodeKey(n)] = tmp
+	return nodeKey(n)
+}
+
+// hoistLvalue evaluates, in Swift's order, the subscript indices and class-reference bases of the
+// destination of a compound assignment that are not plain reads, so the read and the write of the
+// destination share them.
+func (e *fileEmitter) hoistLvalue(n ast.Node) []uintptr {
+	var out []uintptr
+	var visit func(n ast.Node)
+	visit = func(n ast.Node) {
+		switch n.Kind() {
+		case "load_expr", "paren_expr", "inout_expr":
+			visit(n.Child("sub_expr"))
+		case "member_ref_expr":
+			base := stripLoads(n.Child("base"))
+			if base.Kind() == "call_expr" {
+				if t := e.m.typeOf(base.Type()); t != nil && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+					out = append(out, e.hoist(base))
+					return
+				}
+			}
+			visit(base)
+		case "subscript_expr":
+			visit(n.Child("base"))
+			for _, a := range e.args(n.Child("args")) {
+				// A `default:` value is an autoclosure, evaluated only for a missing key.
+				if a.label != "default" && !e.isEagerSafe(a.node) {
+					out = append(out, e.hoist(a.node))
+				}
+			}
+		}
+	}
+	visit(n)
+	return out
+}
+
+func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l ast.Node) (string, bool) {
 	rs := e.expr(as[1].node)
 	lt := e.m.typeOf(l.Type())
 	base := op[:len(op)-1]
@@ -2961,6 +3041,84 @@ func (e *fileEmitter) isPure(n ast.Node) bool {
 		return e.isPure(n.Child("base"))
 	}
 	return false
+}
+
+// coalesce emits `l ?? r`. Swift passes r as an autoclosure, so a right side that could call code,
+// trap or allocate is emitted as a func literal that runs only when l is nil.
+func (e *fileEmitter) coalesce(n ast.Node, lt *types.Type, l, r ast.Node) string {
+	ls := e.expr(l)
+	fn := "swiftrt.Coalesce"
+	switch rt := e.m.typeOf(n.Type()); {
+	case lt.Kind == types.Optional && len(lt.Args) == 1 && lt.Args[0].Kind == types.Optional:
+		// T?? ?? T? unwraps one level, unless `try?` already flattened it to T?.
+		if strings.HasPrefix(strings.TrimLeft(ls, "("), "swiftrt.TryFlat(") {
+			fn = "swiftrt.CoalesceOpt"
+		}
+	case rt != nil && rt.Kind == types.Optional:
+		fn = "swiftrt.CoalesceOpt"
+	case lt.Kind == types.Optional && len(lt.Args) == 1 && e.m.isReferenceGo(lt.Args[0], e.m.GoType(lt.Args[0], e.generics)):
+		fn = "swiftrt.CoalesceRef"
+	}
+	if e.isEagerSafe(r) {
+		return fn + "(" + ls + ", " + e.expr(r) + ")"
+	}
+	// Statements the right side needs belong inside the func literal, so they run only with it.
+	saved, savedPost := e.b, e.post
+	e.b, e.post = strings.Builder{}, nil
+	rs := e.expr(r)
+	pre, post := e.b.String(), e.post
+	e.b, e.post = saved, savedPost
+	gt := e.exprGoType(n)
+	if pre == "" && len(post) == 0 {
+		return fn + "Func(" + ls + ", func() " + gt + " { return " + rs + " })"
+	}
+	return fn + "Func(" + ls + ", func() " + gt + " {\n" + pre + "res := " + rs + "\n" + strings.Join(post, "\n") + "\nreturn res\n})"
+}
+
+// isEagerSafe reports whether evaluating n early is unobservable: it cannot call code, trap or
+// allocate.
+func (e *fileEmitter) isEagerSafe(n ast.Node) bool {
+	n = stripConv(n)
+	if k := n.Kind(); k == "member_ref_expr" || k == "declref_expr" {
+		if info := e.m.ownDecl(n.Child("decl").Str("decl_usr")); info != nil && info.Lazy {
+			// Reading a lazy static runs its initializer the first time.
+			return false
+		}
+	}
+	switch n.Kind() {
+	case "autoclosure_expr":
+		return len(n.Child("params").List("params")) == 0 && e.isEagerSafe(n.Child("single_expr_body"))
+	case "array_expr", "dictionary_expr":
+		for _, el := range n.List("elements") {
+			if !e.isEagerSafe(el) {
+				return false
+			}
+		}
+		return len(n.List("elements")) == 0
+	case "inject_into_optional", "function_conversion_expr", "bind_optional_expr", "optional_evaluation_expr":
+		return e.isEagerSafe(n.Child("sub_expr"))
+	case "declref_expr":
+		if d := n.Child("decl"); d.Str("decl_usr") != "" {
+			if info, _ := e.lookup(d.Str("decl_usr")); info != nil && info.Kind == "enum_element_decl" {
+				return true
+			}
+		}
+	case "dot_syntax_call_expr":
+		// A payload-free enum case such as `.none`.
+		if fn := n.Child("fn"); fn != nil && fn.Kind() == "declref_expr" {
+			if info, _ := e.lookup(fn.Child("decl").Str("decl_usr")); info != nil && info.Kind == "enum_element_decl" {
+				return true
+			}
+		}
+		return false
+	case "binary_expr":
+		if d := e.opDecl(n); d.Str("base_name") == "??" {
+			as := e.args(n.Child("args"))
+			return len(as) == 2 && e.isEagerSafe(as[0].node) && e.isEagerSafe(as[1].node)
+		}
+		return false
+	}
+	return e.isPure(n)
 }
 
 // tupleCompare expands Swift's lexicographic tuple ordering element by element: the first unequal
