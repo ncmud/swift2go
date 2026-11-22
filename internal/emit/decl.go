@@ -342,7 +342,37 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 		e.w("// As%s upcasts to the superclass.\nfunc (self *%s) As%s() *%s {\n\tif self == nil {\n\t\treturn nil\n\t}\n\treturn &self.%s\n}\n\n", sup, recvT, sup, sup, sup)
 	}
 	e.members(n, info)
+	e.codingKeyOmissionDefaults(n, recvT, keys)
 	e.protocolForwarders(n, info)
+}
+
+// codingKeyOmissionDefaults gives a type whose CodingKeys leave out stored properties a
+// SwiftDecodeDefaults method that sets those properties to their initial values, which the
+// runtime's synthesized decoding keeps, as Swift's synthesized init(from:) does.
+func (e *fileEmitter) codingKeyOmissionDefaults(n ast.Node, recvT string, keys map[string]string) {
+	if keys == nil {
+		return
+	}
+	var inits []string
+	for _, mem := range n.List("members") {
+		if mem.Kind() != "pattern_binding_decl" {
+			continue
+		}
+		for _, pe := range mem.List("pattern_entries") {
+			name := patternName(pe.Child("pattern"))
+			if _, coded := keys[name]; coded {
+				continue
+			}
+			vi := e.findVar(n, name)
+			if vi != nil && !vi.Static && !vi.Computed && pe.Child("processed_init") != nil {
+				inits = append(inits, fmt.Sprintf("self.%s = %s\n", vi.GoName, e.owned(pe.Child("processed_init"), sinkStore)))
+			}
+		}
+	}
+	if len(inits) == 0 {
+		return
+	}
+	e.w("func (self *%s) SwiftDecodeDefaults() {\n%s}\n\n", recvT, strings.Join(inits, ""))
 }
 
 // protocolForwarders gives a conforming type the protocol-extension default methods it does not define.

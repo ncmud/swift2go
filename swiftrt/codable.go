@@ -597,6 +597,11 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		} else {
 			codingFail("expected a keyed container at %s", strings.Join(path, "."))
 		}
+		if dst.CanAddr() {
+			if d, ok := dst.Addr().Interface().(interface{ SwiftDecodeDefaults() }); ok {
+				d.SwiftDecodeDefaults()
+			}
+		}
 		for i := 0; i < t.NumField(); i++ {
 			fd := t.Field(i)
 			name := codingKey(fd)
