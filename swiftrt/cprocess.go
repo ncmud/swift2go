@@ -202,6 +202,20 @@ func commandLineArgv() **any {
 	return &inner
 }
 
+// CEnviron is C `environ`: the process environment as a NULL-terminated array of `NAME=value` C
+// strings. Each read takes a fresh copy of os.Environ, so it reflects setenv and unsetenv calls
+// made before it; writing through the array does not change the environment.
+func CEnviron() **any {
+	env := os.Environ()
+	list := make([]*any, 0, len(env)+1)
+	for _, kv := range env {
+		list = append(list, cStringResult(kv))
+	}
+	var held any = append(list, nil)
+	inner := &held
+	return &inner
+}
+
 // CommandLineUnsafeArgv is Swift `CommandLine.unsafeArgv`: the program's arguments as a
 // NULL-terminated array of C strings. Writes through it persist.
 var CommandLineUnsafeArgv = commandLineArgv()

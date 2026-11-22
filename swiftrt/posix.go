@@ -54,6 +54,19 @@ func CFSetenv(name, value *any, overwrite int32) int32 {
 	return 0
 }
 
+// CFUnsetenv is C `unsetenv(_:)`: it removes the variable and returns 0, or -1 when the name is
+// empty or contains `=`.
+func CFUnsetenv(name *any) int32 {
+	n := cStringArg(name)
+	if n == "" || strings.Contains(n, "=") {
+		return -1
+	}
+	if os.Unsetenv(n) != nil {
+		return -1
+	}
+	return 0
+}
+
 // CFUnlink is C `unlink(_:)`: it removes the directory entry and returns 0, or -1 on failure.
 func CFUnlink(path *any) int32 {
 	if syscall.Unlink(cStringArg(path)) != nil {
