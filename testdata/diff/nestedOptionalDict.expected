@@ -1,0 +1,20 @@
+value 1 stored nil missing
+2 ["a", "b"]
+3 stored nil
+2 ["b", "c"]
+3 stored nil
+b present, inner nil
+q absent
+true true
+nil
+none some(none) some(some(3))
+false Optional(nil)
+b nil
+c nil
+z nil
+4
+a 1
+b stored nil
+c 3
+d missing
+e stored nil

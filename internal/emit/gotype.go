@@ -282,9 +282,10 @@ func (m *Module) isProtocol(q string) bool {
 
 func (m *Module) isReferenceGo(t *types.Type, goType string) bool {
 	if t != nil && t.Kind == types.Optional && len(t.Args) == 1 && !isGenericParamType(t.Args[0]) {
-		// An Optional is a reference only when what it wraps is one: `Int??` is a pointer to the
-		// pointer that is `Int?`.
-		return m.isReferenceGo(t.Args[0], m.GoType(t.Args[0], nil))
+		// An Optional is never a reference, even when it wraps one: `Int??` is a pointer to the
+		// pointer that is `Int?`, and `C??` a pointer to the class reference that is `C?`, so a
+		// stored nil stays distinct from a missing value.
+		return false
 	}
 	if strings.HasPrefix(goType, "*") || strings.HasPrefix(goType, "func(") || goType == "error" || goType == "any" {
 		return true
