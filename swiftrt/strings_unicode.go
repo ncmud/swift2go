@@ -61,7 +61,7 @@ func hasSuffixChars(s, p string) bool {
 
 func charsEquivalent(a, b []Character) bool {
 	for i := range a {
-		if a[i] != b[i] && StringDecomposedStringWithCanonicalMapping(a[i]) != StringDecomposedStringWithCanonicalMapping(b[i]) {
+		if a[i] != b[i] && (isASCII(a[i]+b[i]) || StringDecomposedStringWithCanonicalMapping(a[i]) != StringDecomposedStringWithCanonicalMapping(b[i])) {
 			return false
 		}
 	}
