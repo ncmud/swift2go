@@ -49,6 +49,15 @@ func Iterate[T any](seq any) []T {
 	panic(fmt.Sprintf("swiftrt.Iterate: cannot iterate %T", seq))
 }
 
+// rangeValues is lo..<hi as a slice.
+func rangeValues[T Integer](lo, hi T) []T {
+	out := []T{}
+	for i := lo; i < hi; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
 func rangeInts(lo, hi int) []int {
 	out := make([]int, 0, max(0, hi-lo))
 	for i := lo; i < hi; i++ {

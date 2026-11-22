@@ -24,6 +24,8 @@ import (
 
 // DeclInfo describes one declaration defined in the module being transpiled.
 type DeclInfo struct {
+	// QName is a type declaration's qualified name, as its type is spelled ("Mod.Outer.Inner").
+	QName string
 	// Settable marks a computed property with a setter, emitted as SetX.
 	Settable bool
 	// Observed marks a stored property with willSet/didSet, assigned through SetX.
@@ -454,7 +456,7 @@ func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module,
 			m.objcNames[o[0]] = o[1]
 		}
 	}
-	dm, err := types.NewDemangler(syms)
+	dm, err := types.NewDemanglerDistinct(syms, typesNamedApart(files))
 	if err != nil {
 		return nil, err
 	}
@@ -605,6 +607,12 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 		switch n.Kind() {
 		case "struct_decl", "class_decl", "enum_decl", "protocol":
 			q := m.qualify(owner, n.Name())
+			if owner == "" {
+				if t := m.typeOf(n.Str("interface_type")); t != nil && t.Kind == types.Meta && len(t.Args) == 1 && strings.HasPrefix(t.Args[0].Name, m.Name+"."+n.Name()+"_") {
+					// A file-private or local type named apart from another of the same name.
+					q = t.Args[0].Name
+				}
+			}
 			m.typeKinds[q] = n.Kind()
 			if n.Kind() == "struct_decl" || n.Kind() == "class_decl" || n.Kind() == "enum_decl" && hasPayloadCase(n) {
 				for _, gp := range n.Child("generic_signature").Strings("generic_params") {
@@ -618,7 +626,7 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 					m.typeKinds[q+"#OptionSet"] = "yes"
 				}
 			}
-			m.decls[declKey(n)] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind, file: m.indexing}
+			m.decls[declKey(n)] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind, file: m.indexing, QName: q}
 			m.sorted = nil
 			for _, c := range n.Child("inherits").List("conformances") {
 				if p := c.Str("protocol"); p != "" {
@@ -731,6 +739,66 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 }
 
 // indexLocalTypes indexes types declared inside a function body; they are hoisted to package level.
+// typesNamedApart names the file-private and function-local types that share their name with another type
+// at the top level of the module or inside a function, which Go, with one package scope, cannot tell apart.
+func typesNamedApart(files []ast.File) map[string]bool {
+	count, apart := map[string]int{}, map[string]bool{}
+	var locals func(n ast.Node)
+	locals = func(n ast.Node) {
+		for _, v := range n {
+			var kids []ast.Node
+			switch c := v.(type) {
+			case map[string]any:
+				kids = []ast.Node{ast.Node(c)}
+			case []any:
+				for _, cc := range c {
+					if mm, ok := cc.(map[string]any); ok {
+						kids = append(kids, ast.Node(mm))
+					}
+				}
+			}
+			for _, k := range kids {
+				switch k.Kind() {
+				case "struct_decl", "class_decl", "enum_decl":
+					count[k.Name()]++
+					apart[k.Name()] = true
+				default:
+					locals(k)
+				}
+			}
+		}
+	}
+	var members func(items []ast.Node, top bool)
+	members = func(items []ast.Node, top bool) {
+		for _, n := range items {
+			switch n.Kind() {
+			case "struct_decl", "class_decl", "enum_decl", "protocol":
+				if top {
+					count[n.Name()]++
+					if a := n.Str("access"); a == "private" || a == "fileprivate" {
+						apart[n.Name()] = true
+					}
+				}
+				members(n.List("members"), false)
+			case "extension_decl":
+				members(n.List("members"), false)
+			case "func_decl", "constructor_decl", "var_decl", "subscript_decl":
+				locals(n)
+			}
+		}
+	}
+	for _, f := range files {
+		members(f.Items, true)
+	}
+	names := map[string]bool{}
+	for name, n := range count {
+		if n > 1 && apart[name] {
+			names[name] = true
+		}
+	}
+	return names
+}
+
 func (m *Module) indexLocalTypes(body ast.Node) {
 	if body == nil {
 		return
@@ -787,6 +855,14 @@ func patternName(p ast.Node) string {
 		}
 	}
 	return ""
+}
+
+// typeQName is the qualified name of the type that info declares.
+func (m *Module) typeQName(info *DeclInfo) string {
+	if info.QName != "" {
+		return info.QName
+	}
+	return m.qualify(info.Owner, info.Node.Name())
 }
 
 func (m *Module) qualify(owner, name string) string {
@@ -886,7 +962,7 @@ func (m *Module) assignNames() {
 		owner := m.ownerGoName(info)
 		switch info.Kind {
 		case "struct_decl", "class_decl", "enum_decl", "protocol":
-			info.GoName = m.LocalTypeName(m.qualify(info.Owner, name))
+			info.GoName = m.LocalTypeName(m.typeQName(info))
 		case "constructor_decl":
 			base := "New" + owner
 			if len(groups[key{info.Owner, name, info.Static}]) > 1 {
@@ -931,7 +1007,7 @@ func (m *Module) settleClassMemberNames() {
 	classQ := map[string]string{}
 	for _, d := range m.decls {
 		if d.Kind == "class_decl" && d.Node != nil {
-			classQ[d.GoName] = m.qualify(d.Owner, d.Node.Name())
+			classQ[d.GoName] = m.typeQName(d)
 		}
 	}
 	usrs := slices.Sorted(maps.Keys(m.decls))

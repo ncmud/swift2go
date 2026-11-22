@@ -13,12 +13,12 @@ import (
 )
 
 // RangeCompactMap is `(lo..<hi).compactMap`.
-func RangeCompactMap[U any](r Range[int], f func(int) *U) []U {
-	return SliceCompactMap(rangeInts(r.Lo, r.Hi), f)
+func RangeCompactMap[U any, T Integer](r Range[T], f func(T) *U) []U {
+	return SliceCompactMap(rangeValues(r.Lo, r.Hi), f)
 }
 
 // RangeFirstWhere is `(lo..<hi).first(where:)`.
-func RangeFirstWhere(r Range[int], f func(int) bool) *int {
+func RangeFirstWhere[T Integer](r Range[T], f func(T) bool) *T {
 	for i := r.Lo; i < r.Hi; i++ {
 		if f(i) {
 			v := i
@@ -29,10 +29,12 @@ func RangeFirstWhere(r Range[int], f func(int) bool) *int {
 }
 
 // RangeContainsWhere is `(lo..<hi).contains(where:)`.
-func RangeContainsWhere(r Range[int], f func(int) bool) bool { return RangeFirstWhere(r, f) != nil }
+func RangeContainsWhere[T Integer](r Range[T], f func(T) bool) bool {
+	return RangeFirstWhere(r, f) != nil
+}
 
 // RangeReduce is `(lo..<hi).reduce(_:_:)`.
-func RangeReduce[A any](r Range[int], init A, f func(A, int) A) A {
+func RangeReduce[A any, T Integer](r Range[T], init A, f func(A, T) A) A {
 	for i := r.Lo; i < r.Hi; i++ {
 		init = f(init, i)
 	}
@@ -66,7 +68,7 @@ func RangeFlatMap[U any](r Range[int], f func(int) []U) []U {
 func RangeLazy(r Range[int]) []int { return rangeInts(r.Lo, r.Hi) }
 
 // eachClosed calls f for lo...hi in order until f returns false; it never computes hi+1, so hi may be Int.max.
-func eachClosed(r ClosedRange[int], f func(int) bool) {
+func eachClosed[T Integer](r ClosedRange[T], f func(T) bool) {
 	if r.Hi < r.Lo {
 		Trap("Range requires lowerBound <= upperBound")
 	}
@@ -78,15 +80,15 @@ func eachClosed(r ClosedRange[int], f func(int) bool) {
 }
 
 // ClosedRangeReduce is `(lo...hi).reduce(_:_:)`.
-func ClosedRangeReduce[A any](r ClosedRange[int], init A, f func(A, int) A) A {
-	eachClosed(r, func(i int) bool { init = f(init, i); return true })
+func ClosedRangeReduce[A any, T Integer](r ClosedRange[T], init A, f func(A, T) A) A {
+	eachClosed(r, func(i T) bool { init = f(init, i); return true })
 	return init
 }
 
 // ClosedRangeFirstWhere is `(lo...hi).first(where:)`.
-func ClosedRangeFirstWhere(r ClosedRange[int], f func(int) bool) *int {
-	var out *int
-	eachClosed(r, func(i int) bool {
+func ClosedRangeFirstWhere[T Integer](r ClosedRange[T], f func(T) bool) *T {
+	var out *T
+	eachClosed(r, func(i T) bool {
 		if f(i) {
 			out = &i
 			return false
@@ -97,8 +99,13 @@ func ClosedRangeFirstWhere(r ClosedRange[int], f func(int) bool) *int {
 }
 
 // ClosedRangeContainsWhere is `(lo...hi).contains(where:)`.
-func ClosedRangeContainsWhere(r ClosedRange[int], f func(int) bool) bool {
+func ClosedRangeContainsWhere[T Integer](r ClosedRange[T], f func(T) bool) bool {
 	return ClosedRangeFirstWhere(r, f) != nil
+}
+
+// ClosedRangeAllSatisfy is `(lo...hi).allSatisfy`.
+func ClosedRangeAllSatisfy[T Integer](r ClosedRange[T], f func(T) bool) bool {
+	return !ClosedRangeContainsWhere(r, func(i T) bool { return !f(i) })
 }
 
 // ClosedRangeCount is `(lo...hi).count`; it traps when the count overflows Int, like Swift.
@@ -118,9 +125,9 @@ func ClosedRangePrefixInt(r ClosedRange[int], n int) []int {
 }
 
 // ClosedRangeCompactMap is `(lo...hi).compactMap`.
-func ClosedRangeCompactMap[U any](r ClosedRange[int], f func(int) *U) []U {
+func ClosedRangeCompactMap[U any, T Integer](r ClosedRange[T], f func(T) *U) []U {
 	out := []U{}
-	eachClosed(r, func(i int) bool {
+	eachClosed(r, func(i T) bool {
 		if v := f(i); v != nil {
 			out = append(out, *v)
 		}

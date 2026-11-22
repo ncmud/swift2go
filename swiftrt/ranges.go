@@ -49,8 +49,8 @@ func RangeContains[T Ordered](r Range[T], v T) bool { return r.Contains(v) }
 func ClosedRangeContains[T Ordered](r ClosedRange[T], v T) bool { return r.Contains(v) }
 
 // RangeMap is (lo..<hi).map(f).
-func RangeMap[U any](r Range[int], f func(int) U) []U {
-	out := make([]U, 0, max(0, r.Hi-r.Lo))
+func RangeMap[U any, T Integer](r Range[T], f func(T) U) []U {
+	out := make([]U, 0, max(0, int(r.Hi)-int(r.Lo)))
 	for i := r.Lo; i < r.Hi; i++ {
 		out = append(out, f(i))
 	}
@@ -58,8 +58,10 @@ func RangeMap[U any](r Range[int], f func(int) U) []U {
 }
 
 // ClosedRangeMap is (lo...hi).map(f).
-func ClosedRangeMap[U any](r ClosedRange[int], f func(int) U) []U {
-	return RangeMap(Range[int]{r.Lo, r.Hi + 1}, f)
+func ClosedRangeMap[U any, T Integer](r ClosedRange[T], f func(T) U) []U {
+	out := []U{}
+	eachClosed(r, func(i T) bool { out = append(out, f(i)); return true })
+	return out
 }
 
 // ClosedRangeFilter is Swift `(lo...hi).filter(f)` over an integer range.

@@ -14,12 +14,21 @@ import (
 
 // Demangler caches demangled names for mangled types ("$s…") and USRs ("s:…").
 type Demangler struct {
-	cache map[string]string
+	cache    map[string]string
+	distinct map[string]bool
 }
 
 // NewDemangler demangles every symbol in syms in one swift-demangle run.
 func NewDemangler(syms []string) (*Demangler, error) {
-	d := &Demangler{cache: map[string]string{}}
+	return NewDemanglerDistinct(syms, nil)
+}
+
+// NewDemanglerDistinct is NewDemangler for a module in which the file-private or function-local types named
+// in distinct share their name with another of its types. Each such type is named apart: "Foo #1 in
+// Mod.Type.run()" becomes "Mod.Foo_run", and a file-private "(Foo in _4A3B…)" becomes "Foo_4A3B…" with
+// the first eight digits of its discriminator.
+func NewDemanglerDistinct(syms []string, distinct map[string]bool) (*Demangler, error) {
+	d := &Demangler{cache: map[string]string{}, distinct: distinct}
 	return d, d.Add(syms)
 }
 
@@ -54,7 +63,7 @@ func (d *Demangler) Add(syms []string) error {
 	var wg sync.WaitGroup
 	for c := range n {
 		lo, hi := c*len(todo)/n, (c+1)*len(todo)/n
-		wg.Go(func() { errs[c] = demangleInto(todo[lo:hi], results[lo:hi]) })
+		wg.Go(func() { errs[c] = demangleInto(todo[lo:hi], results[lo:hi], d.distinct) })
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
@@ -71,7 +80,7 @@ var demangleChunk = 4096
 
 // demangleInto demangles syms in one swift-demangle run and stores each one's normalized form at
 // the same index of out.
-func demangleInto(syms, out []string) error {
+func demangleInto(syms, out []string, distinct map[string]bool) error {
 	var in bytes.Buffer
 	for _, s := range syms {
 		in.WriteString(mangledForm(s))
@@ -88,13 +97,48 @@ func demangleInto(syms, out []string) error {
 		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(syms))
 	}
 	for i, s := range syms {
-		raw := privateName.ReplaceAllString(lines[i], "$1")
+		raw := privateName.ReplaceAllString(nameApart(lines[i], distinct), "$1")
 		out[i] = localWrappers(s, raw, normalizeLocal(raw))
 	}
 	return nil
 }
 
 var privateName = regexp.MustCompile(`\(([^()\s]+) in _[0-9A-F]+\)`)
+
+var (
+	privateApart = regexp.MustCompile(`(^|[^.\w])(\w+\.)\((\w+) in _([0-9A-F]+)\)`)
+	localApart   = regexp.MustCompile(`(\w+) #(\d+) in (?:static )?([\w.]+)`)
+)
+
+// nameApart renames, in a demangled symbol, the file-private and function-local types whose names are in
+// distinct: a file-private type at the top level of its module after its discriminator, a local type after the
+// function that declares it and, past the first, its number there. A file-private type nested in another type
+// keeps its name, which its owner's qualifies.
+func nameApart(s string, distinct map[string]bool) string {
+	if len(distinct) == 0 {
+		return s
+	}
+	s = privateApart.ReplaceAllStringFunc(s, func(m string) string {
+		sub := privateApart.FindStringSubmatch(m)
+		if !distinct[sub[3]] {
+			return m
+		}
+		return sub[1] + sub[2] + "(" + sub[3] + "_" + sub[4][:min(8, len(sub[4]))] + " in _" + sub[4] + ")"
+	})
+	return localApart.ReplaceAllStringFunc(s, func(m string) string {
+		sub := localApart.FindStringSubmatch(m)
+		if !distinct[sub[1]] {
+			return m
+		}
+		path := sub[3]
+		fn := path[strings.LastIndex(path, ".")+1:]
+		name := sub[1] + "_" + fn
+		if sub[2] != "1" {
+			name += sub[2]
+		}
+		return strings.Replace(m, sub[1], name, 1)
+	})
+}
 
 // Get returns the demangled form, or the input when unknown.
 func (d *Demangler) Get(s string) string {

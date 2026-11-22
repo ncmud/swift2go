@@ -79,3 +79,22 @@ func TestDemanglerSplitsLargeBatches(t *testing.T) {
 		}
 	}
 }
+
+func TestNameApart(t *testing.T) {
+	distinct := map[string]bool{"Counter": true, "Shared": true}
+	for in, want := range map[string]string{
+		"Counter #1 in KP.localTypesA() -> Swift.Int":             "Counter_localTypesA #1 in KP.localTypesA() -> Swift.Int",
+		"Counter #2 in static KP.Suite.run(a: [Swift.Int]) -> ()": "Counter_run2 #2 in static KP.Suite.run(a: [Swift.Int]) -> ()",
+		"KP.(Shared in _BF9D067622127EBB8CB9A441B762713A).v":      "KP.(Shared_BF9D0676 in _BF9D067622127EBB8CB9A441B762713A).v",
+		"Other #1 in KP.f() -> ()":                                "Other #1 in KP.f() -> ()",
+		"KP.Edge.(Shared in _BF9D067622127EBB8CB9A441B762713A)":   "KP.Edge.(Shared in _BF9D067622127EBB8CB9A441B762713A)",
+		"[KP.(Shared in _AE80)]":                                  "[KP.(Shared_AE80 in _AE80)]",
+	} {
+		if got := nameApart(in, distinct); got != want {
+			t.Errorf("nameApart(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := normalizeLocal(nameApart("Counter #1 in KP.localTypesA() -> Swift.Int", distinct)); got != "KP.Counter_localTypesA" {
+		t.Errorf("normalized = %q", got)
+	}
+}

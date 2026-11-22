@@ -313,8 +313,15 @@ func SubstringContainsWhere(s Substring, f func(Character) bool) bool {
 	return SubstringFirstIndexWhere(s, f) != nil
 }
 
-// SubstringContains is Swift `Substring.contains(Character)`.
-func SubstringContains(s Substring, c Character) bool { return SubstringFirstIndexOf(s, c) != nil }
+// SubstringContains is Swift `Substring.contains(_:)` on a Character or a string.
+// The emitter calls it for `contains(_: Character)` and for `contains(_: some StringProtocol)`, whose Go
+// arguments are both strings: one that holds more than one Character is searched for as a substring.
+func SubstringContains(s Substring, c Character) bool {
+	if len(StringChars(c)) != 1 {
+		return strings.Contains(s.String(), c)
+	}
+	return SubstringFirstIndexOf(s, c) != nil
+}
 
 // SubstringAllSatisfy is Swift `Substring.allSatisfy`.
 func SubstringAllSatisfy(s Substring, f func(Character) bool) bool {
