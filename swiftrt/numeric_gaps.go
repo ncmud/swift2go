@@ -98,7 +98,7 @@ func IntInitAny[T Integer](v any) T {
 }
 
 // IntOptInitInt is Swift `Optional(x)`.
-func IntOptInitInt[T any](v T) *T { return &v }
+func IntOptInitInt[T any](v T) *T { return new(v) }
 
 // IntSignum is Swift `BinaryInteger.signum()`.
 func IntSignum[T Integer](v T) T {

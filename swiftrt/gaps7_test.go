@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"slices"
 	"testing"
 )
 
@@ -144,7 +144,7 @@ func TestFileManagerAndHandleGaps(t *testing.T) {
 		}
 	}
 	names := NSFileManagerContentsOfDirectoryAtPath(NSFileManagerDefault, dir)
-	sort.Strings(names)
+	slices.Sort(names)
 	if !reflect.DeepEqual(names, []string{".hidden", "a", "b"}) {
 		t.Errorf("contentsOfDirectory = %q", names)
 	}

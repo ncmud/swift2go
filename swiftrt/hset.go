@@ -3,7 +3,7 @@ package swiftrt
 import (
 	"fmt"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -42,12 +42,12 @@ func writeKey(b *strings.Builder, v reflect.Value) {
 			writeKey(&kb, v.MapIndex(k))
 			keys = append(keys, kb.String())
 		}
-		sort.Strings(keys)
+		slices.Sort(keys)
 		b.WriteString("{" + strings.Join(keys, ",") + "}")
 	case reflect.Struct:
 		b.WriteString(v.Type().String() + "{")
-		for i := 0; i < v.NumField(); i++ {
-			writeKey(b, v.Field(i))
+		for _, field := range v.Fields() {
+			writeKey(b, field)
 			b.WriteString(",")
 		}
 		b.WriteString("}")

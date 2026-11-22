@@ -52,8 +52,8 @@ func NSRegularExpressionInitPattern(pattern string) *Regex {
 
 // icuOnlySyntax reports whether RE2 rejected pattern for a construct ICU accepts.
 func icuOnlySyntax(pattern string, err error) bool {
-	var se *syntax.Error
-	if !errors.As(err, &se) {
+	se, ok := errors.AsType[*syntax.Error](err)
+	if !ok {
 		return false
 	}
 	switch se.Code {

@@ -141,12 +141,7 @@ func SetFilter[T comparable](s map[T]struct{}, f func(T) bool) map[T]struct{} {
 
 // SetContainsWhere is `Set.contains(where:)`.
 func SetContainsWhere[T comparable](s map[T]struct{}, f func(T) bool) bool {
-	for _, k := range SetElements(s) {
-		if f(k) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(SetElements(s), f)
 }
 
 // SetMap is `Set.map`.

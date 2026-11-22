@@ -1,13 +1,13 @@
 package swiftrt
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 )
 
 // UUID is Foundation `UUID`.
@@ -15,19 +15,12 @@ type UUID [16]byte
 
 // UUIDInit is Foundation `UUID()`: a random version-4 UUID.
 func UUIDInit() UUID {
-	var u UUID
-	if _, err := rand.Read(u[:]); err != nil {
-		panic(err)
-	}
-	u[6] = u[6]&0x0f | 0x40
-	u[8] = u[8]&0x3f | 0x80
-	return u
+	return UUID(uuid.NewV4())
 }
 
 // UUIDUuidString is Foundation `UUID.uuidString` (uppercase, hyphenated).
 func UUIDUuidString(u UUID) string {
-	h := strings.ToUpper(hex.EncodeToString(u[:]))
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+	return strings.ToUpper(uuid.UUID(u).String())
 }
 
 // UUIDOptInitUuidString is Foundation `UUID(uuidString:)`.

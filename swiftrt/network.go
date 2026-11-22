@@ -25,7 +25,7 @@ type URLRequest struct {
 
 // URLRequestInitUrl is Foundation `URLRequest(url:)`: a GET request with a 60-second timeout.
 func URLRequestInitUrl(u URL) URLRequest {
-	return URLRequest{Url: &u, HttpMethod: Some("GET"), TimeoutInterval: 60}
+	return URLRequest{Url: &u, HttpMethod: new("GET"), TimeoutInterval: 60}
 }
 
 // URLRequestSetValueForHTTPHeaderField is `URLRequest.setValue(_:forHTTPHeaderField:)`: it replaces the
@@ -46,7 +46,7 @@ func URLRequestSetValueForHTTPHeaderField(r *URLRequest, value *string, field st
 // URLRequestValueForHTTPHeaderField is `URLRequest.value(forHTTPHeaderField:)`.
 func URLRequestValueForHTTPHeaderField(r URLRequest, field string) *string {
 	if v := r.headers.Values(field); len(v) > 0 {
-		return Some(strings.Join(v, ","))
+		return new(strings.Join(v, ","))
 	}
 	return nil
 }
@@ -116,7 +116,7 @@ func NSHTTPURLResponseStatusCode(r HTTPURLResponse) int { return r.StatusCode }
 // the name case-insensitively.
 func HTTPURLResponseValueForHTTPHeaderField(r HTTPURLResponse, field string) *string {
 	if v := r.header.Values(field); len(v) > 0 {
-		return Some(strings.Join(v, ", "))
+		return new(strings.Join(v, ", "))
 	}
 	return nil
 }
@@ -157,15 +157,15 @@ func (e URLError) Error() string {
 func (e URLError) Unwrap() error { return e.Err }
 
 func urlErrorCode(err error) int {
-	var dnsErr *net.DNSError
-	var opErr *net.OpError
-	var netErr net.Error
+	_, isDNS := errors.AsType[*net.DNSError](err)
+	netErr, isNet := errors.AsType[net.Error](err)
+	opErr, isOp := errors.AsType[*net.OpError](err)
 	switch {
-	case errors.As(err, &dnsErr):
+	case isDNS:
 		return URLErrorCannotFindHost
-	case errors.As(err, &netErr) && netErr.Timeout():
+	case isNet && netErr.Timeout():
 		return URLErrorTimedOut
-	case errors.As(err, &opErr) && opErr.Op == "dial":
+	case isOp && opErr.Op == "dial":
 		return URLErrorCannotConnectToHost
 	case strings.Contains(err.Error(), "tls:") || strings.Contains(err.Error(), "x509:"):
 		return URLErrorSecureConnectionFailed

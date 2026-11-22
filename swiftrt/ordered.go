@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"sort"
 )
@@ -109,9 +110,7 @@ func OrderedDictionaryRemoveAll[K comparable, V any](d *OrderedDictionary[K, V])
 // Clone copies the dictionary so mutations do not alias.
 func (d OrderedDictionary[K, V]) Clone() OrderedDictionary[K, V] {
 	m := make(map[K]V, len(d.M))
-	for k, v := range d.M {
-		m[k] = v
-	}
+	maps.Copy(m, d.M)
 	return OrderedDictionary[K, V]{slices.Clone(d.Keys_), m}
 }
 

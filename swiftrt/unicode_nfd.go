@@ -1,6 +1,8 @@
 package swiftrt
 
 import (
+	"cmp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,7 +14,7 @@ import (
 // (Hangul syllables algorithmically) and each run of combining marks is stably sorted by canonical
 // combining class. The tables were taken from Swift on Linux.
 func StringDecomposedStringWithCanonicalMapping(s string) string {
-	nfdOnce.Do(nfdLoad)
+	nfdInit()
 	out := make([]rune, 0, len(s))
 	for _, r := range s {
 		switch {
@@ -38,14 +40,14 @@ func StringDecomposedStringWithCanonicalMapping(s string) string {
 			j++
 		}
 		run := out[i:j]
-		sort.SliceStable(run, func(a, b int) bool { return nfdClass(run[a]) < nfdClass(run[b]) })
+		slices.SortStableFunc(run, func(a, b rune) int { return cmp.Compare(nfdClass(a), nfdClass(b)) })
 		i = j
 	}
 	return string(out)
 }
 
 var (
-	nfdOnce   sync.Once
+	nfdInit   = sync.OnceFunc(nfdLoad)
 	nfdDecomp map[rune][]rune
 	nfdCCC    []nfdClassRange
 )
@@ -73,15 +75,15 @@ func nfdHex(s string) rune {
 
 func nfdLoad() {
 	nfdDecomp = map[rune][]rune{}
-	for _, e := range strings.Split(nfdDecompTable, ";") {
+	for e := range strings.SplitSeq(nfdDecompTable, ";") {
 		k, v, _ := strings.Cut(e, ":")
 		var d []rune
-		for _, h := range strings.Fields(v) {
+		for h := range strings.FieldsSeq(v) {
 			d = append(d, nfdHex(h))
 		}
 		nfdDecomp[nfdHex(k)] = d
 	}
-	for _, e := range strings.Split(nfdClassTable, ";") {
+	for e := range strings.SplitSeq(nfdClassTable, ";") {
 		k, v, _ := strings.Cut(e, ":")
 		lo, hi, ok := strings.Cut(k, "-")
 		if !ok {

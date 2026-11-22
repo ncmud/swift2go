@@ -1,6 +1,9 @@
 package swiftrt
 
-import "sort"
+import (
+	"maps"
+	"slices"
+)
 
 // HMap is a Swift `Dictionary` whose key type cannot be a Go map key (a set, an array, or a struct
 // holding one). Entries are keyed by the canonical rendering HSet uses, so keys that Swift's
@@ -104,11 +107,7 @@ func HMapElements[K, V any](d HMap[K, V]) []struct {
 	F0 K
 	F1 V
 } {
-	hks := make([]string, 0, len(d.M))
-	for hk := range d.M {
-		hks = append(hks, hk)
-	}
-	sort.Strings(hks)
+	hks := slices.Sorted(maps.Keys(d.M))
 	out := make([]struct {
 		F0 K
 		F1 V

@@ -120,8 +120,7 @@ type fieldFix struct {
 func structFix(t reflect.Type, building map[reflect.Type]*copyPlan) func(unsafe.Pointer) {
 	var fields []fieldFix
 	deep := false
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		fp := buildPlan(f.Type, building)
 		if !isDeep(fp, f.Type, building) {
 			continue
@@ -149,7 +148,7 @@ func arrayFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 		if elem.fix == nil {
 			return
 		}
-		for i := 0; i < n; i++ {
+		for i := range n {
 			elem.fix(unsafe.Add(ptr, uintptr(i)*size))
 		}
 	}
@@ -167,7 +166,7 @@ func sliceFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 		reflect.Copy(out, v)
 		if elem.fix != nil && n > 0 {
 			base := out.UnsafePointer()
-			for i := 0; i < n; i++ {
+			for i := range n {
 				elem.fix(unsafe.Add(base, uintptr(i)*size))
 			}
 		}

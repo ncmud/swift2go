@@ -1,9 +1,10 @@
 package swiftrt
 
 import (
+	"maps"
 	"os"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -140,11 +141,7 @@ func (v LoggerMetadataValue) Description() string {
 	if len(v.dict) == 0 {
 		return "[:]"
 	}
-	keys := make([]string, 0, len(v.dict))
-	for k := range v.dict {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(v.dict))
 	entries := make([]string, len(keys))
 	for i, k := range keys {
 		entries[i] = swiftDebugQuote(k) + ": " + v.dict[k].quotedAsCollectionElement()
@@ -437,11 +434,7 @@ func StreamLogHandlerStandardOutputLabel(label string) StreamLogHandler {
 }
 
 func prettyLogMetadata(m LoggerMetadata) string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(m))
 	parts := make([]string, len(keys))
 	for i, k := range keys {
 		parts[i] = k + "=" + m[k].Description()
@@ -457,13 +450,9 @@ func (h StreamLogHandler) Log(event LogEvent) {
 	metadata := h.Metadata
 	if event.Metadata != nil && len(*event.Metadata) > 0 || event.Error != nil {
 		metadata = LoggerMetadata{}
-		for k, v := range h.Metadata {
-			metadata[k] = v
-		}
+		maps.Copy(metadata, h.Metadata)
 		if event.Metadata != nil {
-			for k, v := range *event.Metadata {
-				metadata[k] = v
-			}
+			maps.Copy(metadata, *event.Metadata)
 		}
 		if event.Error != nil {
 			metadata["error.message"] = MetadataValueString(Str(event.Error))
