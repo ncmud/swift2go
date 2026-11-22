@@ -98,6 +98,9 @@ type Module struct {
 	typeAliases     map[string]string // qualified typealias name → mangled aliased type
 	members         map[string][]*DeclInfo
 	protocolsByType map[string][]string
+
+	// corelibsFoundation is set by [CorelibsFoundation].
+	corelibsFoundation bool
 }
 
 // protocolsOf lists the protocols the qualified type q declares conformance to, in this module or a
@@ -288,13 +291,26 @@ func (m *Module) IsPayloadEnum(owner string) bool {
 	return m.payloadEnums[owner]
 }
 
+// An Option configures a module that [New] prepares.
+type Option func(*Module)
+
+// CorelibsFoundation marks a module compiled against Foundation as Linux and the other platforms
+// without Objective-C declare it. Its Foundation names are respelled as Darwin's, so it calls the
+// runtime by the names a module compiled for macOS does.
+func CorelibsFoundation() Option {
+	return func(m *Module) { m.corelibsFoundation = true }
+}
+
 // New prepares a module: demangles every symbol and indexes declarations.
-func New(name string, files []ast.File, rtPath string) (*Module, error) {
+func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module, error) {
 	m := &Module{
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
 		protoReqs: map[string][]ast.Node{}, protoParents: map[string][]string{}, conformers: map[string][]string{},
 		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, localFuncs: map[string]ast.Node{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, typeAliases: map[string]string{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
+	}
+	for _, o := range opts {
+		o(m)
 	}
 	var syms []string
 	for _, f := range files {
@@ -369,15 +385,22 @@ func (m *Module) demangle(s string) string {
 		}
 	}
 	if d, ok := m.dm.Lookup(s); ok {
-		return d
+		return m.foundationName(d)
 	}
 	// Signatures of a dependency's declarations carry symbols only its demangler has seen.
 	for _, dep := range m.Deps {
 		if d, ok := dep.dm.Lookup(s); ok {
-			return d
+			return m.foundationName(d)
 		}
 	}
 	return s
+}
+
+func (m *Module) foundationName(d string) string {
+	if m.corelibsFoundation {
+		return darwinFoundationName(d)
+	}
+	return d
 }
 
 // objcMember matches an Objective-C member USR: c:objc(cs)Class(kind)selector.

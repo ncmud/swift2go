@@ -810,6 +810,10 @@ func (e *fileEmitter) isLocalFunc(info *DeclInfo) bool { return false }
 
 func (e *fileEmitter) stdFuncValue(dem string, n ast.Node) string {
 	sig := parseDeclSig(dem)
+	if dem == "c:@environ" {
+		// Darwin's overlay computes environ; Linux's C libraries export the global itself.
+		return "swiftrt.CEnviron()"
+	}
 	if sig.owner == "Swift" || sig.owner == "" {
 		return "swiftrt." + capitalize(sig.base)
 	}
@@ -836,6 +840,14 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		if str := e.scalarViewOf(sub.Child("base")); str != nil {
 			if as := sub.Child("args").List("args"); len(as) == 1 && strings.HasPrefix(e.m.demangle(as[0].Child("expr").Type()), "Swift.PartialRangeFrom<Swift.String.Index>") {
 				return "swiftrt.StringScalarIndicesFrom(" + e.expr(str) + ", " + e.expr(as[0].Child("expr")) + ")"
+			}
+		}
+	}
+	if name := d.Str("base_name"); strings.HasPrefix(usr, "s:s12MemoryLayout") && (name == "size" || name == "stride" || name == "alignment") {
+		// `MemoryLayout<T>.size`: the size of T's Go form.
+		if of, ok := strings.CutPrefix(e.m.demangle(base.Type()), "Swift.MemoryLayout<"); ok {
+			if of, ok = strings.CutSuffix(of, ">.Type"); ok {
+				return "swiftrt.MemoryLayout" + capitalize(name) + "[" + e.m.GoType(types.Parse(of), e.generics) + "]()"
 			}
 		}
 	}

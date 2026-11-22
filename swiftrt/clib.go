@@ -46,7 +46,7 @@ func CFClock_gettime(_ int32, ts *CTimespec) int32 { //nolint:revive // C name
 }
 
 // CStat is the C `struct stat`, with the fields the runtime fills. St_dev and St_mode are wide
-// enough for both macOS and Linux, and the timestamps carry the macOS field names.
+// enough for both macOS and Linux, and the timestamps are under both platforms' field names.
 type CStat struct {
 	St_dev       uint64    //nolint:revive // C field name
 	St_ino       uint64    //nolint:revive // C field name
@@ -58,6 +58,9 @@ type CStat struct {
 	St_atimespec CTimespec //nolint:revive // C field name
 	St_mtimespec CTimespec //nolint:revive // C field name
 	St_ctimespec CTimespec //nolint:revive // C field name
+	St_atim      CTimespec //nolint:revive // C field name: Linux's St_atimespec
+	St_mtim      CTimespec //nolint:revive // C field name: Linux's St_mtimespec
+	St_ctim      CTimespec //nolint:revive // C field name: Linux's St_ctimespec
 }
 
 // CStatInit is `stat()`, all zero.
@@ -78,6 +81,9 @@ func cStat(s *unix.Stat_t) CStat {
 		St_atimespec: timespec(s.Atim),
 		St_mtimespec: timespec(s.Mtim),
 		St_ctimespec: timespec(s.Ctim),
+		St_atim:      timespec(s.Atim),
+		St_mtim:      timespec(s.Mtim),
+		St_ctim:      timespec(s.Ctim),
 	}
 }
 

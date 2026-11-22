@@ -21,10 +21,10 @@ type describeCache struct {
 	Targets map[string]Target
 }
 
-// DescribeCached is [Describe], reusing the result an earlier call saved in file while the
+// DescribeCached is [Describe], reusing the result an earlier call saved in file while buildDir, the
 // toolchain, every package manifest and Package.resolved in the graph, and the file names under
 // every target's directory are unchanged.
-func DescribeCached(pkgDir, file string) (map[string]Target, error) {
+func DescribeCached(pkgDir, buildDir, file string) (map[string]Target, error) {
 	pkgDir, err := filepath.Abs(pkgDir)
 	if err != nil {
 		return nil, err
@@ -34,14 +34,14 @@ func DescribeCached(pkgDir, file string) (map[string]Target, error) {
 		_ = gob.NewDecoder(f).Decode(&c)
 		_ = f.Close()
 	}
-	if c.Format == cacheFormat && c.Key != "" && c.Key == describeKey(pkgDir, c.Dirs, c.Targets) {
+	if c.Format == cacheFormat && c.Key != "" && c.Key == buildDir+"\x00"+describeKey(pkgDir, c.Dirs, c.Targets) {
 		return c.Targets, nil
 	}
-	dirs, targets, err := describe(pkgDir)
+	dirs, targets, err := describe(pkgDir, buildDir)
 	if err != nil {
 		return nil, err
 	}
-	c = describeCache{Format: cacheFormat, Key: describeKey(pkgDir, dirs, targets), Dirs: dirs, Targets: targets}
+	c = describeCache{Format: cacheFormat, Key: buildDir + "\x00" + describeKey(pkgDir, dirs, targets), Dirs: dirs, Targets: targets}
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return nil, err
 	}

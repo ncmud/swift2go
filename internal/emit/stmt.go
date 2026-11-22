@@ -1579,7 +1579,22 @@ func (e *fileEmitter) assign(n ast.Node) {
 		e.w("%s = %s\n", strings.Join(ls, ", "), strings.Join(rs, ", "))
 		return
 	}
+	if d := stripLoads(dest); d.Kind() == "member_ref_expr" && e.implicitlyUnwrappedForeign(d) {
+		// The runtime holds the property as the Optional it is declared as.
+		e.w("%s = swiftrt.Some[%s](%s)\n", e.lvalue(dest), e.exprGoType(d), e.owned(src, sinkStore))
+		return
+	}
 	e.w("%s = %s\n", e.lvalue(dest), e.owned(src, sinkStore))
+}
+
+// implicitlyUnwrappedForeign reports whether a member reference writes a property that Foundation on Linux
+// declares T and Darwin imports from Objective-C as `T!`, which the runtime holds as an Optional.
+func (e *fileEmitter) implicitlyUnwrappedForeign(member ast.Node) bool {
+	if !e.m.corelibsFoundation {
+		return false
+	}
+	name, _, _ := strings.Cut(e.m.demangle(member.Child("decl").Str("decl_usr")), " :")
+	return darwinOptionalProperties[name]
 }
 
 // jump writes a break or continue. Inside a block that runs as a Go closure, one that leaves the

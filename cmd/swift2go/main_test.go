@@ -30,7 +30,7 @@ func TestMappedModules(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
 
 	// Transpiling Glue on its own leaves its .swiftmodule for the next run; its Go output is discarded.
-	if err := run("transpile", []string{"Glue"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlayFlag{}, false); err != nil {
+	if err := run("transpile", []string{"Glue"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, false, swiftmod.Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(filepath.Join(outDir, "glue")); err != nil {
@@ -38,7 +38,7 @@ func TestMappedModules(t *testing.T) {
 	}
 	const goPkgs = "github.com/ncmud/swift2go/cmd/swift2go/testdata/mapping/go/"
 	maps := mapFlag{"Toy": goPkgs + "toy", "Glue": goPkgs + "glue"}
-	if err := run("transpile", []string{"Toy", "App"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", maps, overlayFlag{}, false); err != nil {
+	if err := run("transpile", []string{"Toy", "App"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", maps, overlayFlag{}, false, swiftmod.Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(outDir, "toy")); !os.IsNotExist(err) {
@@ -81,7 +81,7 @@ func TestOverlay(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
 
 	overlays := overlayFlag{"Server": overlayDir}
-	if err := run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlays, false); err != nil {
+	if err := run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlays, false, swiftmod.Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	platform, err := os.ReadFile(filepath.Join(outDir, "server", "platform.go"))
@@ -107,8 +107,94 @@ func TestOverlay(t *testing.T) {
 	}
 
 	// An overlay for a target that is not being transpiled is a mistake in the command line.
-	err = run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlayFlag{"Sever": overlayDir}, false)
+	err = run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{"Sever": overlayDir}, false, swiftmod.Destination{})
 	if err == nil || !strings.Contains(err.Error(), "not in this run") {
 		t.Errorf("overlay for an unknown target: err = %v", err)
 	}
+}
+
+// TestSwiftSDK transpiles testdata/platform/swift for the host and for an installed Linux Swift SDK, and
+// checks that each Go program takes the `#if os(...)` and `canImport` branches of its platform and finds its
+// resources in the bundle SwiftPM names on that platform.
+func TestSwiftSDK(t *testing.T) {
+	if testing.Short() {
+		t.Skip("transpiles a Swift package")
+	}
+	swifttest.Require(t, "xcrun", "swift", "swiftc")
+	sdks, err := swiftmod.InstalledSwiftSDKs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var linux swiftmod.Destination
+	for _, d := range sdks {
+		if d.OS() == "linux" && (linux.Host() || strings.HasPrefix(d.Triple, runtimeArch())) {
+			linux = d
+		}
+	}
+	if linux.Host() {
+		t.Skip("needs a Linux Swift SDK; see `swift sdk install`")
+	}
+	pkgDir, err := filepath.Abs("testdata/platform/swift")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir("../..")
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
+	libc := "/musl"
+	if !strings.HasSuffix(linux.Triple, "-musl") {
+		libc = "/glibc"
+	}
+	for _, c := range []struct {
+		dest   swiftmod.Destination
+		want   string
+		bundle string
+	}{
+		{swiftmod.Destination{}, "macos/darwin", "swift_Platform.bundle"},
+		{linux, "linux" + libc, "swift_Platform.resources"},
+	} {
+		outDir := filepath.Join("out", "platformtest")
+		_ = os.RemoveAll(outDir)
+		t.Cleanup(func() { _ = os.RemoveAll(outDir) })
+		build := swiftmod.BuildDir(pkgDir, c.dest)
+		if !c.dest.Host() {
+			build = t.TempDir()
+		}
+		if err := run("transpile", []string{"Platform"}, pkgDir, outDir, build, "", mapFlag{}, overlayFlag{}, false, c.dest); err != nil {
+			t.Fatal(err)
+		}
+		check := filepath.Join(outDir, "check")
+		main := "package main\n\nimport \"github.com/ncmud/swift2go/out/platformtest/platform\"\n\nfunc main() { print(platform.PlatformName(), \" \", platform.Motd()) }\n"
+		if err := os.MkdirAll(check, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(check, "main.go"), []byte(main), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		exe := filepath.Join(t.TempDir(), "check")
+		if out, err := exec.Command("go", "build", "-o", exe, "./"+filepath.ToSlash(check)).CombinedOutput(); err != nil {
+			t.Fatalf("go build: %v\n%s", err, out)
+		}
+		bundle := filepath.Join(filepath.Dir(exe), c.bundle)
+		if err := os.MkdirAll(bundle, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bundle, "motd.txt"), []byte("welcome\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(exe).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", exe, err, out)
+		}
+		if got, want := strings.TrimSpace(string(out)), c.want+" welcome"; got != want {
+			t.Errorf("for %q: PlatformName(), Motd() = %q, want %q", c.dest.Triple, got, want)
+		}
+	}
+}
+
+// runtimeArch is the host's architecture as target triples spell it.
+func runtimeArch() string {
+	if runtime.GOARCH == "arm64" {
+		return "aarch64"
+	}
+	return "x86_64"
 }

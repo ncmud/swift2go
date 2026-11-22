@@ -22,27 +22,30 @@ type Requirement struct {
 
 // ProtocolRequirements reads the requirements of each public protocol of a built Swift module from its
 // symbol graph, keyed by the protocol's name within the module ("TableRecord", "Database.Observer").
-// flags are the swiftc flags that locate the module and its dependencies; only -I, -F, -Xcc and -sdk pass
-// through.
+// flags are the swiftc flags that locate the module and its dependencies; only -I, -F, -Xcc, -sdk, -target
+// and -resource-dir pass through. Without -target the module is read as built for the host.
 func ProtocolRequirements(module string, flags []string) (map[string][]Requirement, error) {
 	dir, err := os.MkdirTemp("", "swift2go-symbols-")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	target, err := hostTarget()
-	if err != nil {
-		return nil, err
-	}
-	args := []string{"-module-name", module, "-target", target, "-output-dir", dir, "-minimum-access-level", "public"}
+	args := []string{"-module-name", module, "-output-dir", dir, "-minimum-access-level", "public"}
 	for i := 0; i < len(flags); i++ {
 		switch flags[i] {
-		case "-I", "-F", "-Xcc", "-sdk":
+		case "-I", "-F", "-Xcc", "-sdk", "-target", "-resource-dir":
 			if i+1 < len(flags) {
 				args = append(args, flags[i], flags[i+1])
 				i++
 			}
 		}
+	}
+	if !slices.Contains(args, "-target") {
+		target, err := hostTarget()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "-target", target)
 	}
 	if !slices.Contains(args, "-sdk") {
 		if sdk, err := exec.Command("xcrun", "--show-sdk-path").Output(); err == nil {

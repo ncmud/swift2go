@@ -50,12 +50,12 @@ func transpileMapped(t *testing.T, fixture string, mapped map[string]string, tar
 	if os.Getenv("SWIFT2GO_KEEP_OUT") == "" {
 		t.Cleanup(func() { _ = os.RemoveAll(outDir) })
 	}
-	described, err := swiftmod.Describe(pkgDir)
+	described, err := swiftmod.Describe(pkgDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	mods := filepath.Join(outDir, "modules")
-	extra := swiftmod.TestingFlags()
+	extra := swiftmod.TestingFlags(swiftmod.Destination{})
 	var mappings []Mapping
 	for _, mod := range slices.Sorted(maps.Keys(mapped)) {
 		if err := swiftmod.EmitModule(described[mod], mods, extra...); err != nil {

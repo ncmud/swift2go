@@ -20,7 +20,8 @@ similar style.
 
 ## Requirements
 
-- macOS with the Swift 6.4.2 toolchain (`swiftc`, `swift-demangle`)
+- macOS with the Swift 6.4.2 toolchain (`swiftc`, `swift-demangle`), and a Swift SDK of the same
+  version to compile for another platform
 - Go 1.27.4 or newer
 - A SwiftPM package that builds
 
@@ -89,6 +90,45 @@ go run github.com/ncmud/swift2go/cmd/swift2go -incremental -pkg path/to/SwiftPac
 - The package graph that `swift package describe` reports is cached in `out/.cache/describe.gob` until
   the toolchain, a manifest, a `Package.resolved` or the names of the files in a target's directory change.
 - An incremental run does not write `out/ast/<Target>.json`.
+
+### Compiling for another platform
+
+The AST holds the branches of `#if os(...)`, `#if canImport(...)` and `#if arch(...)` that are true
+for the platform the Swift sources are compiled for, and that is the host unless `-swift-sdk` names an
+installed [Swift SDK](https://www.swift.org/documentation/articles/static-linux-getting-started.html).
+The Go output runs anywhere Go does; the option decides only which Swift branches it is translated from.
+
+```sh
+go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
+    -swift-sdk swift-6.4.2-RELEASE_static-linux-0.1.0 -triple aarch64-swift-linux-musl \
+    -build path/to/linux-build transpile Core App
+```
+
+- Any Swift SDK of the compiler's version works: swift.org's static Linux SDK (musl), or a glibc SDK for
+  a distribution made with [swift-sdk-generator](https://github.com/swiftlang/swift-sdk-generator)
+  (`make-linux-sdk --distribution-name ubuntu --distribution-version 24.04`). Pick the C library the
+  program ships with, since `canImport(Glibc)` and `canImport(Musl)` select different code.
+- `-swift-sdk` takes an SDK's id or one of its target triples, as `swift build --swift-sdk` does, and
+  `-triple` picks one of the SDK's triples when it has more than one. `swift sdk list` shows the
+  installed SDKs.
+- Every compiler run gets the triple's `-target`, `-sdk`, `-resource-dir` and search paths. Xcode's
+  compiler refuses the modules of a Swift SDK, which a swift.org compiler of the same version built,
+  by their revision; swift2go sets `SWIFT_IGNORE_SWIFTMODULE_REVISION` so it reads them.
+- Before transpiling, swift2go runs `swift build --build-system native` for the SDK, with its products
+  in the `-build` directory, for each Swift dependency of the listed targets that is not itself listed,
+  and for each listed target that uses a build-tool plugin. Give the platform a build directory of its
+  own. Macro plugins are built for the host there and loaded from it.
+- `-Xcc <flag>` (repeatable) passes a flag to the C compiler, in swift2go's compiler runs and in the
+  `swift build` it runs: for example `-Xcc -I<dir>` for headers that a system library target needs and
+  the SDK lacks.
+- Foundation on Linux declares in Swift the classes and options that Darwin imports from Objective-C
+  (`Bundle`, `FileManager`, `JSONSerialization.WritingOptions`, ...), some of them in
+  `FoundationEssentials`. Their names are respelled as Darwin's, so the output calls the same runtime.
+- The resource accessor looks for `<package>_<Target>.resources` beside the executable, as SwiftPM's
+  does on Linux, instead of `.bundle`.
+- `-incremental` caches dumps per compiler command, which names the triple, so a cache made for one
+  platform is not reused for another.
+- Test targets need the swift-testing module from the SDK; the static Linux SDK does not ship it.
 
 ### Replacing a module with a Go package
 
