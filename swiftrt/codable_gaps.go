@@ -106,6 +106,33 @@ func DecoderUnkeyedContainer(d *Decoder) *UnkeyedDecodingContainer {
 	return &UnkeyedDecodingContainer{items: items, path: d.CodingPath}
 }
 
+// KeyedDecodingContainerNestedUnkeyedContainerForKey is `container.nestedUnkeyedContainer(forKey:)`.
+func KeyedDecodingContainerNestedUnkeyedContainerForKey(c KeyedDecodingContainer, key any) *UnkeyedDecodingContainer {
+	k := keyString(key)
+	path := append(append([]string{}, c.path...), k)
+	raw, ok := c.lookup(k)
+	if !ok {
+		codingFail("key %q not found at %s", k, strings.Join(c.path, "."))
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		codingFail("expected an unkeyed container at %s, found %T", strings.Join(path, "."), raw)
+	}
+	return &UnkeyedDecodingContainer{items: items, path: path}
+}
+
+// UnkeyedDecodingContainerSuperDecoder is `UnkeyedDecodingContainer.superDecoder()`: a decoder for the
+// next element, after which the container moves past it.
+func UnkeyedDecodingContainerSuperDecoder(c *any) *Decoder {
+	u := (*c).(*UnkeyedDecodingContainer)
+	if u.index >= len(u.items) {
+		codingFail("unkeyed container is at end at %s", strings.Join(u.path, "."))
+	}
+	d := &Decoder{Value: u.items[u.index], CodingPath: append(append([]string{}, u.path...), "Index "+strconv.Itoa(u.index))}
+	u.index++
+	return d
+}
+
 // UnkeyedDecodingContainerIsAtEnd is `UnkeyedDecodingContainer.isAtEnd`.
 func UnkeyedDecodingContainerIsAtEnd(c any) bool {
 	u := c.(*UnkeyedDecodingContainer)
