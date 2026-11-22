@@ -297,7 +297,7 @@ func (e *fileEmitter) localFunc(n ast.Node) {
 	defer func() { e.inoutParams = saveIO }()
 	e.generics = e.genericScope(n)
 	params, _ := e.paramList(n)
-	res := e.resultGo(n)
+	res := e.resultGoPtr(n)
 	name := goSafe(n.Name())
 	if len(e.typeParams) > 0 {
 		// Go function literals cannot be generic: hoist to a package-level generic function that
@@ -386,7 +386,7 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 		if r != nil && e.resultType != "" && !e.inInit {
 			savePost := e.post
 			e.post = nil
-			e.w("%s = %s\n", e.doRet.val, e.expr(r))
+			e.w("%s = %s\n", e.doRet.val, e.returned(e.expr(r)))
 			for _, p := range e.post {
 				e.w("%s\n", p)
 			}
@@ -427,7 +427,65 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 		v = tmp
 	}
 	e.post = savePost
-	e.w("return %s\n", v)
+	e.w("return %s\n", e.returned(v))
+}
+
+// returned converts v, a value of the function's Swift result type, to the Go result type: an
+// Optional the function returns inline as swiftrt.Opt comes from the pointer form.
+func (e *fileEmitter) returned(v string) string {
+	if !strings.HasPrefix(e.resultType, "swiftrt.Opt[") {
+		return v
+	}
+	return e.inlineOpt(e.resultType, v)
+}
+
+// inlineOpt converts v, an Optional in pointer form, to the swiftrt.Opt type opt without making the
+// pointer first where v spells out how it is made.
+func (e *fileEmitter) inlineOpt(opt, v string) string {
+	inner := strings.TrimSuffix(strings.TrimPrefix(opt, "swiftrt.Opt["), "]")
+	switch {
+	case v == "nil":
+		return opt + "{}"
+	case e.optPtrs[v]:
+		return strings.TrimSuffix(v, ".Ptr()")
+	}
+	if arg, ok := callArg(v, "swiftrt.Some["+inner+"]("); ok {
+		return "swiftrt.OptValue[" + inner + "](" + arg + ")"
+	}
+	if arg, ok := callArg(v, "swiftrt.Copy("); ok {
+		return "swiftrt.Copy(" + e.inlineOpt(opt, arg) + ")"
+	}
+	return "swiftrt.OptOf(" + v + ")"
+}
+
+// callArg is the argument text of v when v is exactly one call written prefix + argument + ")".
+func callArg(v, prefix string) (string, bool) {
+	if !strings.HasPrefix(v, prefix) || !strings.HasSuffix(v, ")") {
+		return "", false
+	}
+	depth := 0
+	inStr := byte(0)
+	for i := len(prefix) - 1; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case inStr != 0:
+			if c == '\\' && inStr != '`' {
+				i++
+			} else if c == inStr {
+				inStr = 0
+			}
+		case c == '"' || c == '`' || c == '\'':
+			inStr = c
+		case c == '(' || c == '[' || c == '{':
+			depth++
+		case c == ')' || c == ']' || c == '}':
+			depth--
+			if depth == 0 && i != len(v)-1 {
+				return "", false
+			}
+		}
+	}
+	return v[len(prefix) : len(v)-1], depth == 0
 }
 
 func (e *fileEmitter) localBinding(n ast.Node) {

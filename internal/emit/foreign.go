@@ -550,6 +550,10 @@ func (e *fileEmitter) witness(q, goT string, req swiftmod.Requirement) string {
 		ptrT = "*" + goT
 	}
 	switch {
+	case impl.Kind == "func_decl" && impl.Static && !impl.ProtoExt && e.m.inlineOptResult(impl, implMod):
+		// The mapped package calls the witness for the Optional's pointer form.
+		params, args := e.paramList(impl.Node)
+		return "func(" + params + ") " + e.resultGoPtr(impl.Node) + " { return " + pfx + impl.GoName + "(" + args + ").Ptr() }"
 	case impl.Kind == "constructor_decl" || impl.Kind == "func_decl" && impl.Static && !impl.ProtoExt:
 		return pfx + impl.GoName
 	case impl.Kind == "var_decl" && impl.Static && !impl.ProtoExt:
@@ -571,7 +575,7 @@ func (e *fileEmitter) witness(q, goT string, req swiftmod.Requirement) string {
 		return "func(self " + ptrT + ") " + vt + " { return " + body + " }"
 	default:
 		params, args := e.paramList(impl.Node)
-		res := e.resultGo(impl.Node)
+		res := e.resultGoPtr(impl.Node)
 		call := "self." + impl.GoName + "(" + args + ")"
 		switch {
 		case impl.ProtoExt && impl.Static:
@@ -582,6 +586,9 @@ func (e *fileEmitter) witness(q, goT string, req swiftmod.Requirement) string {
 			call = pfx + impl.GoName + "(self" + prefixComma(args) + ")"
 		case impl.FreeSelf():
 			call = pfx + impl.GoName + "(" + derefSelf(goT) + prefixComma(args) + ")"
+		}
+		if impl.Kind == "func_decl" && e.m.inlineOptResult(impl, implMod) {
+			call += ".Ptr()"
 		}
 		if impl.Static {
 			if res == "" {

@@ -48,6 +48,7 @@ type fileEmitter struct {
 	initFail      string                  // what `return nil` yields inside a failable init
 	initOwner     string                  // the class whose initializer body is being emitted
 	resultType    string
+	optPtrs       map[string]bool // Go expressions that are exactly a swiftrt.Opt followed by .Ptr()
 	throws        bool
 	opaque        map[string]string // opaque_value_expr identity → Go expression
 	where         string
@@ -449,8 +450,13 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				params, args := e.paramList(info.Node)
 				e.erased = nil
 				res := e.resultGo(info.Node)
+				ptr := ""
 				if erasedResult {
 					res = "any"
+					if e.m.inlineOptResult(info, pm) {
+						// The requirement's associated type holds the Optional in its pointer form.
+						ptr = ".Ptr()"
+					}
 				}
 				if len(erased) > 0 {
 					// The default takes the conformer's own type where the requirement takes an associated type.
@@ -470,7 +476,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				if res == "" {
 					ret = ""
 				}
-				e.w("func (self %s) %s(%s) %s { %s%s%s(self%s) }\n\n", recv, req, params, res, ret, pfx, info.GoName, prefixComma(args))
+				e.w("func (self %s) %s(%s) %s { %s%s%s(self%s)%s }\n\n", recv, req, params, res, ret, pfx, info.GoName, prefixComma(args), ptr)
 			}
 		}
 	}
@@ -1277,9 +1283,57 @@ func (e *fileEmitter) unerase(fn ast.Node, erased map[int]bool) string {
 	return b.String()
 }
 
-// resultGo is the Go result type; Swift errors propagate as panics (see swiftrt.Throw).
+// resultGo is the Go result type of the function fn as it is declared: a value type's Optional is
+// swiftrt.Opt when the function returns it inline (see Module.inlineOptResult).
 func (e *fileEmitter) resultGo(fn ast.Node) string {
+	if info, mod := e.lookupModule(fn.Str("usr")); fn.Kind() == "func_decl" && e.m.inlineOptResult(info, mod) {
+		if opt := e.m.inlineOptGo(e.m.typeOf(fn.Str("result")), e.generics); opt != "" {
+			return opt
+		}
+	}
+	return e.resultGoPtr(fn)
+}
+
+// resultGoPtr is the Go type of fn's result as a value of its Swift type, with an Optional as a
+// pointer: the type of a call to fn after Ptr, and of a function value of fn's type.
+func (e *fileEmitter) resultGoPtr(fn ast.Node) string {
 	return e.m.GoType(e.m.typeOf(fn.Str("result")), e.generics)
+}
+
+// inlineOptResult reports whether a call to the declaration info, from the module mod, returns a
+// swiftrt.Opt that the caller turns into the Optional's pointer form with Ptr. A function of a mapped
+// module or of a file an overlay replaces keeps the pointer form its hand-written Go returns, as
+// does one whose result stands for an associated type. An override follows the method it overrides.
+func (m *Module) inlineOptResult(info *DeclInfo, mod *Module) bool {
+	if info == nil || mod == nil || mod.Mapped || info.Kind != "func_decl" || info.Node == nil || info.Node.Bool("local") {
+		return false
+	}
+	for seen := 0; info.Overrides != "" && seen < 64; seen++ {
+		base, baseMod := lookupDecl(append([]*Module{mod}, mod.Deps...), info.Overrides)
+		if base == nil {
+			break
+		}
+		info, mod = base, baseMod
+	}
+	if mod.Mapped || mod.overlaidFunc(info.Node.Str("usr")) {
+		return false
+	}
+	if info.Owner != "" && !info.ProtoExt {
+		if _, erased := mod.assocErasure(info.Node, info.Owner); erased {
+			return false
+		}
+	}
+	return mod.inlineOptGo(mod.typeOf(info.Node.Str("result")), nil) != ""
+}
+
+// lookupDecl finds the declaration usr in the first of mods that declares it.
+func lookupDecl(mods []*Module, usr string) (*DeclInfo, *Module) {
+	for _, mod := range mods {
+		if info := mod.decls[usr]; info != nil {
+			return info, mod
+		}
+	}
+	return nil, nil
 }
 
 func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
