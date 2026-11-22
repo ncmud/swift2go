@@ -28,7 +28,6 @@ type fileEmitter struct {
 	extraDecls    strings.Builder         // package-level declarations hoisted out of function bodies
 	localGenerics map[string]localGeneric // generic local functions, by Swift name
 	renames       map[string]string       // local names that refer to another Go variable here
-	observing     *DeclInfo               // the property whose setter or observers are being emitted
 	emittingFree  bool                    // the function being scoped is emitted as a free function
 	pendingOpens  int                     // scopes a statement opened that the enclosing block must close
 	lvSubst       map[string]string       // lvalue overrides by node identity while a parent chain is emitted
@@ -1355,9 +1354,6 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 
 // setterVar emits SetX for a computed property's setter or a stored property's observers.
 func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
-	saveObs := e.observing
-	e.observing = info
-	defer func() { e.observing = saveObs }()
 	var set, will, did ast.Node
 	for _, a := range n.List("accessors") {
 		switch {
