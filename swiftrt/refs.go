@@ -1,10 +1,5 @@
 package swiftrt
 
-import (
-	"cmp"
-	"reflect"
-)
-
 // compactRef appends the non-nil results of f, for closures returning an optional class reference.
 func compactRef[T, U any](xs []T, f func(T) U) []U {
 	out := []U{}
@@ -62,39 +57,6 @@ func FromAnySlice[T any](xs []any) []T {
 		out[i] = MustAs[T](x)
 	}
 	return out
-}
-
-// TupleCompare orders two tuples lexicographically, as Swift's tuple `<` does, comparing each element
-// with its own comparator.
-func TupleCompare(a, b any, cmps ...func(x, y any) int) int {
-	ra, rb := reflect.ValueOf(a), reflect.ValueOf(b)
-	for i := 0; i < ra.NumField(); i++ {
-		cmp := compareAny
-		if i < len(cmps) {
-			cmp = cmps[i]
-		}
-		if c := cmp(ra.Field(i).Interface(), rb.Field(i).Interface()); c != 0 {
-			return c
-		}
-	}
-	return 0
-}
-
-// CompareOrdered compares two values of a Go-ordered type.
-func CompareOrdered[T cmp.Ordered](x, y any) int { return cmp.Compare(x.(T), y.(T)) }
-
-// CompareBy adapts a type's own `<` to a three-way comparison.
-func CompareBy[T any](less func(T, T) bool) func(x, y any) int {
-	return func(x, y any) int {
-		a, b := x.(T), y.(T)
-		switch {
-		case less(a, b):
-			return -1
-		case less(b, a):
-			return 1
-		}
-		return 0
-	}
 }
 
 // MaxLess is Swift `max(_:_:...)` for a type ordered by its own `<`; ties keep the later argument.

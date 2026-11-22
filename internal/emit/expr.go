@@ -2155,27 +2155,14 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		if less := e.lessFunc(lt); less != "" {
 			a, b := e.expr(l), e.expr(r)
-			switch op {
-			case "<":
-				return less + "(" + a + ", " + b + ")"
-			case ">":
-				return less + "(" + b + ", " + a + ")"
-			case "<=":
-				return "!" + less + "(" + b + ", " + a + ")"
+			if op == "<" || op == ">=" || (e.isPure(l) && e.isPure(r)) {
+				return lessOp(less, op, a, b)
 			}
-			return "!" + less + "(" + a + ", " + b + ")"
+			gt := e.m.GoType(lt, e.generics)
+			return "func(a, b " + gt + ") bool { return " + lessOp(less, op, "a", "b") + " }(" + a + ", " + b + ")"
 		}
 		if lt.Kind == types.Tuple {
-			var cmps []string
-			for _, el := range lt.Args {
-				gt := e.m.GoType(el, e.generics)
-				if less := e.lessFunc(el); less != "" {
-					cmps = append(cmps, "swiftrt.CompareBy("+less+")")
-				} else {
-					cmps = append(cmps, "swiftrt.CompareOrdered["+gt+"]")
-				}
-			}
-			return "swiftrt.TupleCompare(" + e.expr(l) + ", " + e.expr(r) + ", " + strings.Join(cmps, ", ") + ") " + op + " 0"
+			return e.tupleCompare(n, lt, op, l, r)
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "+", "-", "*":
@@ -2655,17 +2642,123 @@ var dynamicStatics = map[string]bool{
 	"ContinuousClockInstantNow": true, "SuspendingClockInstantNow": true, "DateNow": true,
 }
 
+// lessOp renders `a op b` through a type's `<` function. It evaluates b before a for `>` and `<=`, so
+// callers pass pure operands there.
+func lessOp(less, op, a, b string) string {
+	switch op {
+	case "<":
+		return less + "(" + a + ", " + b + ")"
+	case ">":
+		return less + "(" + b + ", " + a + ")"
+	case "<=":
+		return "!" + less + "(" + b + ", " + a + ")"
+	}
+	return "!" + less + "(" + a + ", " + b + ")"
+}
+
+// isPure reports an operand whose evaluation has no effects, so it can be evaluated out of order: a
+// literal, a stored local or global, or a stored property or tuple element of one.
+func (e *fileEmitter) isPure(n ast.Node) bool {
+	switch n.Kind() {
+	case "integer_literal_expr", "float_literal_expr", "boolean_literal_expr", "string_literal_expr", "nil_literal_expr":
+		return true
+	case "declref_expr":
+		info, _ := e.lookup(n.Child("decl").Str("decl_usr"))
+		return info == nil || !info.Computed
+	case "member_ref_expr":
+		info, _ := e.lookup(n.Child("decl").Str("decl_usr"))
+		return info != nil && info.Kind == "var_decl" && !info.Computed && e.isPure(n.Child("base"))
+	case "load_expr", "paren_expr", "erasure_expr":
+		return e.isPure(n.Child("sub_expr"))
+	case "tuple_element_expr":
+		return e.isPure(n.Child("base"))
+	}
+	return false
+}
+
+// tupleCompare expands Swift's lexicographic tuple ordering element by element: the first unequal
+// element decides, and the last element decides with op itself. Each operand is evaluated once, left
+// to right.
+func (e *fileEmitter) tupleCompare(n ast.Node, lt *types.Type, op string, l, r ast.Node) string {
+	gt := e.m.GoType(lt, e.generics)
+	var body strings.Builder
+	for i, el := range lt.Args {
+		a, b := "a.F"+itoa(i), "b.F"+itoa(i)
+		if i == len(lt.Args)-1 {
+			c, ok := e.elementCompare(el, op, a, b)
+			if !ok {
+				return e.m.Unsup("tuple-compare:"+e.m.Recv(el), e.where, e.exprGoType(n))
+			}
+			body.WriteString("return " + c)
+			break
+		}
+		ne, ok1 := e.elementCompare(el, "!=", a, b)
+		c, ok2 := e.elementCompare(el, op, a, b)
+		if !ok1 || !ok2 {
+			return e.m.Unsup("tuple-compare:"+e.m.Recv(el), e.where, e.exprGoType(n))
+		}
+		body.WriteString("if " + ne + " { return " + c + " }; ")
+	}
+	return "func(a, b " + gt + ") bool { " + body.String() + " }(" + e.expr(l) + ", " + e.expr(r) + ")"
+}
+
+// elementCompare renders `a op b` for one tuple element of type t, using the type's own operators where it
+// declares them. It reports false when t has no known ordering.
+func (e *fileEmitter) elementCompare(t *types.Type, op, a, b string) (string, bool) {
+	gt := e.m.GoType(t, e.generics)
+	if gt == "swiftrt.Int128" {
+		return "swiftrt.Int128Compare(" + a + ", " + b + ") " + op + " 0", true
+	}
+	if t.Kind == types.Tuple {
+		return "", false
+	}
+	if op == "==" || op == "!=" {
+		if eq := e.operatorFunc(t, "=="); eq != "" {
+			if op == "!=" {
+				return "!" + eq + "(" + a + ", " + b + ")", true
+			}
+			return eq + "(" + a + ", " + b + ")", true
+		}
+		if t.Kind == types.Optional || !e.m.isGoComparable(t) {
+			if op == "!=" {
+				return "!swiftrt.Equal(" + a + ", " + b + ")", true
+			}
+			return "swiftrt.Equal(" + a + ", " + b + ")", true
+		}
+		return a + " " + op + " " + b, true
+	}
+	if less := e.lessFunc(t); less != "" {
+		return lessOp(less, op, a, b), true
+	}
+	if goOrdered[gt] {
+		return a + " " + op + " " + b, true
+	}
+	return "", false
+}
+
+var goOrdered = map[string]bool{
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"float32": true, "float64": true, "string": true,
+	"swiftrt.Date": true, "swiftrt.Duration": true, "swiftrt.DispatchTime": true, "swiftrt.LoggerLevel": true,
+}
+
 // lessFunc names the Go function for a local type's `<` operator, or "" if it has none.
 func (e *fileEmitter) lessFunc(t *types.Type) string {
+	if t != nil && t.Kind == types.Named && t.Name == "Swift.Int128" {
+		return "swiftrt.Int128Less"
+	}
+	return e.operatorFunc(t, "<")
+}
+
+// operatorFunc names the Go function for a local type's static operator, or "" if it declares none.
+func (e *fileEmitter) operatorFunc(t *types.Type, op string) string {
 	if t == nil || t.Kind != types.Named {
 		return ""
 	}
-	if t.Name == "Swift.Int128" {
-		return "swiftrt.Int128Less"
-	}
 	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
 		for _, d := range mod.sortedDecls() {
-			if d.Kind == "func_decl" && d.Owner == t.Name && d.Node != nil && d.Node.Name() == "<" {
+			if d.Kind == "func_decl" && d.Owner == t.Name && d.Node != nil && d.Node.Name() == op {
 				if mod.Pkg != e.m.Pkg {
 					e.m.importPkgs[mod.Pkg] = mod.ImportPath
 					return mod.Pkg + "." + d.GoName
