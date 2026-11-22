@@ -1,0 +1,36 @@
+if-body
+if-defer x=2
+after-if x=102
+ndIf(true)=102
+after-if x=1
+ndIf(false)=1
+inner-defer 0.0
+inner-defer 0.1
+loop-defer 0
+loop-defer 1
+inner-defer 2.0
+inner-defer 2.1
+loop-defer 2
+inner-defer 3.0
+loop-defer 3
+inner-defer 4.0
+loop-defer 4
+ndLoop=2
+nested-if-defer
+while-defer
+ret 3
+while-defer
+fell
+case0-defer
+case1-defer
+switch0=10 switch1=0 switch2=-1
+do-defer
+throw=nil
+do-body
+do-defer
+nothrow=Optional(7)
+body
+second
+first
+after-do
+rv=1

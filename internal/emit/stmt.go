@@ -19,6 +19,16 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 		}
 		e.paramNames = nil
 	}
+	if e.nestedDefers(list) {
+		// Swift runs a block's defer when the block exits, Go's at function return: give the block a
+		// function of its own.
+		e.exitingClosure(func() {
+			e.w("{\n")
+			e.stmts(list)
+			e.w("}")
+		}, func(body string) { e.w("func() %s()\n", body) })
+		return
+	}
 	opened := 0
 	for _, s := range list {
 		names := declaredNames(s)
@@ -97,6 +107,10 @@ func (e *fileEmitter) stmt(n ast.Node) {
 	case "while_stmt", "repeat_while_stmt", "for_each_stmt", "switch_stmt":
 		e.jumpDepth++
 		defer func() { e.jumpDepth-- }()
+		if n.Kind() != "switch_stmt" {
+			e.loopDepth++
+			defer func() { e.loopDepth-- }()
+		}
 		if label := e.stmtLabel(n); label != "" && e.labelUsed(n, label) {
 			if e.doRet != nil {
 				e.doRet.inner[label] = true
@@ -185,19 +199,7 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	case "switch_stmt":
 		e.switchStmt(n)
 	case "break_stmt", "continue_stmt":
-		jump := strings.TrimSuffix(n.Kind(), "_stmt")
-		if label := e.jumpLabel(n); label != "" {
-			jump += " " + label
-		}
-		label := e.jumpLabel(n)
-		if d := e.doRet; d != nil && (label == "" && e.jumpDepth == d.depth || label != "" && !d.inner[label]) {
-			// The do body runs in a Go closure: leave it and repeat the jump outside.
-			flag := d.flag + "_" + strings.ReplaceAll(jump, " ", "_")
-			d.jumps[jump] = flag
-			e.w("%s = true\nreturn\n", flag)
-			break
-		}
-		e.w("%s\n", jump)
+		e.jump(strings.TrimSuffix(n.Kind(), "_stmt"), e.jumpLabel(n))
 	case "fallthrough_stmt":
 		e.w("fallthrough\n")
 	case "defer_stmt":
@@ -210,9 +212,6 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 		fd := n.Child("func_decl")
 		if fd == nil {
 			fd = n.Child("temp_decl")
-		}
-		if !e.topLevel[nodeKey(n)] {
-			e.m.Unsup("defer-in-nested-scope", e.where, "")
 		}
 		if fd != nil {
 			e.stmts(fd.Child("body").List("elements"))
@@ -1516,7 +1515,58 @@ func (e *fileEmitter) assign(n ast.Node) {
 	e.w("%s = %s\n", e.lvalue(dest), e.owned(src, sinkStore))
 }
 
-func (e *fileEmitter) doCatch(n ast.Node) {
+// jump writes a break or continue. Inside a block that runs as a Go closure, one that leaves the
+// block sets the block's flag for it and returns, and the code after the closure repeats it.
+func (e *fileEmitter) jump(kind, label string) {
+	text := kind
+	if label != "" {
+		text += " " + label
+	}
+	d := e.doRet
+	leaves := false
+	if d != nil {
+		switch {
+		case label != "":
+			leaves = !d.inner[label]
+		case kind == "continue":
+			leaves = e.loopDepth == d.loops
+		default:
+			leaves = e.jumpDepth == d.depth
+		}
+	}
+	if !leaves {
+		e.w("%s\n", text)
+		return
+	}
+	flag := d.flag + "_" + strings.ReplaceAll(text, " ", "_")
+	d.jumps[text] = flag
+	e.w("%s = true\nreturn\n", flag)
+}
+
+// nestedDefers reports whether list, a block other than a function body, holds a defer.
+func (e *fileEmitter) nestedDefers(list []ast.Node) bool {
+	found := false
+	for _, st := range list {
+		if st.Kind() == "defer_stmt" && !e.topLevel[nodeKey(st)] {
+			found = true
+		}
+	}
+	if !found {
+		return false
+	}
+	if e.topLevel == nil {
+		e.topLevel = map[uintptr]bool{}
+	}
+	for _, st := range list {
+		e.topLevel[nodeKey(st)] = true
+	}
+	return true
+}
+
+// exitingClosure emits a block that runs as a Go function literal. emit writes the literal's body,
+// braces included; wrap places it. A return, break or continue that leaves the block sets a flag
+// inside the literal, and the enclosing function repeats it after the literal returns.
+func (e *fileEmitter) exitingClosure(emit func(), wrap func(body string)) {
 	ret := e.newTmp("ret")
 	done := e.newTmp("returned")
 	e.w("{\n")
@@ -1525,18 +1575,53 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 	}
 	e.w("%s := false\n", done)
 	saveDo := e.doRet
-	do := &doReturn{val: ret, flag: done, depth: e.jumpDepth, jumps: map[string]string{}, inner: map[string]bool{}}
+	do := &doReturn{val: ret, flag: done, depth: e.jumpDepth, loops: e.loopDepth, jumps: map[string]string{}, inner: map[string]bool{}}
 	saved := e.b
 	e.b = strings.Builder{}
 	e.doRet = do
-	e.block(n.Child("body"))
+	emit()
 	e.doRet = saveDo
 	body := e.b.String()
 	e.b = saved
 	for _, jump := range sortedKeys(do.jumps) {
 		e.w("%s := false\n", do.jumps[jump])
 	}
-	e.w("if err := swiftrt.Catch(func() %s", body)
+	wrap(body)
+	e.w("if %s {\n", done)
+	switch {
+	case saveDo != nil:
+		// This block is itself inside a closure: leave that one too.
+		if e.resultType != "" && !e.inInit {
+			e.w("%s = %s\n", saveDo.val, ret)
+		}
+		e.w("%s = true\nreturn\n", saveDo.flag)
+	case e.inInit:
+		e.w("return %s\n", e.initRet)
+	case e.resultType != "":
+		e.w("return %s\n", ret)
+	default:
+		e.w("return\n")
+	}
+	e.w("}\n")
+	for _, text := range sortedKeys(do.jumps) {
+		e.w("if %s {\n", do.jumps[text])
+		kind, label, _ := strings.Cut(text, " ")
+		e.jump(kind, label)
+		e.w("}\n")
+	}
+	e.w("}\n")
+}
+
+func (e *fileEmitter) doCatch(n ast.Node) {
+	e.exitingClosure(func() { e.block(n.Child("body")) }, func(body string) {
+		e.w("if err := swiftrt.Catch(func() %s", body)
+		e.catchClauses(n)
+	})
+}
+
+// catchClauses writes the rest of the if statement that doCatch opens: it tests err against each
+// catch clause in order and rethrows when none matches.
+func (e *fileEmitter) catchClauses(n ast.Node) {
 	e.w("); err != nil {\n")
 	matched := e.newTmp("caught")
 	e.w("%s := false\n", matched)
@@ -1597,24 +1682,13 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 		e.w("}\n")
 	}
 	e.w("if !%s {\npanic(swiftrt.Throw(err))\n}\n}\n", matched)
-	switch {
-	case e.inInit:
-		e.w("if %s {\nreturn %s\n}\n", done, e.initRet)
-	case e.resultType != "":
-		e.w("if %s {\nreturn %s\n}\n", done, ret)
-	default:
-		e.w("if %s {\nreturn\n}\n", done)
-	}
-	for _, jump := range sortedKeys(do.jumps) {
-		e.w("if %s {\n%s\n}\n", do.jumps[jump], jump)
-	}
-	e.w("}\n")
 }
 
 // doReturn redirects `return` inside a do body, which runs in a Go closure, to the enclosing function.
 type doReturn struct {
 	val, flag string
 	depth     int               // jumpDepth when the do body began
+	loops     int               // loopDepth when the do body began
 	jumps     map[string]string // break/continue flags the body set
 	inner     map[string]bool   // labels declared inside the body
 }
