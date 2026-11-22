@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -33,10 +34,11 @@ const (
 	TimeStyleComplete
 )
 
-// DateFormattedDateTime is Foundation `Date.formatted(date:time:)` in the en_US locale and the
-// current time zone: "Nov 22, 2026" and "3:04 PM", joined by ", " after a numeric or abbreviated
-// date and " at " after a long or complete one. A narrow no-break space precedes AM and PM, as
-// ICU 72 and later write it. With both styles omitted it is the numeric date and shortened time.
+// DateFormattedDateTime is Foundation `Date.formatted(date:time:)` in the current time zone and the
+// en_001 locale, which is Locale.current on Linux whatever LANG says: "22 Nov 2026" and "3:04 PM",
+// joined by ", " after a numeric date and " at " after any other. The numeric date is "22/11/2026", a
+// narrow no-break space precedes AM and PM, and the complete time names the zone by its GMT offset.
+// With both styles omitted it is the numeric date and shortened time.
 func DateFormattedDateTime(d Date, date DateStyle, clock TimeStyle) string {
 	if date == DateStyleOmitted && clock == TimeStyleOmitted {
 		date, clock = DateStyleNumeric, TimeStyleShortened
@@ -45,27 +47,44 @@ func DateFormattedDateTime(d Date, date DateStyle, clock TimeStyle) string {
 	var day, at string
 	switch date {
 	case DateStyleNumeric:
-		day, at = t.Format("1/2/2006"), ", "
+		day, at = t.Format("02/01/2006"), ", "
 	case DateStyleAbbreviated:
-		day, at = t.Format("Jan 2, 2006"), ", "
+		day, at = t.Format("2 Jan 2006"), " at "
 	case DateStyleLong:
-		day, at = t.Format("January 2, 2006"), " at "
+		day, at = t.Format("2 January 2006"), " at "
 	case DateStyleComplete:
-		day, at = t.Format("Monday, January 2, 2006"), " at "
+		day, at = t.Format("Monday, 2 January 2006"), " at "
 	}
 	var hour string
 	switch clock {
 	case TimeStyleShortened:
-		hour = t.Format("3:04 PM")
+		hour = t.Format("3:04\u202fPM")
 	case TimeStyleStandard:
-		hour = t.Format("3:04:05 PM")
+		hour = t.Format("3:04:05\u202fPM")
 	case TimeStyleComplete:
-		hour = t.Format("3:04:05 PM") + " " + *TimeZoneAbbreviationFor(TimeZone{time.Local}, d)
+		_, off := t.Zone()
+		hour = t.Format("3:04:05\u202fPM") + " " + gmtOffsetName(off)
 	}
 	if day == "" || hour == "" {
 		return day + hour
 	}
 	return day + at + hour
+}
+
+// gmtOffsetName is ICU's localized GMT format for a zone offset in seconds: "GMT", "GMT-5", "GMT+5:30".
+func gmtOffsetName(off int) string {
+	if off == 0 {
+		return "GMT"
+	}
+	sign := "+"
+	if off < 0 {
+		sign, off = "-", -off
+	}
+	name := "GMT" + sign + strconv.Itoa(off/3600)
+	if off%3600 != 0 {
+		name += ":" + fmt.Sprintf("%02d", off%3600/60)
+	}
+	return name
 }
 
 // DurationUnit is Foundation `Duration.UnitsFormatStyle.Unit`, as the unit's length in nanoseconds.
