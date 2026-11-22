@@ -10,8 +10,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/rivo/uniseg"
 )
 
 func sub(s string) Substring { return Substring{s, 0, len(s)} }
@@ -73,9 +71,9 @@ func SubstringIndexBefore(s Substring, i int) int {
 // StringDistanceFromTo is Swift `String.distance(from:to:)` in grapheme clusters.
 func StringDistanceFromTo(s string, a, b int) int {
 	if a <= b {
-		return uniseg.GraphemeClusterCount(s[a:b])
+		return graphemeCount(s[a:b])
 	}
-	return -uniseg.GraphemeClusterCount(s[b:a])
+	return -graphemeCount(s[b:a])
 }
 
 // SubstringDistanceFromTo is Swift `Substring.distance(from:to:)`.
@@ -635,7 +633,7 @@ func CharacterInitScalar(r rune) Character { return string(r) }
 
 // CharacterInitString is Swift `Character(String)`; it traps unless s is one grapheme cluster.
 func CharacterInitString(s string) Character {
-	if uniseg.GraphemeClusterCount(s) != 1 {
+	if graphemeCount(s) != 1 {
 		Trap("Can't form a Character from a String containing more than one extended grapheme cluster")
 	}
 	return s
