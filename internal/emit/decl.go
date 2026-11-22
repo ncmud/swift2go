@@ -26,6 +26,7 @@ type fileEmitter struct {
 	paramNames    map[string]bool         // parameters, which share the function body's Go scope
 	doRet         *doReturn               // set while emitting a do body
 	jumpDepth     int                     // loops and switches open around the statement being emitted
+	loopDepth     int                     // loops open around the statement being emitted
 	slots         []slot                  // dictionary elements taken inout by the call being emitted
 	extraDecls    strings.Builder         // package-level declarations hoisted out of function bodies
 	localGenerics map[string]localGeneric // generic local functions, by Swift name
