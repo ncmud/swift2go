@@ -241,3 +241,41 @@ func TestCopyUnexportedSwiftProperty(t *testing.T) {
 		t.Error("an unexported runtime field stays shared")
 	}
 }
+
+type copyKey interface{ isCopyKey() }
+
+type copyKeyRoom struct{ vnum int }
+
+func (copyKeyRoom) isCopyKey() {}
+
+type copyExit struct {
+	Description string
+	Keywords    []string
+	Destination copyKey
+}
+
+func TestCopyAllocatesOnlyWhatItUnshares(t *testing.T) {
+	bare := copyExit{Description: "north", Destination: copyKeyRoom{3001}}
+	withKeywords := copyExit{Description: "south", Keywords: []string{"door"}, Destination: copyKeyRoom{3002}}
+	var out copyExit
+	if n := testing.AllocsPerRun(100, func() { out = Copy(bare) }); n != 0 {
+		t.Errorf("copying a value with nothing to unshare made %v allocations, want 0", n)
+	}
+	keywords := withKeywords.Keywords
+	slice := testing.AllocsPerRun(100, func() { keywords = Copy(keywords) })
+	if n := testing.AllocsPerRun(100, func() { out = Copy(withKeywords) }); n != slice {
+		t.Errorf("copying a value with one slice made %v allocations, want the slice's own %v", n, slice)
+	}
+	out.Keywords[0] = "gate"
+	if withKeywords.Keywords[0] != "door" || out.Destination != withKeywords.Destination {
+		t.Errorf("copy shares storage or lost a field: %+v from %+v", out, withKeywords)
+	}
+}
+
+func BenchmarkCopyStruct(b *testing.B) {
+	v := copyExit{Description: "south", Keywords: []string{"door"}, Destination: copyKeyRoom{3002}}
+	b.ReportAllocs()
+	for b.Loop() {
+		v = Copy(v)
+	}
+}
