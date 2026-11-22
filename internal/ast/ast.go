@@ -108,6 +108,8 @@ func Walk(n any, f func(Node)) {
 type File struct {
 	Filename string
 	Items    []Node
+	// Hash identifies the document the file was decoded from; "" when the loader did not hash it.
+	Hash string
 }
 
 // Load decodes the concatenated per-file JSON documents of one dump.

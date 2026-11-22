@@ -52,6 +52,7 @@ type DeclInfo struct {
 	GoName        string
 	Computed      bool
 	Mutating      bool
+	file          string // the Swift file that declares it
 }
 
 // Module is one Swift module being transpiled.
@@ -96,8 +97,7 @@ type Module struct {
 	lazyInits       map[string]bool     // owner|name of stored statics and globals with non-literal initializers
 	lineStarts      map[string][]int
 	sources         map[string][]byte
-	localFuncs      map[string]ast.Node // functions declared inside function bodies, by USR
-	objcNames       map[string]string   // Swift names of Objective-C members, by USR
+	objcNames       map[string]string // Swift names of Objective-C members, by USR
 	hoists          int
 	keyable         map[string]bool // whether a local struct can be a Go map key
 	mutatingTypes   map[string]bool
@@ -111,6 +111,27 @@ type Module struct {
 
 	// corelibsFoundation is set by [CorelibsFoundation].
 	corelibsFoundation bool
+
+	// Interface identifies the module's declarations, as the AST cache fingerprints them. An
+	// incremental run sets it on the module and its dependencies.
+	Interface string
+	// EmitCache is the file in which [Module.WriteGo] records what each Go file it writes depends on.
+	// When set, WriteGo keeps a Go file whose Swift file and dependencies are unchanged since that
+	// record, instead of emitting it again.
+	EmitCache string
+	// EmitKey identifies the transpiler that writes the Go; a cache made by another is not used.
+	EmitKey string
+	// CheckEmitCache makes WriteGo emit the files it would keep too, and list in Stale those whose
+	// Go would differ.
+	CheckEmitCache bool
+	// Reused counts the Go files the last WriteGo kept from an earlier run, or found it could keep
+	// under CheckEmitCache.
+	Reused int
+	// Stale lists the Go files WriteGo would have kept with content that emitting them changes.
+	Stale []string
+
+	rec      *fileRecord // what the emission of the current file reads and changes
+	indexing string      // the file New is indexing
 }
 
 // protocolsOf lists the protocols the qualified type q declares conformance to, in this module or a
@@ -396,7 +417,7 @@ func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module,
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
 		protoReqs: map[string][]ast.Node{}, protoParents: map[string][]string{}, conformers: map[string][]string{},
-		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, localFuncs: map[string]ast.Node{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, typeAliases: map[string]string{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
+		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, typeAliases: map[string]string{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
 	}
 	for _, o := range opts {
 		o(m)
@@ -422,8 +443,10 @@ func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module,
 	}
 	m.dm = dm
 	for _, f := range files {
+		m.indexing = f.Filename
 		m.index(f.Items, "", "")
 	}
+	m.indexing = ""
 	m.markLazy()
 	m.markGenericFree()
 	m.assignNames()
@@ -555,7 +578,7 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 					m.typeKinds[q+"#OptionSet"] = "yes"
 				}
 			}
-			m.decls[declKey(n)] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind}
+			m.decls[declKey(n)] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind, file: m.indexing}
 			m.sorted = nil
 			for _, c := range n.Child("inherits").List("conformances") {
 				if p := c.Str("protocol"); p != "" {
@@ -616,7 +639,7 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 					m.indexLocalTypes(a.Child("body"))
 				}
 			}
-			info := &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind, Static: n.Bool("static")}
+			info := &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind, Static: n.Bool("static"), file: m.indexing}
 			if ownerKind == "protocol_ext" {
 				info.ProtoExt = true
 			}
@@ -1055,12 +1078,17 @@ func goSafe(n string) string {
 	return n
 }
 
-// Unsup records an unsupported construct and returns a Go expression that compiles.
-func (m *Module) Unsup(kind, where, goType string) string {
+func (m *Module) countUnsupported(kind, where string) {
 	m.Unsupported[kind]++
 	if len(m.UnsupportedAt[kind]) < 5 {
 		m.UnsupportedAt[kind] = append(m.UnsupportedAt[kind], where)
 	}
+}
+
+// Unsup records an unsupported construct and returns a Go expression that compiles.
+func (m *Module) Unsup(kind, where, goType string) string {
+	m.countUnsupported(kind, where)
+	m.noteUnsupported(kind, where)
 	if goType == "" || goType == "any" {
 		return fmt.Sprintf("swiftrt.Unsupported[any](%q)", kind)
 	}
@@ -1087,6 +1115,16 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	env := m.emitEnv(overlay)
+	cache := readEmitCache(m.EmitCache, env)
+	next := &emitCache{Env: env, Files: map[string]*fileRecord{}}
+	mods := m.chain()
+	if env != "" {
+		// Effects read by the first file that needs them would be recorded as that file's own reads.
+		for _, mod := range mods {
+			mod.effectsOf()
+		}
+	}
 	var paths []string
 	for _, f := range m.Files {
 		base := strings.TrimSuffix(filepath.Base(f.Filename), ".swift")
@@ -1099,17 +1137,46 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 			m.Replaced = append(m.Replaced, filepath.Base(f.Filename))
 			continue
 		}
-		fe := &fileEmitter{m: m, file: f, lvSubst: map[string]string{}}
-		src := fe.emitFile()
 		out := filepath.Join(dir, name)
+		kept := false
+		if cache != nil {
+			r := cache.Files[name]
+			kept = m.reusable(r, f, out, mods)
+			if kept && !m.CheckEmitCache {
+				m.replay(r, mods)
+				next.Files[name] = r
+				m.Reused++
+				paths = append(paths, out)
+				continue
+			}
+		}
+		var rec *fileRecord
+		if env != "" {
+			rec = newRecord(f)
+			m.recordInto(rec)
+		}
+		fe := &fileEmitter{m: m, file: f, lvSubst: map[string]string{}, localFuncs: map[string]ast.Node{}}
+		src := fe.emitFile()
+		m.recordInto(nil)
 		src = strings.ReplaceAll(src, "for _, _ := range ", "for range ")
 		formatted, err := format.Source([]byte(src))
 		if err != nil {
 			formatted = []byte(src)
 			fmt.Fprintf(os.Stderr, "gofmt %s: %v\n", out, err)
 		}
-		if err := os.WriteFile(out, formatted, 0o644); err != nil {
+		if kept {
+			if old, err := os.ReadFile(out); err == nil && !bytes.Equal(old, formatted) { //nolint:gosec // out is a file this module writes
+				m.Stale = append(m.Stale, name)
+			} else {
+				m.Reused++
+			}
+		}
+		if err := writeIfChanged(out, formatted); err != nil {
 			return nil, err
+		}
+		if rec != nil {
+			rec.Out = hashBytes(formatted)
+			next.Files[name] = rec
 		}
 		paths = append(paths, out)
 	}
@@ -1126,7 +1193,7 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 			formatted = []byte(src + body)
 			fmt.Fprintf(os.Stderr, "gofmt %s: %v\n", out, err)
 		}
-		if err := os.WriteFile(out, formatted, 0o644); err != nil {
+		if err := writeIfChanged(out, formatted); err != nil {
 			return nil, err
 		}
 		paths = append(paths, out)
@@ -1137,13 +1204,22 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 			return nil, err
 		}
 		out := filepath.Join(dir, name)
-		if err := os.WriteFile(out, data, 0o644); err != nil { //nolint:gosec // name is a directory entry of the overlay
+		if err := writeIfChanged(out, data); err != nil {
 			return nil, err
 		}
 		paths = append(paths, out)
 	}
 	if err := m.removeStaleGo(dir, paths); err != nil {
 		return nil, err
+	}
+	switch {
+	case m.EmitCache == "":
+	case env == "":
+		_ = os.Remove(m.EmitCache)
+	case cache == nil || len(next.Files) != len(cache.Files) || m.Reused < len(next.Files) || m.CheckEmitCache:
+		if err := writeEmitCache(m.EmitCache, next); err != nil {
+			return nil, err
+		}
 	}
 	return paths, nil
 }
@@ -1611,6 +1687,7 @@ func (m *Module) sourceText(file string) []byte {
 }
 
 func (m *Module) nextHoist() int {
+	m.noteHoist()
 	m.hoists++
 	return m.hoists
 }
@@ -1714,7 +1791,9 @@ func (m *Module) retro(pkg, format string, args ...any) {
 		b = &strings.Builder{}
 		m.retroFiles[pkg] = b
 	}
-	fmt.Fprintf(b, format, args...)
+	text := fmt.Sprintf(format, args...)
+	b.WriteString(text)
+	m.noteRetro(pkg, text)
 }
 
 var methodDecl = regexp.MustCompile(`(?m)^func \(\w* ?\*?(\w+)(?:\[[^\]]*\])?\) (\w+)\(`)

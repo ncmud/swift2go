@@ -291,7 +291,7 @@ func (e *fileEmitter) localFunc(n ast.Node) {
 	if key == "" {
 		key = "local:" + n.Name()
 	}
-	e.m.localFuncs[key] = n
+	e.localFuncs[key] = n
 	saveG, saveIO := e.generics, e.inoutParams
 	e.inoutParams = maps.Clone(e.inoutParams)
 	defer func() { e.inoutParams = saveIO }()
@@ -1468,7 +1468,7 @@ func (e *fileEmitter) enumElementByName(st *types.Type, p ast.Node) *DeclInfo {
 		for _, info := range mod.decls {
 			if info.Kind == "enum_element_decl" && info.Node.Name() == name && info.Owner == st.Name {
 				if mod.Pkg != e.m.Pkg {
-					e.m.importPkgs[mod.Pkg] = mod.ImportPath
+					e.m.importPkg(mod)
 					c := *info
 					c.GoName = mod.Pkg + "." + info.GoName
 					return &c

@@ -210,7 +210,7 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		if strings.HasPrefix(name, d.Name+".") {
 			g := d.LocalTypeName(name) + typeArgs(d)
 			if d.Pkg != m.Pkg {
-				m.importPkgs[d.Pkg] = d.ImportPath
+				m.importPkg(d)
 				g = d.Pkg + "." + g
 			}
 			if d.typeKinds[name] == "class_decl" {

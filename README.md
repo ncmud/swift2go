@@ -84,9 +84,18 @@ go run github.com/ncmud/swift2go/cmd/swift2go -incremental -pkg path/to/SwiftPac
   file of the target is dumped again. A target's `.swiftmodule` is emitted again only when its
   fingerprints or its dependencies' change, and every file of a target that imports it is then dumped
   again.
-- The Go of every target in the run is still written from its whole AST, so the output matches a
-  clean run's. The emitter reads function bodies across files and modules, for example to decide
-  whether a call can modify its arguments, so an edited body can change the Go of other files.
+- A Go file is emitted again only when its Swift file's AST changed, or when something it read from
+  other files did: whether a function it calls can write shared state, the initial value of a
+  property whose default it spells out, or the names and once-per-package declarations that earlier
+  files took. The other Go files are left as they are, so the output still matches a clean run's, and
+  a file emitted with the content it already has is not written.
+  `out/.cache/<Target>/emit.gob` records what each Go file read.
+- Every Go file of a target is emitted again when the declarations of the target or of a target it
+  depends on change, when a function body declares a type or stops declaring one, when an initial
+  value changes whether a static or global is initialized lazily, and when the swift2go binary
+  changes.
+- `SWIFT2GO_CHECK_INCREMENTAL=1` emits the files a run would keep as well, and fails the target if any
+  of them would differ from the kept file.
 - The package graph that `swift package describe` reports is cached in `out/.cache/describe.gob` until
   the toolchain, a manifest, a `Package.resolved` or the names of the files in a target's directory change.
 - An incremental run does not write `out/ast/<Target>.json`.

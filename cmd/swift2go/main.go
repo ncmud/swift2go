@@ -2,6 +2,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -224,6 +226,12 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			fail(name, err)
 			continue
 		}
+		if incremental {
+			m.Interface = ifaces[name]
+			m.EmitCache = absPath(filepath.Join(outDir, ".cache", name, "emit.gob"))
+			m.EmitKey = transpilerKey()
+			m.CheckEmitCache = os.Getenv("SWIFT2GO_CHECK_INCREMENTAL") != ""
+		}
 		m.Overlay = overlays[name]
 		m.Mappings = mappings
 		if importPath, ok := maps[name]; ok {
@@ -257,6 +265,13 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 		m.ImportPath = path.Join(goModule, filepath.ToSlash(pkgOut))
 		if _, err := m.WriteGo(pkgOut); err != nil {
 			fail(name, err)
+			continue
+		}
+		if incremental {
+			fmt.Fprintf(os.Stderr, "swift2go: %s: kept %d of %d Go files\n", name, m.Reused, len(m.Files))
+		}
+		if len(m.Stale) > 0 {
+			fail(name, fmt.Errorf("the incremental run would have kept Go files that emitting changes: %s", strings.Join(m.Stale, ", ")))
 			continue
 		}
 		fmt.Print(m.Report())
@@ -325,6 +340,10 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			files[i], errs[i] = ast.Load(doc)
+			sum := sha256.Sum256(doc)
+			for j := range files[i] {
+				files[i][j].Hash = hex.EncodeToString(sum[:])
+			}
 		})
 	}
 	wg.Wait()
@@ -340,6 +359,20 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 	}
 	return all, nil
 }
+
+// transpilerKey identifies the running swift2go binary, whose emitter decides the Go of every file.
+var transpilerKey = sync.OnceValue(func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(exe) //nolint:gosec // the running executable
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+})
 
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
