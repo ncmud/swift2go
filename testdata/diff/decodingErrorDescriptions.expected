@@ -1,0 +1,12 @@
+DecodingError.dataCorrupted: Data was corrupted. Path: items[1].kind. Debug description: Cannot initialize DEDKind from invalid String value zz
+DecodingError.typeMismatch: Expected value of type Int. Path: items[0].n. Debug description: Expected to decode Int but found a string instead.
+DecodingError.valueNotFound: Expected value of type Int. Path: items[0].n. Debug description: Cannot get value of type Int -- found null value instead
+DecodingError.keyNotFound: Key 'n' not found in keyed decoding container. Path: items[0]. Debug description: No value associated with key CodingKeys(stringValue: "n", intValue: nil) ("n").
+DecodingError.keyNotFound: Key 'name' not found in keyed decoding container. Debug description: No value associated with key CodingKeys(stringValue: "name", intValue: nil) ("name").
+DecodingError.typeMismatch: Expected value of type Dictionary<String, Any>. Debug description: Expected to decode Dictionary<String, Any> but found an array instead.
+DecodingError.typeMismatch: Expected value of type Int. Path: [1][1]. Debug description: Expected to decode Int but found a string instead.
+DecodingError.typeMismatch: Expected value of type Int. Path: a b[1]. Debug description: Expected to decode Int but found a string instead.
+DecodingError.dataCorrupted: Data was corrupted. Debug description: d. Underlying error: custom underlying
+DecodingError.dataCorrupted: Data was corrupted
+EncodingError.invalidValue: 1.5 (Double). Debug description: bad
+EncodingError.invalidValue: "s" (String)
