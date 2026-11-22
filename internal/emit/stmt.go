@@ -395,6 +395,7 @@ func (e *fileEmitter) bindPattern(p ast.Node, init ast.Node, declare bool) {
 			s = sinkStore
 		}
 		e.w("var %s %s = %s\n", name, gt, e.owned(init, s))
+		e.bindSliceBase(p, init)
 	case "pattern_typed", "pattern_binding", "pattern":
 		e.bindPattern(p.Child("sub_pattern"), init, declare)
 	case "pattern_any":

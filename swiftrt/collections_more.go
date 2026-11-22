@@ -580,3 +580,28 @@ func SliceFlatMapSet[T any, U comparable](xs []T, f func(T) map[U]struct{}) []U 
 	}
 	return out
 }
+
+// ArraySliceSubscriptRange is `slice[a..<b]` on an ArraySlice whose Swift indices start at lo.
+func ArraySliceSubscriptRange[T any](xs []T, lo int, r Range[int]) []T {
+	return SliceSubscriptRange(xs, Range[int]{r.Lo - lo, r.Hi - lo})
+}
+
+// ArraySliceSubscriptClosedRange is `slice[a...b]` on an ArraySlice whose Swift indices start at lo.
+func ArraySliceSubscriptClosedRange[T any](xs []T, lo int, r ClosedRange[int]) []T {
+	return SliceSubscriptRange(xs, Range[int]{r.Lo - lo, r.Hi + 1 - lo})
+}
+
+// ArraySliceSubscriptPartialRangeFrom is `slice[a...]` on an ArraySlice whose Swift indices start at lo.
+func ArraySliceSubscriptPartialRangeFrom[T any](xs []T, lo int, r PartialRangeFrom[int]) []T {
+	return SliceSubscriptRange(xs, Range[int]{r.Lo - lo, len(xs)})
+}
+
+// ArraySliceSubscriptPartialRangeUpTo is `slice[..<b]` on an ArraySlice whose Swift indices start at lo.
+func ArraySliceSubscriptPartialRangeUpTo[T any](xs []T, lo int, r PartialRangeUpTo[int]) []T {
+	return SliceSubscriptRange(xs, Range[int]{0, r.Hi - lo})
+}
+
+// ArraySliceSubscriptPartialRangeThrough is `slice[...b]` on an ArraySlice whose Swift indices start at lo.
+func ArraySliceSubscriptPartialRangeThrough[T any](xs []T, lo int, r PartialRangeThrough[int]) []T {
+	return SliceSubscriptRange(xs, Range[int]{0, r.Hi + 1 - lo})
+}

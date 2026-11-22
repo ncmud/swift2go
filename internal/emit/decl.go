@@ -59,6 +59,7 @@ type fileEmitter struct {
 	partsOf       uintptr             // the literal or memberwise call owned is emitting, by node
 	keeps         int                 // owned is emitting a call whose result is stored or returned
 	lent          map[uintptr]bool    // closures a library call holds only inside its result
+	sliceLos      map[string]string   // local ArraySlice constant → the Go variable holding its start index
 }
 
 func (e *fileEmitter) w(format string, args ...any) { fmt.Fprintf(&e.b, format, args...) }
