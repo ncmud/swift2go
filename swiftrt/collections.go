@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"cmp"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -323,20 +324,34 @@ func MapOrdered[K comparable, V any](m map[K]V) []struct {
 
 // SortKeys orders map keys deterministically: numerically or lexically when the key is ordered, else by description.
 func SortKeys[K comparable](keys []K) {
-	slices.SortFunc(keys, func(a, b K) int { return compareAny(a, b) })
+	slices.SortFunc(keys, func(a, b K) int {
+		if c, ok := compareOrdered(a, b); ok {
+			return c
+		}
+		return cmp.Compare(Str(a), Str(b))
+	})
 }
 
+// compareAny orders two values of a Go-ordered kind. It panics on any other kind, whose Swift ordering
+// is the type's own `<`.
 func compareAny(a, b any) int {
+	if c, ok := compareOrdered(a, b); ok {
+		return c
+	}
+	panic(fmt.Sprintf("swiftrt: no ordering for %T", a))
+}
+
+func compareOrdered(a, b any) (int, bool) {
 	ra, rb := reflect.ValueOf(a), reflect.ValueOf(b)
 	switch ra.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return cmp.Compare(ra.Int(), rb.Int())
+		return cmp.Compare(ra.Int(), rb.Int()), true
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return cmp.Compare(ra.Uint(), rb.Uint())
+		return cmp.Compare(ra.Uint(), rb.Uint()), true
 	case reflect.Float32, reflect.Float64:
-		return cmp.Compare(ra.Float(), rb.Float())
+		return cmp.Compare(ra.Float(), rb.Float()), true
 	case reflect.String:
-		return cmp.Compare(ra.String(), rb.String())
+		return cmp.Compare(ra.String(), rb.String()), true
 	}
-	return cmp.Compare(Str(a), Str(b))
+	return 0, false
 }
