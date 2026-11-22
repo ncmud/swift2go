@@ -243,6 +243,7 @@ replaces the Swift file of the same name, which is then not translated: `socket_
 | closures, method references, `@autoclosure` | function literals |
 | `Codable` (synthesized or hand-written) | a JSON-shaped tree in `swiftrt`, Foundation-compatible output |
 | `Regex` literals | RE2 with Swift's Unicode word boundaries emulated |
+| `NSRegularExpression` | RE2 with ICU's Unicode classes, or `regexp2`'s backtracking engine for lookaround and backreferences |
 | `async`/`await`, `Task`, `AsyncStream`, `for await` | goroutines and channels in `swiftrt` |
 | swift-testing `@Test`, `#expect`, `#require`, `arguments:` | `func TestX(t *testing.T)` and subtests |
 | freestanding expression macros | the compiler's recorded expansion |

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"strings"
+
+	"github.com/dlclark/regexp2"
 )
 
 // NSError is a Foundation `NSError` thrown by runtime APIs that report Cocoa errors.
@@ -30,24 +32,89 @@ func NSRegularExpressionEscapedPatternFor(s string) string {
 	return b.String()
 }
 
-// Regex is Foundation `NSRegularExpression`, compiled with Go's RE2 after ICU class widening.
+// Regex is Foundation `NSRegularExpression`, compiled with Go's RE2 after ICU class widening, or with
+// a backtracking engine when the pattern uses ICU syntax RE2 lacks.
 type Regex struct {
 	Pattern string
 	re      *regexp.Regexp
+	bt      *regexp2.Regexp
 }
 
 // NSRegularExpressionInitPattern is Foundation `NSRegularExpression(pattern:)`. An invalid pattern
-// throws NSCocoaErrorDomain 2048 as on Linux; a valid ICU pattern RE2 cannot run (lookaround,
-// backreferences, possessive quantifiers, ICU-only escapes) panics as unsupported.
+// throws NSCocoaErrorDomain 2048 as on Linux. A valid ICU pattern RE2 cannot run (lookaround,
+// backreferences, possessive quantifiers) runs on regexp2's backtracking engine; one neither engine
+// accepts (ICU-only escapes) panics as unsupported.
 func NSRegularExpressionInitPattern(pattern string) *Regex {
 	re, err := icuRegexCompile(pattern, false)
 	if err != nil {
 		if icuOnlySyntax(pattern, err) {
-			panic("swiftrt: regular expression not supported by RE2: " + pattern + ": " + err.Error())
+			bt, btErr := regexp2.Compile(pattern, regexp2.Unicode)
+			if btErr != nil {
+				panic("swiftrt: regular expression not supported by RE2 or regexp2: " + pattern + ": " + err.Error())
+			}
+			return &Regex{Pattern: pattern, bt: bt}
 		}
 		panic(Throw(NSError{Domain: "NSCocoaErrorDomain", Code: 2048, Msg: "The operation could not be completed. The value is invalid."}))
 	}
 	return &Regex{Pattern: pattern, re: re}
+}
+
+// findAll is the submatch byte offsets of every non-overlapping match in s, as
+// regexp.FindAllStringSubmatchIndex reports them.
+func (r *Regex) findAll(s string) [][]int {
+	if r.bt == nil {
+		return r.re.FindAllStringSubmatchIndex(s, -1)
+	}
+	var out [][]int
+	runes := runeByteOffsets(s)
+	m, err := r.bt.FindStringMatch(s)
+	for err == nil && m != nil {
+		out = append(out, backtrackLoc(m, runes))
+		m, err = r.bt.FindNextMatch(m)
+	}
+	if err != nil {
+		panic("swiftrt: regexp2: " + err.Error())
+	}
+	return out
+}
+
+// find is the submatch byte offsets of the first match in s, or nil.
+func (r *Regex) find(s string) []int {
+	if r.bt == nil {
+		return r.re.FindStringSubmatchIndex(s)
+	}
+	m, err := r.bt.FindStringMatch(s)
+	if err != nil {
+		panic("swiftrt: regexp2: " + err.Error())
+	}
+	if m == nil {
+		return nil
+	}
+	return backtrackLoc(m, runeByteOffsets(s))
+}
+
+// runeByteOffsets maps each rune index of s, and its length, to a byte offset.
+func runeByteOffsets(s string) []int {
+	out := make([]int, 0, len(s)+1)
+	for i := range s {
+		out = append(out, i)
+	}
+	return append(out, len(s))
+}
+
+// backtrackLoc converts a regexp2 match, whose positions count runes, to byte offsets in the layout
+// of regexp.FindStringSubmatchIndex: -1 for a group that did not participate.
+func backtrackLoc(m *regexp2.Match, runes []int) []int {
+	groups := m.Groups()
+	loc := make([]int, 2*len(groups))
+	for i, g := range groups {
+		if len(g.Captures) == 0 {
+			loc[2*i], loc[2*i+1] = -1, -1
+			continue
+		}
+		loc[2*i], loc[2*i+1] = runes[g.Index], runes[g.Index+g.Length]
+	}
+	return loc
 }
 
 // icuOnlySyntax reports whether RE2 rejected pattern for a construct ICU accepts.
@@ -59,6 +126,9 @@ func icuOnlySyntax(pattern string, err error) bool {
 	switch se.Code {
 	case syntax.ErrInvalidPerlOp:
 		return true
+	case syntax.ErrInvalidNamedCapture:
+		// RE2 reads lookbehind's `(?<=` and `(?<!` as a malformed named group.
+		return strings.HasPrefix(se.Expr, "(?<=") || strings.HasPrefix(se.Expr, "(?<!")
 	case syntax.ErrInvalidEscape:
 		if len(se.Expr) >= 2 {
 			c := se.Expr[1]
@@ -158,7 +228,7 @@ func NSTextCheckingResultRangeAt(m TextCheckingResult, i int) Range[int] { retur
 func NSRegularExpressionMatchesInRange(re *Regex, s string, r Range[int]) []TextCheckingResult {
 	lo, sub := nsRegexSearchRange(s, r)
 	out := []TextCheckingResult{}
-	for _, loc := range re.re.FindAllStringSubmatchIndex(sub, -1) {
+	for _, loc := range re.findAll(sub) {
 		out = append(out, textCheckingResult(s, lo, loc))
 	}
 	return out
@@ -168,7 +238,7 @@ func NSRegularExpressionMatchesInRange(re *Regex, s string, r Range[int]) []Text
 // the first match inside the UTF-16 range r of s, or nil.
 func NSRegularExpressionFirstMatchInRange(re *Regex, s string, r Range[int]) *TextCheckingResult {
 	lo, sub := nsRegexSearchRange(s, r)
-	loc := re.re.FindStringSubmatchIndex(sub)
+	loc := re.find(sub)
 	if loc == nil {
 		return nil
 	}
@@ -220,5 +290,45 @@ func NSRegularExpressionStringByReplacingMatchesInOptionsRangeWithTemplate(re *R
 		panic(fmt.Sprintf("swiftrt: NSRegularExpression.MatchingOptions %#x are not supported", options.RawValue))
 	}
 	lo, sub := nsRegexSearchRange(s, r)
-	return s[:lo] + re.re.ReplaceAllString(sub, icuTemplate(template)) + s[lo+len(sub):]
+	if re.bt == nil {
+		return s[:lo] + re.re.ReplaceAllString(sub, icuTemplate(template)) + s[lo+len(sub):]
+	}
+	var b strings.Builder
+	last := 0
+	for _, loc := range re.findAll(sub) {
+		b.WriteString(sub[last:loc[0]])
+		expandICUTemplate(&b, template, sub, loc)
+		last = loc[1]
+	}
+	b.WriteString(sub[last:])
+	return s[:lo] + b.String() + s[lo+len(sub):]
+}
+
+// expandICUTemplate writes an ICU replacement template for one match: `$n` is capture group n (as
+// many digits as name a group) and a backslash makes the next character literal.
+func expandICUTemplate(b *strings.Builder, template, s string, loc []int) {
+	groups := len(loc) / 2
+	for i := 0; i < len(template); i++ {
+		c := template[i]
+		switch {
+		case c == '\\' && i+1 < len(template):
+			i++
+			b.WriteByte(template[i])
+		case c == '$' && i+1 < len(template) && template[i+1] >= '0' && template[i+1] <= '9':
+			n, j := 0, i+1
+			for j < len(template) && template[j] >= '0' && template[j] <= '9' && (n*10+int(template[j]-'0')) < groups {
+				n = n*10 + int(template[j]-'0')
+				j++
+			}
+			if j == i+1 {
+				n, j = int(template[i+1]-'0'), i+2
+			}
+			if n < groups && loc[2*n] >= 0 {
+				b.WriteString(s[loc[2*n]:loc[2*n+1]])
+			}
+			i = j - 1
+		default:
+			b.WriteByte(c)
+		}
+	}
 }

@@ -1,0 +1,8 @@
+Type {SEND quest journal lore.frag|QUEST Journal lore.frag} or quest abandon lore.frag.two, {SEND quest accept lore.frag|quest accept lore.frag}.
+😀 quest accept lore.frag_x then {SEND quest complete lore.frag|quest complete lore.frag}
+["a", "a"]
+["y/y/-", "yz/y/z"]
+["y"]
+["bb/b", "cc/c"]
+hi
+<hi>$! 😀 <yo>$! no
