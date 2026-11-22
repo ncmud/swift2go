@@ -225,8 +225,27 @@ var CommandLineArgc = int32(len(os.Args))
 
 // CFExecv is C `execv(_:_:)`: it replaces this process with the program at path, given argv and
 // this process's environment. It returns only on failure: -1 with errno set.
+//
+// The descriptors of an installed DescriptorIO that is an ExecHandoff go to the new program as well.
 func CFExecv(path *any, argv any) int32 {
-	return failed[int32](syscall.Exec(cStringArg(path), cStringList(argv), os.Environ()))
+	env := os.Environ()
+	var handoff ExecHandoff
+	if p := descriptorIO.Load(); p != nil {
+		handoff, _ = (*p).(ExecHandoff)
+	}
+	if handoff != nil {
+		extra, err := handoff.PrepareExec()
+		if err != nil {
+			handoff.AbortExec()
+			return failed[int32](err)
+		}
+		env = append(env, extra...)
+	}
+	err := syscall.Exec(cStringArg(path), cStringList(argv), env)
+	if handoff != nil {
+		handoff.AbortExec()
+	}
+	return failed[int32](err)
 }
 
 // spawnFileActions is a C `posix_spawn_file_actions_t`: descriptor changes to make in the child,
