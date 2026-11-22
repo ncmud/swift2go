@@ -2,8 +2,6 @@ package swiftrt
 
 import (
 	"strings"
-
-	"github.com/rivo/uniseg"
 )
 
 // mapCase is s with each scalar mapped by Swift's full case mapping: special for the scalars
@@ -29,17 +27,30 @@ func hasPrefixChars(s, p string) bool {
 	if strings.HasPrefix(s, p) {
 		return graphemeBoundary(s, len(p))
 	}
-	if isASCII(s) && isASCII(p) {
+	if len(s) > 0 && len(p) > 0 && s[0] < 0x80 && p[0] < 0x80 && s[0] != p[0] {
 		return false
 	}
-	cs, ps := StringChars(s), StringChars(p)
-	return len(ps) <= len(cs) && charsEquivalent(cs[:len(ps)], ps)
+	rest, state := s, -1
+	for _, pc := range StringChars(p) {
+		if rest == "" {
+			return false
+		}
+		var c string
+		c, rest, state = firstGrapheme(rest, state)
+		if !charsEquivalent([]Character{c}, []Character{pc}) {
+			return false
+		}
+	}
+	return true
 }
 
 // hasSuffixChars is Swift `hasSuffix`: p's Characters end s's, compared by canonical equivalence.
 func hasSuffixChars(s, p string) bool {
 	if strings.HasSuffix(s, p) {
 		return graphemeBoundary(s, len(s)-len(p))
+	}
+	if len(s) > 0 && len(p) > 0 && s[len(s)-1] < 0x80 && p[len(p)-1] < 0x80 && s[len(s)-1] != p[len(p)-1] {
+		return false
 	}
 	if isASCII(s) && isASCII(p) {
 		return false
@@ -66,7 +77,7 @@ func graphemeBoundary(s string, i int) bool {
 	rest := s
 	for off < i {
 		var c string
-		c, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		c, rest, state = firstGrapheme(rest, state)
 		off += len(c)
 	}
 	return off == i

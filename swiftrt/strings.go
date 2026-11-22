@@ -6,8 +6,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/rivo/uniseg"
 )
 
 // Character is a Swift Character: one extended grapheme cluster.
@@ -24,15 +22,17 @@ func (s Substring) String() string { return s.Base[s.Lo:s.Hi] }
 // StringChars splits s into grapheme clusters, Swift's Characters.
 func StringChars(s string) []Character {
 	out := make([]Character, 0, len(s))
-	g := uniseg.NewGraphemes(s)
-	for g.Next() {
-		out = append(out, g.Str())
+	state := -1
+	for len(s) > 0 {
+		var c string
+		c, s, state = firstGrapheme(s, state)
+		out = append(out, c)
 	}
 	return out
 }
 
 func graphemeLen(s string) int {
-	_, rest, _, _ := uniseg.FirstGraphemeClusterInString(s, -1)
+	_, rest, _ := firstGrapheme(s, -1)
 	return len(s) - len(rest)
 }
 
@@ -40,13 +40,22 @@ func lastGrapheme(s string) (Character, int) {
 	if s == "" {
 		return "", 0
 	}
-	chars := StringChars(s)
-	last := chars[len(chars)-1]
-	return last, len(s) - len(last)
+	n := len(s)
+	if s[n-1] < 0x80 && (n == 1 || s[n-2] < 0x80) {
+		if n > 1 && s[n-2] == '\r' && s[n-1] == '\n' {
+			return s[n-2:], n - 2
+		}
+		return s[n-1:], n - 1
+	}
+	var last string
+	for rest, state := s, -1; rest != ""; {
+		last, rest, state = firstGrapheme(rest, state)
+	}
+	return last, n - len(last)
 }
 
 // StringCount is String.count (grapheme clusters).
-func StringCount(s string) int { return uniseg.GraphemeClusterCount(s) }
+func StringCount(s string) int { return graphemeCount(s) }
 
 // StringIsEmpty is String.isEmpty.
 func StringIsEmpty(s string) bool { return s == "" }
