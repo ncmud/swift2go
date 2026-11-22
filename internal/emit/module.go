@@ -80,6 +80,21 @@ type Module struct {
 	mutatingTypes  map[string]bool
 	overridden     map[string]bool // USRs of class members some subclass overrides
 	superOf        map[string]string
+	typeAliases    map[string]string // qualified typealias name → mangled aliased type
+	members        map[string][]*DeclInfo
+}
+
+// membersOf lists the declarations this module makes in type q and its extensions.
+func (m *Module) membersOf(q string) []*DeclInfo {
+	if m.members == nil {
+		m.members = map[string][]*DeclInfo{}
+		for _, d := range m.sortedDecls() {
+			if d.Owner != "" && d.Node != nil {
+				m.members[d.Owner] = append(m.members[d.Owner], d)
+			}
+		}
+	}
+	return m.members[q]
 }
 
 // IsOptionSet reports whether the qualified Swift type conforms to OptionSet, in this module or a dependency.
@@ -184,7 +199,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
 		protoReqs: map[string][]ast.Node{}, protoParents: map[string][]string{}, conformers: map[string][]string{},
-		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, localFuncs: map[string]ast.Node{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
+		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, localFuncs: map[string]ast.Node{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, typeAliases: map[string]string{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
 	}
 	var syms []string
 	for _, f := range files {
@@ -370,6 +385,8 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				}
 			}
 			m.index(n.List("members"), q, kind)
+		case "typealias":
+			m.typeAliases[m.qualify(owner, n.Name())] = n.Str("type")
 		case "func_decl", "constructor_decl", "var_decl", "enum_element_decl", "subscript_decl":
 			switch n.Kind() {
 			case "func_decl", "constructor_decl":

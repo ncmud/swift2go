@@ -300,7 +300,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 			}
 			for _, pm := range append([]*Module{e.m}, e.m.Deps...) {
 				for _, d := range pm.decls {
-					if d.ProtoExt && d.Owner == other && d.Kind == "func_decl" && funcSignatureKey(d.Node) == funcSignatureKey(impl) {
+					if d.ProtoExt && d.Owner == other && d.Kind == "func_decl" && funcSignatureKey(d.Node) == funcSignatureKey(impl) && e.m.extensionApplies(d.Node, q, other, pm) {
 						return true
 					}
 				}
@@ -323,6 +323,9 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				if !info.ProtoExt || info.Owner != proto || info.Kind != "func_decl" || defined[funcSignatureKey(info.Node)] {
 					continue
 				}
+				if !e.m.extensionApplies(info.Node, q, proto, pm) {
+					continue
+				}
 				req := e.m.inheritedRequirementName(proto, info.Node)
 				if req == "" || overridden(proto, info.Node) {
 					continue
@@ -341,6 +344,95 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 			}
 		}
 	}
+}
+
+// extensionApplies reports whether the where clause of the protocol-extension member fn holds for the
+// conformer q, so a default from `extension P where Assoc == X` reaches only the conformers that bind
+// Assoc to X. A requirement it cannot decide counts as holding.
+func (m *Module) extensionApplies(fn ast.Node, q, proto string, pm *Module) bool {
+	sig := fn.Child("generic_signature")
+	params := sig.Strings("generic_params")
+	if len(params) == 0 {
+		return true
+	}
+	self := m.demangle(params[0])
+	for _, r := range sig.List("generic_reqs") {
+		first := m.demangle(r.Str("first_type"))
+		var subject *types.Type
+		switch {
+		case first == self:
+			subject = &types.Type{Kind: types.Named, Name: q}
+		case strings.HasPrefix(first, self+"."+proto+"."):
+			assoc := strings.TrimPrefix(first, self+"."+proto+".")
+			subject = m.assocWitness(q, proto, assoc, pm)
+		}
+		if subject == nil {
+			continue
+		}
+		switch r.Str("kind") {
+		case "same_type":
+			if want := m.typeOf(r.Str("second_type")); want.Kind != types.Unknown && want.String() != subject.String() {
+				return false
+			}
+		case "conforms_to":
+			if p := m.demangle(r.Str("protocol")); subject.Kind == types.Named && p != proto && !m.conformsTo(subject.Name, p) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// conformsTo reports whether the qualified Swift type q declares a conformance to protocol p, in this
+// module or a dependency.
+func (m *Module) conformsTo(q, p string) bool {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if slices.Contains(mod.conformers[p], q) {
+			return true
+		}
+	}
+	return false
+}
+
+// assocWitness is the type conformer q binds to associated type assoc of protocol proto: a member type
+// or typealias of that name, or else the type q's implementation of a requirement uses where the
+// requirement names the associated type. It is nil when neither says.
+func (m *Module) assocWitness(q, proto, assoc string, pm *Module) *types.Type {
+	mods := append([]*Module{m}, m.Deps...)
+	for _, mod := range mods {
+		if mangled, ok := mod.typeAliases[q+"."+assoc]; ok {
+			return mod.typeOf(mangled)
+		}
+		if _, ok := mod.typeKinds[q+"."+assoc]; ok {
+			return &types.Type{Kind: types.Named, Name: q + "." + assoc}
+		}
+	}
+	isAssoc := func(mangled string) bool {
+		return strings.HasSuffix(pm.demangle(mangled), "."+proto+"."+assoc)
+	}
+	for _, r := range pm.protoReqs[proto] {
+		if r.Kind() != "func_decl" {
+			continue
+		}
+		key := funcSignatureKey(r)
+		for _, mod := range mods {
+			for _, d := range mod.membersOf(q) {
+				if d.Kind != "func_decl" || d.ProtoExt || funcSignatureKey(d.Node) != key {
+					continue
+				}
+				if isAssoc(r.Str("result")) {
+					return mod.typeOf(d.Node.Str("result"))
+				}
+				rps, dps := r.Child("params").List("params"), d.Node.Child("params").List("params")
+				for i, rp := range rps {
+					if i < len(dps) && isAssoc(rp.Str("interface_type")) {
+						return mod.typeOf(dps[i].Str("interface_type"))
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // funcSignatureKey is a function's base name and argument labels, which tell apart overloads such as
