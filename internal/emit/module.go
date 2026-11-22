@@ -24,6 +24,9 @@ type DeclInfo struct {
 	Settable bool
 	// Observed marks a stored property with willSet/didSet, assigned through SetX.
 	Observed bool
+	// NotWitness marks a class member that shares a protocol requirement's name but does not satisfy
+	// it, because a superclass conforms through the protocol's default.
+	NotWitness bool
 	// Overrides is the USR of the superclass member this member overrides.
 	Overrides string
 	// GenericFree marks a method whose generic parameter needs a protocol's static requirements; Go methods
@@ -203,6 +206,11 @@ func (m *Module) HasSubclass(goName string) bool {
 		}
 	}
 	return false
+}
+
+// inHierarchy reports whether a local class has a superclass or a subclass.
+func (m *Module) inHierarchy(goName string) bool {
+	return m.Superclass(goName) != "" || m.HasSubclass(goName)
 }
 
 // IsAncestor reports whether anc is goName's superclass, directly or transitively. Both names may be
@@ -698,7 +706,69 @@ func (m *Module) assignNames() {
 			info.GoName = m.memberName(info, owner, "Subscript"+labelSuffix(paramLabels(info.Node)))
 		}
 	}
+	m.settleClassMemberNames()
 	m.dedupePackageNames()
+}
+
+// settleClassMemberNames gives every member of an override chain the Go name of the chain's root, so
+// a call through any class in the chain reaches the root's dispatching method. A class member that
+// overrides nothing but has the name of a requirement of a protocol a superclass conforms to is
+// renamed: the superclass's conformance uses the protocol's default, which Swift keeps for
+// subclasses, so the member must not satisfy the Go interface in its place.
+func (m *Module) settleClassMemberNames() {
+	classQ := map[string]string{}
+	for _, d := range m.decls {
+		if d.Kind == "class_decl" && d.Node != nil {
+			classQ[d.GoName] = m.qualify(d.Owner, d.Node.Name())
+		}
+	}
+	usrs := slices.Sorted(maps.Keys(m.decls))
+	member := func(info *DeclInfo) bool {
+		return (info.Kind == "func_decl" || info.Kind == "var_decl" || info.Kind == "subscript_decl") && !info.Static && m.typeKinds[info.Owner] == "class_decl"
+	}
+	for _, usr := range usrs {
+		info := m.decls[usr]
+		if !member(info) || info.Overrides != "" {
+			continue
+		}
+		owner := m.LocalTypeName(info.Owner)
+		for sup := m.Superclass(owner); sup != ""; sup = m.Superclass(sup) {
+			if m.defaultWitnessNamed(classQ[sup], info.Node.Kind(), info.Node.Name()) {
+				info.GoName += "_" + owner
+				info.NotWitness = true
+				break
+			}
+		}
+	}
+	for _, usr := range usrs {
+		info := m.decls[usr]
+		if !member(info) || info.Overrides == "" {
+			continue
+		}
+		root := info
+		for root.Overrides != "" && m.decls[root.Overrides] != nil {
+			root = m.decls[root.Overrides]
+		}
+		info.GoName, info.NotWitness = root.GoName, root.NotWitness
+	}
+}
+
+// defaultWitnessNamed reports whether the class q conforms to a protocol with a requirement of the
+// given kind and name.
+func (m *Module) defaultWitnessNamed(q, kind, name string) bool {
+	for proto, types := range m.conformers {
+		if !slices.Contains(types, q) {
+			continue
+		}
+		for _, mod := range append([]*Module{m}, m.Deps...) {
+			for _, r := range mod.protoReqs[proto] {
+				if r.Kind() == kind && r.Name() == name && !r.Bool("static") {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // dedupePackageNames renames package-level Go names that collide, keeping type names unchanged.

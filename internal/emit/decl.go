@@ -35,7 +35,9 @@ type fileEmitter struct {
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
-	initRet       string                  // what `return` yields inside an init: "self" or "&self"
+	initRet       string                  // what `return` yields inside an init: "self", "&self", or "true" in a class initializer body
+	initFail      string                  // what `return nil` yields inside a failable init
+	initOwner     string                  // the class whose initializer body is being emitted
 	resultType    string
 	throws        bool
 	opaque        map[string]string // opaque_value_expr identity → Go expression
@@ -1074,7 +1076,7 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 		erased, erasedResult = e.m.assocErasure(n, info.Owner)
 	}
 	e.erased = erased
-	params, _ := e.paramList(n)
+	params, names := e.paramList(n)
 	e.erased = nil
 	res := e.resultGo(n)
 	if erasedResult {
@@ -1133,11 +1135,7 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 			}
 			e.inoutParams["self"] = true
 		}
-		e.w("func (self %s) %s(%s) %s ", recv, info.GoName, params, res)
-		_, names := e.paramList(n)
-		var post string
-		e.preamble, post = e.overrideHooks(info, self, params, names, res, false)
-		defer e.w("%s", post)
+		e.w("func (self %s) %s(%s) %s ", recv, e.dispatched(info, self, recv, params, names, res), params, res)
 	}
 	e.preamble += e.unerase(n, erased)
 	e.body(n, res)
@@ -1349,10 +1347,7 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		if self.Kind == "class_decl" {
 			recv = "*" + recv
 		}
-		e.w("func (self %s) %s() %s ", recv, info.GoName, res)
-		var post string
-		e.preamble, post = e.overrideHooks(info, self, "", "", res, true)
-		defer e.w("%s", post)
+		e.w("func (self %s) %s() %s ", recv, e.dispatched(info, self, recv, "", "", res), res)
 	}
 	e.body(getter, res)
 	e.w("\n\n")
@@ -1451,6 +1446,107 @@ func (e *fileEmitter) setterVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	e.w("}\n\n")
 }
 
+// classCtor emits an initializer of a class that has a superclass or subclasses as two functions:
+// the allocator New<X>, which creates the object, makes it its own most-derived object and runs
+// the initializer on it, and the initializer body, a method returning whether it succeeded. A
+// subclass's body runs its superclass's body on its embedded base, so the object keeps one identity
+// through initialization and calls from a superclass initializer dispatch to the subclass.
+func (e *fileEmitter) classCtor(n ast.Node, info, self *DeclInfo, typeNode ast.Node) {
+	params, names := e.paramList(n)
+	t := self.GoName + e.selfTypeArgs(self)
+	recv := "*" + t
+	failable := n.Bool("failable")
+	ret := "*" + t
+	if failable {
+		e.w("func %s%s(%s) %s {\nself := &%s{}\nself.SwiftSub = self\nif !self.%s(%s) {\nreturn nil\n}\nreturn self\n}\n\n", info.GoName, e.selfTypeDecl(self), params, ret, t, e.initBodyName(info), names)
+	} else {
+		e.w("func %s%s(%s) %s {\nself := &%s{}\nself.SwiftSub = self\nself.%s(%s)\nreturn self\n}\n\n", info.GoName, e.selfTypeDecl(self), params, ret, t, e.initBodyName(info), names)
+	}
+	e.w("func (self %s) %s(%s) bool {\n", recv, e.dispatched(info, self, recv, params, names, "bool"), params)
+	saveRet, saveFail, saveInit, saveOwner := e.initRet, e.initFail, e.inInit, e.initOwner
+	e.initRet, e.initFail, e.inInit, e.initOwner = "true", "false", true, info.Owner
+	defer func() { e.initRet, e.initFail, e.inInit, e.initOwner = saveRet, saveFail, saveInit, saveOwner }()
+	if !n.Bool("convenience") {
+		e.storedPropertyInits(typeNode)
+	}
+	b := n.Child("body")
+	if b != nil {
+		e.paramNames = paramNameSet(n)
+		e.stmts(b.List("elements"))
+	}
+	if b == nil || !endsWithReturn(b) {
+		e.w("return true\n")
+	}
+	e.w("}\n\n")
+	if ps := n.Child("params").List("params"); len(ps) == 1 && !failable && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Decoder" && !n.Implicit() && !strings.Contains(ret, "[") {
+		e.w("func init() { swiftrt.RegisterDecoder(func(d *swiftrt.Decoder) %s { return %s(d) }) }\n\n", ret, info.GoName)
+	}
+}
+
+// isUnimplementedInitStub reports whether n is an initializer the compiler adds to a subclass that
+// does not inherit its superclass's designated initializers. Swift code cannot call it.
+func isUnimplementedInitStub(n ast.Node) bool {
+	if !n.Implicit() {
+		return false
+	}
+	stub := false
+	ast.Walk(n.Child("body"), func(c ast.Node) {
+		if c.Kind() == "declref_expr" && c.Child("decl").Str("base_name") == "_unimplementedInitializer" {
+			stub = true
+		}
+	})
+	return stub
+}
+
+// initializing reports whether an assignment to the observed property info inside the current
+// initializer stores directly: an initializer skips the observers of its own class's properties, but
+// a subclass initializer runs the observers of the properties it inherits.
+func (e *fileEmitter) initializing(info *DeclInfo) bool {
+	return e.inInit && (e.initOwner == "" || info.Owner == e.initOwner)
+}
+
+// initBodyName is the method holding a class initializer's body.
+func (e *fileEmitter) initBodyName(info *DeclInfo) string {
+	if root := e.overrideRoot(info, &DeclInfo{Kind: "class_decl"}); root != nil {
+		return overrideHook(root)
+	}
+	return classMethodName(info)
+}
+
+// initDispatch is the call `self.init(...)` makes in a class initializer: the most-derived object's
+// override of the initializer when it is in an override chain.
+func (e *fileEmitter) initDispatch(info *DeclInfo, args string) string {
+	root := e.overrideRoot(info, &DeclInfo{Kind: "class_decl"})
+	if root == nil {
+		return "self." + classMethodName(info) + "(" + args + ")"
+	}
+	var ts []string
+	for _, p := range info.Node.Child("params").List("params") {
+		gt := e.m.GoType(e.m.typeOf(p.Str("interface_type")), e.generics)
+		if p.Bool("inout") {
+			gt = "*" + gt
+		}
+		ts = append(ts, gt)
+	}
+	hook := overrideHook(root)
+	return "self.SwiftSub.(interface{ " + hook + "(" + strings.Join(ts, ", ") + ") bool })." + hook + "(" + args + ")"
+}
+
+// storedPropertyInits assigns the initial values a type's stored properties declare.
+func (e *fileEmitter) storedPropertyInits(typeNode ast.Node) {
+	for _, mem := range typeNode.List("members") {
+		if mem.Kind() != "pattern_binding_decl" {
+			continue
+		}
+		for _, pe := range mem.List("pattern_entries") {
+			vi := e.findVar(typeNode, patternName(pe.Child("pattern")))
+			if vi != nil && !vi.Static && !vi.Computed && pe.Child("processed_init") != nil {
+				e.w("self.%s = %s\n", vi.GoName, e.expr(pe.Child("processed_init")))
+			}
+		}
+	}
+}
+
 func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 	saveIO := e.inoutParams
 	e.inoutParams = nil
@@ -1464,6 +1560,12 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 		return
 	}
 	if self.Kind == "enum_decl" && n.Implicit() {
+		return
+	}
+	if self.Kind == "class_decl" && e.m.inHierarchy(self.GoName) {
+		if !isUnimplementedInitStub(n) {
+			e.classCtor(n, info, self, typeNode)
+		}
 		return
 	}
 	params, _ := e.paramList(n)
@@ -1489,17 +1591,7 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 	} else {
 		e.w("var self %s\n", t)
 	}
-	for _, mem := range typeNode.List("members") {
-		if mem.Kind() != "pattern_binding_decl" {
-			continue
-		}
-		for _, pe := range mem.List("pattern_entries") {
-			vi := e.findVar(typeNode, patternName(pe.Child("pattern")))
-			if vi != nil && !vi.Static && !vi.Computed && pe.Child("processed_init") != nil {
-				e.w("self.%s = %s\n", vi.GoName, e.expr(pe.Child("processed_init")))
-			}
-		}
-	}
+	e.storedPropertyInits(typeNode)
 	saveInit := e.inInit
 	e.inInit = true
 	if b := n.Child("body"); b != nil && !n.Implicit() {
@@ -1526,38 +1618,52 @@ func (e *fileEmitter) exprGoType(n ast.Node) string {
 	return e.m.GoType(e.m.typeOf(n.Type()), e.generics)
 }
 
-// overrideHooks returns the dispatch preamble for a class member some subclass overrides, and the
-// Override_ forwarder a subclass's overriding member needs so its base can reach it.
-func (e *fileEmitter) overrideHooks(info, self *DeclInfo, params, names, res string, getter bool) (pre, post string) {
-	if self == nil || self.Kind != "class_decl" {
-		return "", ""
+// overrideRoot returns the member at the top of info's override chain, or nil when info is not a
+// class member that overrides or is overridden.
+func (e *fileEmitter) overrideRoot(info, self *DeclInfo) *DeclInfo {
+	if self == nil || self.Kind != "class_decl" || info.Static || !e.m.overridden[e.usrOf(info)] && info.Overrides == "" {
+		return nil
 	}
-	call := "Override_" + info.GoName + "(" + names + ")"
-	if e.m.overridden[e.usrOf(info)] {
+	root := info
+	for root.Overrides != "" && e.m.decls[root.Overrides] != nil {
+		root = e.m.decls[root.Overrides]
+	}
+	return root
+}
+
+// classMethodName is the Go method a class member's body is emitted as: an initializer's body is
+// Init_<suffix> of its allocator New<suffix>.
+func classMethodName(info *DeclInfo) string {
+	if info.Kind == "constructor_decl" {
+		return "Init_" + strings.TrimPrefix(info.GoName, "New")
+	}
+	return info.GoName
+}
+
+// overrideHook is the method name every implementation in root's override chain is emitted under.
+func overrideHook(root *DeclInfo) string { return "Override_" + classMethodName(root) }
+
+// dispatched returns the name to emit a class member's body under. A member in an override chain
+// has its body emitted as the chain's Override_ method, which super calls reach directly; the
+// chain's root also gets the dispatching method, which calls the most-derived object's Override_.
+func (e *fileEmitter) dispatched(info, self *DeclInfo, recv, params, names, res string) string {
+	root := e.overrideRoot(info, self)
+	if root == nil {
+		return classMethodName(info)
+	}
+	hook := overrideHook(root)
+	if root == info && info.Kind != "constructor_decl" {
 		ret := "return "
 		if res == "" {
 			ret = ""
 		}
-		root := self.GoName
-		for e.m.Superclass(root) != "" {
-			root = e.m.Superclass(root)
-		}
-		sub := "self.SwiftSub"
-		pre = fmt.Sprintf("if o, ok := %s.(interface{ Override_%s(%s) %s }); ok {\n%so.%s\n", sub, info.GoName, params, res, ret, call)
+		e.w("func (self %s) %s(%s) %s {\nif o, ok := self.SwiftSub.(interface{ %s(%s) %s }); ok {\n%so.%s(%s)\n", recv, classMethodName(info), params, res, hook, params, res, ret, hook, names)
 		if res == "" {
-			pre += "return\n"
+			e.w("return\n")
 		}
-		pre += "}\n"
+		e.w("}\n%sself.%s(%s)\n}\n\n", ret, hook, names)
 	}
-	if info.Overrides != "" {
-		ret := "return "
-		if res == "" {
-			ret = ""
-		}
-		target := "self." + info.GoName + "(" + names + ")"
-		post = fmt.Sprintf("func (self *%s) Override_%s(%s) %s {\n%s%s\n}\n\n", self.GoName, info.GoName, params, res, ret, target)
-	}
-	return pre, post
+	return hook
 }
 
 func (e *fileEmitter) usrOf(info *DeclInfo) string {
@@ -1651,7 +1757,7 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 		stored := ""
 		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
 			for _, d := range mod.decls {
-				if d.Kind != "var_decl" || d.Node == nil || d.Node.Name() != name {
+				if d.Kind != "var_decl" || d.Node == nil || d.Node.Name() != name || d.NotWitness {
 					continue
 				}
 				switch {
