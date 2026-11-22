@@ -877,6 +877,17 @@ func (e *fileEmitter) forEach(n ast.Node) {
 			e.w("for _, %s := range %s {\n", name(p), src)
 		}
 	default:
+		if src := e.expr(seq); e.m.mappedCall(src) {
+			// A mapped package's sequence is ranged over directly, so it can be a lazy iter.Seq.
+			if inner := unwrapPattern(p); inner != nil && inner.Kind() == "pattern_tuple" {
+				tmp := e.newTmp("el")
+				e.w("for %s := range %s {\n", tmp, src)
+				e.bindFromExpr(inner, tmp)
+			} else {
+				e.w("for %s := range %s {\n", name(p), src)
+			}
+			break
+		}
 		if inner := unwrapPattern(p); inner != nil && inner.Kind() == "pattern_tuple" {
 			tmp := e.newTmp("el")
 			e.w("for _, %s := range swiftrt.Iterate[%s](%s) {\n", tmp, e.m.GoType(e.m.typeOf(p.Type()), e.generics), e.expr(seq))
@@ -1059,6 +1070,9 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		if el == nil {
 			if t, ok := e.resultCase(p, subj); ok {
 				return t
+			}
+			if c := e.mappedCase(p, st); c != "" {
+				return subj + " == " + c
 			}
 			pt := st
 			if pt == nil {

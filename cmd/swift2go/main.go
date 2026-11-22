@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ncmud/swift2go/internal/ast"
@@ -21,6 +23,8 @@ func main() {
 	outDir := flag.String("out", "out", "output directory")
 	modules := flag.String("modules", "", "directory of built .swiftmodule files for dependencies")
 	buildDir := flag.String("build", "", "SwiftPM build directory with the package's built dependencies (default: the package's .build)")
+	maps := mapFlag{}
+	flag.Var(maps, "map", "use the Go package `Module=importpath` for a Swift module instead of transpiling it (repeatable)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: swift2go [flags] dump|transpile|stats <Target> [<TestTarget>]")
 		flag.PrintDefaults()
@@ -33,19 +37,37 @@ func main() {
 	if *buildDir == "" {
 		*buildDir = swiftmod.BuildDir(*pkgDir)
 	}
-	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules); err != nil {
+	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps); err != nil {
 		fmt.Fprintln(os.Stderr, "swift2go:", err)
 		os.Exit(1)
 	}
 }
 
-func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string) error {
+// mapFlag collects -map Module=importpath pairs.
+type mapFlag map[string]string
+
+func (f mapFlag) String() string { return "" }
+
+func (f mapFlag) Set(v string) error {
+	mod, importPath, ok := strings.Cut(v, "=")
+	if !ok || mod == "" || importPath == "" {
+		return fmt.Errorf("want Module=importpath, got %q", v)
+	}
+	f[mod] = importPath
+	return nil
+}
+
+func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag) error {
 	pkgDir = absPath(pkgDir)
 	targets, err := swiftmod.Describe(pkgDir)
 	if err != nil {
 		return err
 	}
 	goModule, err := currentModule()
+	if err != nil && cmd == "transpile" {
+		return err
+	}
+	mappings, err := foreignMappings(maps, names)
 	if err != nil && cmd == "transpile" {
 		return err
 	}
@@ -115,6 +137,19 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			continue
 		}
 		m.Deps = done
+		m.Mappings = mappings
+		if importPath, ok := maps[name]; ok {
+			// A mapped target is read for its declarations only: dependents import the hand-written package.
+			if t.Type == "test" {
+				fail(name, fmt.Errorf("a test target cannot be mapped"))
+				continue
+			}
+			m.ImportPath = importPath
+			fmt.Printf("%s: mapped to %s\n", name, importPath)
+			done = append(done, m)
+			byName[name] = m
+			continue
+		}
 		pkgOut := filepath.Join(outDir, strings.ToLower(name))
 		if t.Type == "test" {
 			if len(t.Deps) == 0 || byName[t.Deps[0]] == nil {
@@ -122,6 +157,10 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 				continue
 			}
 			under := byName[t.Deps[0]]
+			if _, ok := maps[under.Name]; ok {
+				fail(name, fmt.Errorf("its target %s is mapped to a Go package", under.Name))
+				continue
+			}
 			m.SetTarget(under)
 			pkgOut = filepath.Join(outDir, under.Pkg)
 		}
@@ -140,6 +179,35 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 		return fmt.Errorf("%d of %d targets not transpiled: %s", len(failures), len(names), strings.Join(failures, ", "))
 	}
 	return nil
+}
+
+// foreignMappings resolves the mapped modules that are not transpiled in this run. Their packages must be
+// importable from the current Go module; their exported names replace the runtime's.
+func foreignMappings(maps mapFlag, names []string) ([]emit.Mapping, error) {
+	inRun := map[string]bool{}
+	for _, n := range names {
+		inRun[n] = true
+	}
+	var mods []string
+	for mod := range maps {
+		if !inRun[mod] {
+			mods = append(mods, mod)
+		}
+	}
+	slices.Sort(mods)
+	var out []emit.Mapping
+	for _, mod := range mods {
+		dir, err := exec.Command("go", "list", "-f", "{{.Dir}}", maps[mod]).Output()
+		if err != nil {
+			return nil, fmt.Errorf("-map %s=%s: go list: %w", mod, maps[mod], err)
+		}
+		pkg, exports, generic, err := emit.PackageExports(strings.TrimSpace(string(dir)))
+		if err != nil {
+			return nil, fmt.Errorf("-map %s: %w", mod, err)
+		}
+		out = append(out, emit.Mapping{Module: mod, ImportPath: maps[mod], Package: pkg, Exports: exports, Generic: generic})
+	}
+	return out, nil
 }
 
 // failedDep returns a dependency of t, direct or not, that has failed in this run.

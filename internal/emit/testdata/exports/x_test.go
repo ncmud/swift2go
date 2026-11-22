@@ -1,0 +1,3 @@
+package exports
+
+func TestOnly() {}
