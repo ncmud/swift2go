@@ -820,6 +820,10 @@ func (e *fileEmitter) stdFuncValue(dem string, n ast.Node) string {
 	if sig.base == "environ" && (sig.owner == "Darwin" || sig.owner == "Glibc" || sig.owner == "Musl") {
 		return "swiftrt.CEnviron()"
 	}
+	if (sig.base == "SIG_DFL" || sig.base == "SIG_IGN" || sig.base == "SIG_ERR") && (sig.owner == "Darwin" || sig.owner == "Glibc" || sig.owner == "Musl") {
+		// The platform overlays define the signal dispositions as computed globals.
+		return "swiftrt.CMacro" + sig.base
+	}
 	return e.m.Unsup("std-func-value:"+sig.owner+"."+sig.base, e.where, e.exprGoType(n))
 }
 
