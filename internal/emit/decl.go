@@ -1807,6 +1807,12 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 		t += targs
 	}
 	e.w("func %s%s(%s) %s {\n", info.GoName, mergeTypeParams(e.selfTypeDecl(self), ownTypeParams), params, ret)
+	if ps := n.Child("params").List("params"); n.Implicit() && !failable && len(ps) == 1 && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Decoder" {
+		// The synthesized init(from:), called by name: the runtime decodes the type's coding keys.
+		d := goSafe(ps[0].Name())
+		e.w("return swiftrt.DecodeValue[%s](%s.Value, %s.CodingPath)\n}\n\n", ret, d, d)
+		return
+	}
 	if self.Kind == "class_decl" {
 		e.w("self := &%s{}\n", t)
 	} else {

@@ -1064,6 +1064,9 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 		var tests []string
 		isDefault := false
 		var bindPat ast.Node
+		var bindPats []ast.Node
+		var bindTestStrs []string
+		guarded := false
 		for _, item := range c.List("case_label_items") {
 			if item.Bool("default") {
 				isDefault = true
@@ -1082,8 +1085,13 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 				t = "(" + t + ") && " + e.withBindings(p, tmp, e.expr(g))
 			}
 			tests = append(tests, "("+t+")")
+			if whereExpr(item) != nil {
+				guarded = true
+			}
 			if patternBinds(p) {
 				bindPat = p
+				bindPats = append(bindPats, p)
+				bindTestStrs = append(bindTestStrs, t)
 			}
 		}
 		cond := strings.Join(tests, " || ")
@@ -1099,7 +1107,11 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 			e.w("} else if %s {\n", cond)
 		}
 		first = false
-		if bindPat != nil {
+		if len(bindPats) > 1 && !guarded {
+			// `case .a(let x), .b(let x):` binds x from whichever pattern matched.
+			e.bindOrigin = e.origin(subj)
+			e.alternativeBind(bindPats, bindTestStrs, tmp)
+		} else if bindPat != nil {
 			e.bindOrigin = e.origin(subj)
 			e.patternBind(bindPat, tmp)
 		}
@@ -1125,6 +1137,35 @@ func (e *fileEmitter) caseBody(b ast.Node) {
 	e.w("switch {\ndefault:\n")
 	e.stmts(els)
 	e.w("}\n")
+}
+
+// alternativeBind declares the variables a case's alternative patterns share, each taken from the
+// first pattern whose test holds.
+func (e *fileEmitter) alternativeBind(pats []ast.Node, tests []string, subj string) {
+	type binding struct{ name, slot string }
+	var names []binding
+	ast.Walk(map[string]any(pats[0]), func(n ast.Node) {
+		if n.Kind() == "pattern_named" {
+			b := binding{goSafe(n.Name()), e.newTmp("alt")}
+			names = append(names, b)
+			e.w("var %s %s\n", b.slot, e.m.GoType(e.m.typeOf(n.Type()), e.generics))
+		}
+	})
+	for i, p := range pats {
+		if i == 0 {
+			e.w("if %s {\n", tests[i])
+		} else {
+			e.w("} else if %s {\n", tests[i])
+		}
+		e.patternBind(p, subj)
+		for _, b := range names {
+			e.w("%s = %s\n", b.slot, b.name)
+		}
+	}
+	e.w("}\n")
+	for _, b := range names {
+		e.w("%s := %s\n_ = %s\n", b.name, b.slot, b.name)
+	}
 }
 
 func (e *fileEmitter) withBindings(p ast.Node, subj string, expr string) string {

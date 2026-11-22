@@ -238,6 +238,10 @@ func StringInitReflecting(v any) string { return describe(v, true) }
 func debugStr(v any) string { return describe(v, true) }
 
 func describe(v any, debug bool) string {
+	if t, ok := v.(thrownValue); ok {
+		// An `any Error` prints as the Swift value it holds.
+		v = t.value
+	}
 	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer {
 		// A pointer to a value type is an Optional. It has its pointee's methods, which must not be
 		// called through it: nil is "nil", and a value prints as Optional(...).

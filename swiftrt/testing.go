@@ -106,7 +106,7 @@ func ErrorOf(v any) error {
 // thrownValue is the error carrying a thrown Swift value that does not implement Go's error.
 type thrownValue struct{ value any }
 
-func (t thrownValue) Error() string { return fmt.Sprintf("%v", t.value) }
+func (t thrownValue) Error() string { return Str(t.value) }
 
 // SwiftDynamic exposes the thrown value to Is, As and MustAs.
 func (t thrownValue) SwiftDynamic() any { return t.value }
