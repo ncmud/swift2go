@@ -60,6 +60,41 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage transpil
   `swift build --target <Target>` first; if the outputs are missing, or older than a non-Swift file in
   the target's directory (such as the plugin's input), the target fails and names the command to run.
 
+### Replacing a module with a Go package
+
+`-map Module=importpath` (repeatable) uses a hand-written Go package for a Swift module instead of
+transpiled code. It suits modules that wrap C libraries or lean on pointer-level APIs, where a direct Go
+implementation is simpler than a translation. The package must be importable from the Go module that holds
+the output.
+
+```sh
+go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
+    -map Engine=example.com/goengine/engine -map CEngine=example.com/goengine/engine \
+    transpile Engine App
+```
+
+- **A target transpiled in the same run** (`Engine` above) is still read, so dependents see its
+  declarations, but no Go is written for it. Dependents import the mapped path and call it by the names
+  swift2go would have generated: transpile the target once without `-map` and implement the exported API
+  of the output.
+- **A module that is not transpiled** (a third-party product, or a C module such as `CEngine`) is
+  referenced the way any foreign module is: its members become runtime-style names
+  (`swiftrt.<Receiver><Member><Labels>`, `swiftrt.CF<function>` for C functions, `swiftrt.CV<name>` for
+  C macros and globals) and its types are qualified by the module name in lower case. Each such name
+  that the mapped package exports is taken from that package, imported under the module name in lower
+  case. Names it does not export stay in `swiftrt`. When two mapped packages export a name, the module
+  that sorts first wins.
+- A mapped package's declarations decide a few shapes at call sites:
+  - a type the package declares generic keeps its Swift type arguments (`Box<Int>` becomes
+    `glue.Box[int]`, and its initializers are called as `BoxInit…[int]`); other foreign types drop them;
+  - a function whose result depends on a generic parameter Go cannot infer (one the function declares, or
+    for a free or static function one of its generic type) is called with the Go type of the result as an
+    explicit first type argument (`unbox(b)` becomes `glue.Unbox[int](b)`);
+  - a `for` loop over a value a mapped function returns, other than an array, dictionary or set, ranges
+    over it directly, so the function can return a lazy `iter.Seq`;
+  - a payload-free case of a mapped enum matches by comparison with the exported constant
+    (`glue.ShadeDark`).
+
 From a checkout, `just check <Target> <TestTarget>` transpiles a target and its tests and runs them
 with `go test`. Set `SWIFT_PKG` to the package directory.
 
@@ -105,6 +140,7 @@ option.
 - **Observers run on in-place mutation.** `didSet`/`willSet` fire for whole-value assignments and for mutations of part of the value (`dict[k] = v`, `array.append(x)`), except inside initializers and the property's own observers.
 - **Names follow Swift.** Methods are named after their base name and argument labels (`pad(_:to:)` becomes `PadTo`). Runtime calls are `swiftrt.<Receiver><Member><Labels>`. Objective-C classes keep their Objective-C names as receivers (`NSFileManagerFileExistsAtPath`). Clashes get a type or `Fn` suffix.
 - **Imported option sets are listed by name.** Foreign `OptionSet` types the runtime models (`JSONEncoder.OutputFormatting`, YYJSON's options) are named in the emitter, so array literals of them build option sets.
+- **Mapped names come from the Swift declarations.** A replacement package matches the names the emitter generates, rather than the emitter reading names from the package, so the same Swift source always produces the same Go calls.
 - **Targets come in dependency order.** A dependency must be transpiled before, or in the same run as, the targets that import it. Otherwise its types are treated as foreign, and calls go to the runtime.
 
 ## Limits
