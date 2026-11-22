@@ -539,9 +539,13 @@ func As[T any](v any) *T {
 	return nil
 }
 
-// MustAs is Swift's `as!`.
+// MustAs is Swift's `as!`. Casting to Any always succeeds, so a nil interface, which is how a Void
+// result travels through a generic value such as a continuation's, becomes Any's zero value.
 func MustAs[T any](v any) T {
 	t, ok := v.(T)
+	if !ok && v == nil && reflect.TypeFor[T]() == reflect.TypeFor[any]() {
+		return t
+	}
 	if !ok {
 		t, ok = dynamicAs[T](v)
 	}
