@@ -297,6 +297,10 @@ func registeredEncoderFor(t reflect.Type) func(any, *Encoder) {
 	return nil
 }
 
+// rawCodable is an OptionSet whose Codable conformance is the one Swift gives every RawRepresentable
+// type: it codes its RawValue field alone.
+type rawCodable interface{ SwiftRawCodable() }
+
 // EncodeValue turns a Swift value into a JSON-shaped tree.
 func EncodeValue(v any) any {
 	if v == nil {
@@ -321,6 +325,9 @@ func EncodeValue(v any) any {
 			m.Call([]reflect.Value{reflect.ValueOf(e)})
 			return e.Value
 		}
+	}
+	if _, ok := v.(rawCodable); ok && rv.Kind() == reflect.Struct {
+		return EncodeValue(rv.FieldByName("RawValue").Interface())
 	}
 	if c, ok := payloadCaseFor(rv.Type()); ok {
 		return encodePayloadCase(c, rv)
@@ -435,6 +442,10 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		return
 	}
 	if r, ok := raw.(RawDecodable); ok && r.SwiftDecodeInto(dst, path) {
+		return
+	}
+	if t.Kind() == reflect.Struct && t.Implements(reflect.TypeFor[rawCodable]()) {
+		decodeInto(dst.FieldByName("RawValue"), raw, path)
 		return
 	}
 	if cases, ok := payloadCasesFor(t); ok {

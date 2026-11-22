@@ -348,6 +348,8 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 		e.w("func (*%s) SwiftTypeName() string { return %q }\n\n", recvT, q)
 	} else if !conformsTo(n, "s:s9OptionSetP") {
 		e.w("func (%s) SwiftTypeName() string { return %q }\n\n", recvT, q)
+	} else if e.conformsToCodable(n) {
+		e.w("// SwiftRawCodable codes %s as its raw value, as Swift codes a RawRepresentable type.\nfunc (%s) SwiftRawCodable() {}\n\n", info.GoName, recvT)
 	}
 	if n.Kind() == "class_decl" && e.m.HasSubclass(info.GoName) && e.m.Superclass(info.GoName) == "" {
 		e.w("// SwiftDynamic returns the most-derived object, for downcasts and identity.\nfunc (self *%s) SwiftDynamic() any {\n\tif self != nil && self.SwiftSub != nil {\n\t\treturn self.SwiftSub\n\t}\n\treturn self\n}\n\n", recvT)
@@ -873,6 +875,17 @@ func hasRawType(n ast.Node) bool {
 			if ps := mem.Child("params").List("params"); len(ps) == 1 && ps[0].Name() == "rawValue" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// conformsToCodable reports whether n declares a conformance to Encodable or Decodable.
+func (e *fileEmitter) conformsToCodable(n ast.Node) bool {
+	for _, c := range n.Child("inherits").List("conformances") {
+		switch e.m.demangle(c.Str("protocol")) {
+		case "Swift.Encodable", "Swift.Decodable":
+			return true
 		}
 	}
 	return false
