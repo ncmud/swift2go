@@ -108,14 +108,32 @@ func (m *Module) HasSubclass(goName string) bool {
 	return false
 }
 
-// IsAncestor reports whether anc is goName's superclass, directly or transitively.
+// IsAncestor reports whether anc is goName's superclass, directly or transitively. Both names may be
+// qualified by the package of a dependency that declares the classes ("world.Player").
 func (m *Module) IsAncestor(anc, goName string) bool {
+	if pkg, name, ok := strings.Cut(goName, "."); ok {
+		ancName, found := strings.CutPrefix(anc, pkg+".")
+		if !found {
+			return false
+		}
+		for _, d := range m.Deps {
+			if d.Pkg == pkg {
+				return d.IsAncestor(ancName, name)
+			}
+		}
+		return false
+	}
 	for s := m.Superclass(goName); s != ""; s = m.Superclass(s) {
 		if s == anc {
 			return true
 		}
 	}
 	return false
+}
+
+// upcastMethod names the generated method that upcasts to class goName, which may be package-qualified.
+func upcastMethod(goName string) string {
+	return "As" + goName[strings.LastIndex(goName, ".")+1:]
 }
 
 func (m *Module) classTree() {
