@@ -110,8 +110,8 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		}
 		if nt, st := e.m.typeOf(n.Type()), e.m.typeOf(sub.Type()); nt != nil && st != nil && nt.Kind == types.Meta && st.Kind == types.Meta && len(st.Args) == 1 && st.Args[0].Kind == types.Named {
 			// A concrete metatype stored as `any P.Type` becomes the type's zero value, which carries P's static requirements.
-			if e.m.isLocalProtocol(st.Args[0].Name) {
-				// Already an existential metatype value: keep it.
+			if e.m.isLocalProtocol(st.Args[0].Name) || sub.Kind() == "opaque_value_expr" {
+				// Already an existential metatype value, or the dynamic type of an opened existential: keep it.
 				return e.expr(sub)
 			}
 			gt := e.m.GoType(st.Args[0], e.generics)
