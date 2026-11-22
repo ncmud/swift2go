@@ -125,6 +125,14 @@ func ContextCodingPath(c any) []any {
 	return out
 }
 
+// ContextUnderlyingError is `DecodingError.Context.underlyingError`.
+func ContextUnderlyingError(c any) *error {
+	if err := c.(CodingContext).UnderlyingError; err != nil {
+		return &err
+	}
+	return nil
+}
+
 // ContextDebugDescription is `DecodingError.Context.debugDescription`.
 func ContextDebugDescription(c any) string { return c.(CodingContext).DebugDescription }
 
