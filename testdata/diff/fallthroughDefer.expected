@@ -1,0 +1,4 @@
+0 ["case0", "defer0", "case1", "defer1", "case2"] c0,d0,c1
+1 ["early1", "defer1"] c1
+2 ["case2"] none
+3 ["default"] none

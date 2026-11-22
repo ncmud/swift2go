@@ -201,6 +201,11 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	case "break_stmt", "continue_stmt":
 		e.jump(strings.TrimSuffix(n.Kind(), "_stmt"), e.jumpLabel(n))
 	case "fallthrough_stmt":
+		if e.doRet != nil && e.doRet.depth == e.jumpDepth {
+			// Inside a block emitted as a function literal, which Go's fallthrough cannot leave.
+			e.w("_ = %s\n", e.m.Unsup("fallthrough-out-of-block", e.where, ""))
+			return
+		}
 		e.w("fallthrough\n")
 	case "defer_stmt":
 		e.w("defer func() ")
@@ -1239,7 +1244,13 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 			e.patternBind(bindPat, tmp)
 		}
 		if goSwitch {
-			if els := c.Child("body").List("elements"); !(len(els) == 1 && els[0].Kind() == "break_stmt") {
+			els := c.Child("body").List("elements")
+			if n := len(els); n > 0 && els[n-1].Kind() == "fallthrough_stmt" && slices.ContainsFunc(els, func(s ast.Node) bool { return s.Kind() == "defer_stmt" }) {
+				// The body's defers run when it falls through, before the next case: the body runs as
+				// its own function, and the fallthrough follows it.
+				e.stmts(els[:n-1])
+				e.w("fallthrough\n")
+			} else if !(len(els) == 1 && els[0].Kind() == "break_stmt") {
 				e.stmts(els)
 			}
 		} else {
