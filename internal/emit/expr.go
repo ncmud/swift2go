@@ -130,7 +130,7 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			return e.upcast(n)
 		}
 		if n.Kind() == "function_conversion_expr" {
-			if f, ok := e.optionalParamConversion(n); ok {
+			if f, ok := e.paramConversion(n); ok {
 				return f
 			}
 		}
@@ -2789,9 +2789,10 @@ func isOperatorRef(n ast.Node) bool {
 	return name != "" && strings.ContainsAny(name[:1], "=<>!+-*/%&|^~")
 }
 
-// optionalParamConversion handles a function taking T? passed where one taking T is expected:
-// Swift wraps the argument in Optional, which in Go is taking its address.
-func (e *fileEmitter) optionalParamConversion(n ast.Node) (string, bool) {
+// paramConversion wraps a one-parameter function passed where Swift expects a different parameter type:
+// an inout T parameter is dereferenced, a T parameter is wrapped as T? by taking its address,
+// and a subclass parameter is upcast to the base class the function takes.
+func (e *fileEmitter) paramConversion(n ast.Node) (string, bool) {
 	sub := n.Child("sub_expr")
 	from, to := e.m.typeOf(sub.Type()), e.m.typeOf(n.Type())
 	if from == nil || to == nil || from.Kind != types.Func || to.Kind != types.Func || len(from.Args) != 1 || len(to.Args) != 1 {
@@ -2811,18 +2812,22 @@ func (e *fileEmitter) optionalParamConversion(n ast.Node) (string, bool) {
 		}
 		return "func(f func(" + pg + ") " + res + ") func(*" + pg + ") " + res + " { return func(v *" + pg + ") " + res + " { " + body + " } }(" + e.expr(sub) + ")", true
 	}
-	if fp.Kind != types.Optional || len(fp.Args) != 1 || tp.Kind == types.Optional {
-		return "", false
-	}
 	fg, tg := e.m.GoType(fp, e.generics), e.m.GoType(tp, e.generics)
-	if fg != "*"+tg {
+	arg := ""
+	switch {
+	case fp.Kind == types.Optional && len(fp.Args) == 1 && tp.Kind != types.Optional && fg == "*"+tg:
+		arg = "&v"
+	case fg != tg && strings.HasPrefix(fg, "*") && strings.HasPrefix(tg, "*") && e.m.IsAncestor(fg[1:], tg[1:]):
+		// A function taking a base class passed where one taking a subclass is expected: upcast the argument.
+		arg = "v.As" + fg[1:] + "()"
+	default:
 		return "", false
 	}
 	res := ""
 	if from.Result != nil {
 		res = e.m.GoType(from.Result, e.generics)
 	}
-	body := "f(&v)"
+	body := "f(" + arg + ")"
 	if res != "" {
 		body = "return " + body
 	}
