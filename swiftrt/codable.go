@@ -5,12 +5,14 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // CodingError is a Swift `DecodingError` or `EncodingError` that the runtime or a mapped package
@@ -191,7 +193,7 @@ func UnkeyedEncodingContainerEncode[T any](c *UnkeyedEncodingContainer, v T) {
 // a [Decoder] or to [DecodeValue].
 type RawDecodable interface {
 	// SwiftDecodeInto sets dst, a settable value of the Go type being decoded, and reports whether it
-	// did. On false the value is decoded by the default rules, which treat it as a JSON-shaped value.
+	// did. path is the coding path of dst, valid only during the call. On false the value is decoded by the default rules, which treat it as a JSON-shaped value.
 	// It reports a failure by panicking with [Throw], as a Swift decoder throws.
 	SwiftDecodeInto(dst reflect.Value, path []string) bool
 }
@@ -305,15 +307,61 @@ func SingleValueDecodingContainerDecodeNil(c SingleValueDecodingContainer) bool 
 }
 
 var (
-	decodersMu sync.RWMutex
-	decoders   = map[reflect.Type]func(*Decoder) any{}
+	decodersMu sync.Mutex
+	// decoders maps a type to its hand-written `init(from:)`. Registration replaces the map, so
+	// decoding reads it without a lock.
+	decoders atomic.Pointer[map[reflect.Type]func(*Decoder) any]
 )
 
 // RegisterDecoder records a type's hand-written `init(from:)`.
 func RegisterDecoder[T any](f func(*Decoder) T) {
 	decodersMu.Lock()
 	defer decodersMu.Unlock()
-	decoders[reflect.TypeFor[T]()] = func(d *Decoder) any { return f(d) }
+	next := map[reflect.Type]func(*Decoder) any{}
+	if current := decoders.Load(); current != nil {
+		maps.Copy(next, *current)
+	}
+	next[reflect.TypeFor[T]()] = func(d *Decoder) any { return f(d) }
+	decoders.Store(&next)
+}
+
+func decoderFor(t reflect.Type) func(*Decoder) any {
+	if m := decoders.Load(); m != nil {
+		return (*m)[t]
+	}
+	return nil
+}
+
+// structField is a stored property that Codable decodes: its field index and coding key.
+type structField struct {
+	index    int
+	key      string
+	optional bool
+}
+
+// structInfo is what decoding needs of a struct type, worked out once per type.
+type structInfo struct {
+	rawCodable bool
+	fields     []structField
+}
+
+var structInfos sync.Map // reflect.Type → *structInfo
+
+func structInfoOf(t reflect.Type) *structInfo {
+	if info, ok := structInfos.Load(t); ok {
+		return info.(*structInfo)
+	}
+	info := &structInfo{rawCodable: t.Implements(reflect.TypeFor[rawCodable]())}
+	for i := range t.NumField() {
+		fd := t.Field(i)
+		key := codingKey(fd)
+		if key == "" || key == "-" || !fd.IsExported() {
+			continue
+		}
+		info.fields = append(info.fields, structField{i, key, fd.Type.Kind() == reflect.Pointer})
+	}
+	cached, _ := structInfos.LoadOrStore(t, info)
+	return cached.(*structInfo)
 }
 
 type registeredEncoder struct {
@@ -498,17 +546,14 @@ func DecodeValue[T any](raw any, path []string) T {
 
 func decodeInto(dst reflect.Value, raw any, path []string) {
 	t := dst.Type()
-	decodersMu.RLock()
-	f := decoders[t]
-	decodersMu.RUnlock()
-	if f != nil {
-		dst.Set(reflect.ValueOf(f(&Decoder{Value: raw, CodingPath: path})))
+	if f := decoderFor(t); f != nil {
+		dst.Set(reflect.ValueOf(f(&Decoder{Value: raw, CodingPath: slices.Clone(path)})))
 		return
 	}
 	if r, ok := raw.(RawDecodable); ok && r.SwiftDecodeInto(dst, path) {
 		return
 	}
-	if t.Kind() == reflect.Struct && t.Implements(reflect.TypeFor[rawCodable]()) {
+	if t.Kind() == reflect.Struct && structInfoOf(t).rawCodable {
 		decodeInto(dst.FieldByName("RawValue"), raw, path)
 		return
 	}
@@ -680,20 +725,23 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 				d.SwiftDecodeDefaults()
 			}
 		}
-		for i := 0; i < t.NumField(); i++ {
-			fd := t.Field(i)
-			name := codingKey(fd)
-			if name == "" || name == "-" || !fd.IsExported() {
-				continue
-			}
-			x, ok := c.lookup(name)
+		fields := structInfoOf(t).fields
+		if len(fields) == 0 {
+			break
+		}
+		// One path serves every field: each decodeInto call sees it only while it runs.
+		fieldPath := make([]string, len(path)+1)
+		copy(fieldPath, path)
+		for _, fd := range fields {
+			x, ok := c.lookup(fd.key)
 			if !ok {
-				if fd.Type.Kind() == reflect.Pointer {
+				if fd.optional {
 					continue
 				}
-				keyNotFound(name, path)
+				keyNotFound(fd.key, path)
 			}
-			decodeInto(dst.Field(i), x, append(path, name))
+			fieldPath[len(path)] = fd.key
+			decodeInto(dst.Field(fd.index), x, fieldPath)
 		}
 	default:
 		b, err := json.Marshal(raw)
