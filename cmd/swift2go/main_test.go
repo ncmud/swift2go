@@ -30,7 +30,7 @@ func TestMappedModules(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
 
 	// Transpiling Glue on its own leaves its .swiftmodule for the next run; its Go output is discarded.
-	if err := run("transpile", []string{"Glue"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlayFlag{}); err != nil {
+	if err := run("transpile", []string{"Glue"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlayFlag{}, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(filepath.Join(outDir, "glue")); err != nil {
@@ -38,7 +38,7 @@ func TestMappedModules(t *testing.T) {
 	}
 	const goPkgs = "github.com/ncmud/swift2go/cmd/swift2go/testdata/mapping/go/"
 	maps := mapFlag{"Toy": goPkgs + "toy", "Glue": goPkgs + "glue"}
-	if err := run("transpile", []string{"Toy", "App"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", maps, overlayFlag{}); err != nil {
+	if err := run("transpile", []string{"Toy", "App"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", maps, overlayFlag{}, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(outDir, "toy")); !os.IsNotExist(err) {
@@ -81,7 +81,7 @@ func TestOverlay(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
 
 	overlays := overlayFlag{"Server": overlayDir}
-	if err := run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlays); err != nil {
+	if err := run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlays, false); err != nil {
 		t.Fatal(err)
 	}
 	platform, err := os.ReadFile(filepath.Join(outDir, "server", "platform.go"))
@@ -107,7 +107,7 @@ func TestOverlay(t *testing.T) {
 	}
 
 	// An overlay for a target that is not being transpiled is a mistake in the command line.
-	err = run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlayFlag{"Sever": overlayDir})
+	err = run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlayFlag{"Sever": overlayDir}, false)
 	if err == nil || !strings.Contains(err.Error(), "not in this run") {
 		t.Errorf("overlay for an unknown target: err = %v", err)
 	}
