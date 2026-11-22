@@ -1454,6 +1454,10 @@ func (e *fileEmitter) setterCall(dest ast.Node, value string) (string, bool) {
 	for dest.Kind() == "load_expr" || dest.Kind() == "paren_expr" || dest.Kind() == "inout_expr" {
 		dest = dest.Child("sub_expr")
 	}
+	if dest.Bool("direct_to_storage") {
+		// Inside a property's own observers or accessors, Swift writes its storage directly.
+		return "", false
+	}
 	var d, base ast.Node
 	switch dest.Kind() {
 	case "subscript_expr":

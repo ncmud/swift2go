@@ -823,7 +823,7 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		return e.declRef(d, n)
 	case "member_ref_expr":
 		info, pfx := e.lookup(n.Child("decl").Str("decl_usr"))
-		if info != nil && info.Kind == "var_decl" && !info.Computed && info.Observed && !info.Static && !e.initializing(info) && e.observing != info {
+		if info != nil && info.Kind == "var_decl" && !info.Computed && info.Observed && !info.Static && !e.initializing(info) && !n.Bool("direct_to_storage") {
 			// Mutating part of an observed property runs its observers: mutate a copy, then set it.
 			tmp := e.newTmp("wb")
 			e.w("%s := swiftrt.Copy(%s)\n", tmp, e.expr(n))
