@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -186,13 +187,58 @@ func Concat[T any](a, b []T) []T {
 // Describer is a Swift type conforming to CustomStringConvertible.
 type Describer interface{ Description() string }
 
-// Str renders a value the way Swift string interpolation does.
-func Str(v any) string {
+// DebugDescriber is a Swift type conforming to CustomDebugStringConvertible.
+type DebugDescriber interface{ DebugDescription() string }
+
+// SwiftNamed is a translated struct, class or enum that knows its qualified Swift type name.
+type SwiftNamed interface{ SwiftTypeName() string }
+
+// SwiftCase is an enum case: its Swift name and, for a case with a payload, the payload's labels.
+type SwiftCase interface {
+	SwiftCase() (name string, labels []string)
+}
+
+// Str renders a value the way Swift string interpolation and String(describing:) do.
+func Str(v any) string { return describe(v, false) }
+
+// StringInitReflecting is Swift `String(reflecting:)`.
+func StringInitReflecting(v any) string { return describe(v, true) }
+
+func debugStr(v any) string { return describe(v, true) }
+
+func describe(v any, debug bool) string {
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer {
+		// A pointer to a value type is an Optional. It has its pointee's methods, which must not be
+		// called through it: nil is "nil", and a value prints as Optional(...).
+		if _, class := v.(SwiftClass); !class {
+			if rv.IsNil() {
+				return "nil"
+			}
+			if _, named := rv.Elem().Interface().(SwiftNamed); named || rv.Elem().Kind() != reflect.Struct {
+				return "Optional(" + debugStr(rv.Elem().Interface()) + ")"
+			}
+		} else if rv.IsNil() {
+			return "nil"
+		}
+	}
 	switch x := v.(type) {
 	case nil:
 		return "nil"
 	case string:
+		if debug {
+			return swiftQuote(x)
+		}
 		return x
+	case Substring:
+		if debug {
+			return swiftQuote(x.String())
+		}
+		return x.String()
+	case DebugDescriber:
+		if d, ok := v.(Describer); ok && !debug {
+			return d.Description()
+		}
+		return x.DebugDescription()
 	case Describer:
 		return x.Description()
 	case fmt.Stringer:
@@ -203,10 +249,19 @@ func Str(v any) string {
 		return strconv.Itoa(x)
 	case float64:
 		return formatDouble(x)
+	case float32:
+		return swiftFloatDescription(float64(x), 32)
+	case SwiftCase:
+		name, labels := x.SwiftCase()
+		s := name + payloadDescription(reflect.ValueOf(v), labels)
+		if n, ok := v.(SwiftNamed); ok && debug {
+			return n.SwiftTypeName() + "." + s
+		}
+		return s
 	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
-	case reflect.Slice:
+	case reflect.Slice, reflect.Array:
 		var s strings.Builder
 		s.WriteString("[")
 		for i := 0; i < rv.Len(); i++ {
@@ -216,20 +271,142 @@ func Str(v any) string {
 			s.WriteString(debugStr(rv.Index(i).Interface()))
 		}
 		return s.String() + "]"
+	case reflect.Map:
+		return mapDescription(rv)
 	case reflect.Pointer:
 		if rv.IsNil() {
 			return "nil"
 		}
+		if n, ok := v.(SwiftNamed); ok {
+			if _, ok := v.(SwiftClass); ok {
+				return n.SwiftTypeName()
+			}
+		}
 		return "Optional(" + debugStr(rv.Elem().Interface()) + ")"
+	case reflect.Struct:
+		if n, ok := v.(SwiftNamed); ok {
+			name := n.SwiftTypeName()
+			if !debug {
+				name = name[strings.LastIndexByte(name, '.')+1:]
+			}
+			return name + structFields(rv)
+		}
+		if rv.Type().Name() == "" {
+			return tupleDescription(rv)
+		}
+	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(rv.Int(), 10)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(rv.Uint(), 10)
 	}
 	return fmt.Sprint(v)
 }
 
-func debugStr(v any) string {
-	if s, ok := v.(string); ok {
-		return strconv.Quote(s)
+// payloadDescription is an enum case's payload as Swift prints it: `(by: "x", 2)`, or "" for none.
+func payloadDescription(rv reflect.Value, labels []string) string {
+	if rv.Kind() != reflect.Struct || rv.NumField() == 0 {
+		return ""
 	}
-	return Str(v)
+	var s strings.Builder
+	s.WriteString("(")
+	for i := range rv.NumField() {
+		if i > 0 {
+			s.WriteString(", ")
+		}
+		if i < len(labels) && labels[i] != "" {
+			s.WriteString(labels[i] + ": ")
+		}
+		s.WriteString(debugStr(rv.Field(i).Interface()))
+	}
+	return s.String() + ")"
+}
+
+// structFields is a struct's stored properties as Swift prints them: `(a: 1, b: "x")`.
+func structFields(rv reflect.Value) string {
+	var s strings.Builder
+	s.WriteString("(")
+	first := true
+	for i := range rv.NumField() {
+		label, ok := rv.Type().Field(i).Tag.Lookup("swift")
+		if !ok || !rv.Type().Field(i).IsExported() {
+			continue
+		}
+		if !first {
+			s.WriteString(", ")
+		}
+		first = false
+		s.WriteString(label + ": " + debugStr(rv.Field(i).Interface()))
+	}
+	return s.String() + ")"
+}
+
+func tupleDescription(rv reflect.Value) string {
+	var s strings.Builder
+	s.WriteString("(")
+	for i := range rv.NumField() {
+		if i > 0 {
+			s.WriteString(", ")
+		}
+		if rv.Type().Field(i).IsExported() {
+			s.WriteString(debugStr(rv.Field(i).Interface()))
+		}
+	}
+	return s.String() + ")"
+}
+
+// mapDescription is a Dictionary, or a Set held as a map to struct{}, as Swift prints it.
+func mapDescription(rv reflect.Value) string {
+	set := rv.Type().Elem().Kind() == reflect.Struct && rv.Type().Elem().NumField() == 0
+	if rv.Len() == 0 {
+		if set {
+			return "[]"
+		}
+		return "[:]"
+	}
+	parts := make([]string, 0, rv.Len())
+	for it := rv.MapRange(); it.Next(); {
+		k := debugStr(it.Key().Interface())
+		if set {
+			parts = append(parts, k)
+		} else {
+			parts = append(parts, k+": "+debugStr(it.Value().Interface()))
+		}
+	}
+	slices.Sort(parts)
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// swiftQuote is String.debugDescription: the string in double quotes, with quotes, backslashes and
+// ASCII control characters escaped.
+func swiftQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case 0:
+			b.WriteString(`\0`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\'':
+			b.WriteString(`\'`)
+		case '\\':
+			b.WriteString(`\\`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u{%02X}`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func formatDouble(f float64) string { return swiftFloatDescription(f, 64) }

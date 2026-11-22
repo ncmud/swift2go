@@ -94,21 +94,32 @@ func SliceContains[T comparable](xs []T, v T) bool { return slices.Contains(xs, 
 // SliceContainsWhere is Sequence.contains(where:).
 func SliceContainsWhere[T any](xs []T, f func(T) bool) bool { return slices.ContainsFunc(xs, f) }
 
-// SliceMax is Sequence.max().
+// SliceMax is Sequence.max(). Like Swift it keeps the first element no other is greater than, so a
+// NaN does not win the way it does in slices.Max.
 func SliceMax[T cmp.Ordered](xs []T) *T {
 	if len(xs) == 0 {
 		return nil
 	}
-	v := slices.Max(xs)
+	v := xs[0]
+	for _, x := range xs[1:] {
+		if v < x {
+			v = x
+		}
+	}
 	return &v
 }
 
-// SliceMin is Sequence.min().
+// SliceMin is Sequence.min(), which keeps the first element no other is less than.
 func SliceMin[T cmp.Ordered](xs []T) *T {
 	if len(xs) == 0 {
 		return nil
 	}
-	v := slices.Min(xs)
+	v := xs[0]
+	for _, x := range xs[1:] {
+		if x < v {
+			v = x
+		}
+	}
 	return &v
 }
 

@@ -713,13 +713,26 @@ func StringInitIntRadix[T Integer](n T, radix int) string { return strconv.Forma
 // CharacterIsWholeNumber reports `Character.wholeNumberValue != nil`.
 func CharacterIsWholeNumber(c Character) bool { return CharacterWholeNumberValue(c) != nil }
 
-// Print is Swift `print`.
-func Print(items ...any) {
+// Print is Swift `print(_:)`.
+func Print(items []any) { PrintSeparatorTerminator(items, " ", "\n") }
+
+// PrintSeparator is Swift `print(_:separator:)`.
+func PrintSeparator(items []any, separator string) {
+	PrintSeparatorTerminator(items, separator, "\n")
+}
+
+// PrintTerminator is Swift `print(_:terminator:)`.
+func PrintTerminator(items []any, terminator string) {
+	PrintSeparatorTerminator(items, " ", terminator)
+}
+
+// PrintSeparatorTerminator is Swift `print(_:separator:terminator:)`.
+func PrintSeparatorTerminator(items []any, separator, terminator string) {
 	parts := make([]string, len(items))
 	for i, it := range items {
 		parts[i] = Str(it)
 	}
-	fmt.Println(strings.Join(parts, " "))
+	fmt.Print(strings.Join(parts, separator) + terminator)
 }
 
 // CFCeil is C `ceil`.

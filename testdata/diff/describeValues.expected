@@ -1,0 +1,35 @@
+cold
+body
+high
+#3001
+nowhere
+ANGRY
+carried(by: "orc", slot: 2)
+room(7)
+nowhere
+5gp
+Plain(a: 1, b: "x")
+Nested(p: Cases.Plain(a: 1, b: "x"), tags: ["t"], o: nil, c: Cases.Channel.fire)
+[Cases.Channel.fire]
+[1gp]
+[#1]
+head
+fire
+["k": 1]
+["k": "v"]
+[:]
+(1, "a")
+(1, (2, "x"))
+Optional(3)
+[Optional(1), nil, Optional(3)]
+["s", "t"]
+["c"]
+[5]
+1
+Cases.Box
+nil Optional(Cases.Slot.head) Optional(Cases.Loc.room(2)) nil
+[nil, Optional(Cases.Slot.head)]
+["a\u{01}\'\"\\\t\n\r\0é\u{7F}x"]
+["sub"]
+"x" Cases.Slot.head
+[3] [4]

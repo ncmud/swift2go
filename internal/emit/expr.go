@@ -39,6 +39,11 @@ func (e *fileEmitter) expr(n ast.Node) string {
 			return c
 		}
 	}
+	if out == "swiftrt.IntBitWidth" {
+		if w, ok := bitWidth[e.bitWidthOwner(n)]; ok {
+			return w
+		}
+	}
 	if len(e.slots) > mark {
 		switch n.Kind() {
 		case "call_expr", "binary_expr", "prefix_unary_expr", "postfix_unary_expr":
@@ -223,6 +228,12 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		v := n.Str("value")
 		if n.Bool("negative") {
 			v = "-" + v
+		}
+		if gt := e.exprGoType(n); n.Kind() == "float_literal_expr" && n.Bool("negative") && (gt == "float64" || gt == "float32") {
+			if f, err := strconv.ParseFloat(v, 64); err == nil && f == 0 {
+				// Go has no negative zero constant.
+				return "swiftrt.NegativeZero[" + gt + "]()"
+			}
 		}
 		if e.exprGoType(n) == "swiftrt.Int128" {
 			if _, err := strconv.ParseInt(v, 10, 64); err == nil {
@@ -1619,6 +1630,10 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 
 func (e *fileEmitter) call(n ast.Node) string {
 	fn := stripConv(n.Child("fn"))
+	if lhs := fn.Child("lhs"); fn.Kind() == "dot_syntax_base_ignored" && lhs.Kind() == "declref_expr" && lhs.Type() == "" {
+		// A module-qualified function (`Swift.print`) is the function itself.
+		fn = stripConv(fn.Child("rhs"))
+	}
 	as := e.args(n.Child("args"))
 	if d := fn.Child("decl"); fn.Kind() == "declref_expr" && d.Str("decl_usr") == "" {
 		if lg, ok := e.localGenerics[d.Str("base_name")]; ok {
@@ -2315,7 +2330,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		if op == "+" && (lt.Kind == types.Array || e.m.Recv(lt) == "Slice") {
 			return "swiftrt.Concat(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
-		return e.expr(l) + " " + op + " " + e.expr(r)
+		return e.floatOperands(lt, e.expr(l), e.expr(r), op)
 	case "===", "!==":
 		same := "swiftrt.Same(" + e.expr(l) + ", " + e.expr(r) + ")"
 		if op == "!==" {
@@ -2330,13 +2345,31 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			fn := map[string]string{"/": "Div", "%": "Rem"}[op]
 			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
-		return e.expr(l) + " " + op + " " + e.expr(r)
+		return e.floatOperands(lt, e.expr(l), e.expr(r), op)
 	case "&", "|", "^", "<<", ">>":
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "&+", "&-", "&*":
 		return e.expr(l) + " " + op[1:] + " " + e.expr(r)
 	}
 	return e.m.Unsup("operator:"+op, e.where, e.exprGoType(n))
+}
+
+// floatOperands joins the operands of a floating-point operator. Two constant operands would make a
+// Go constant expression, which is evaluated exactly and fails to compile on overflow; Swift computes
+// in the operand type at run time, so the left operand is passed through a function.
+func (e *fileEmitter) floatOperands(lt *types.Type, l, r, op string) string {
+	if gt := e.m.GoType(lt, e.generics); (gt == "float64" || gt == "float32") && isConstText(l) && isConstText(r) {
+		l = "swiftrt.FloatValue[" + gt + "](" + l + ")"
+	}
+	return l + " " + op + " " + r
+}
+
+var constText = regexp.MustCompile(`^[0-9.eE+\-*/() ]+$`)
+
+// isConstText reports whether s, an emitted expression, is a numeric Go constant.
+func isConstText(s string) bool {
+	s = strings.NewReplacer("float32(", "(", "float64(", "(").Replace(s)
+	return constText.MatchString(s)
 }
 
 func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
@@ -2992,6 +3025,29 @@ var intBound = map[string]string{
 	"uint16Max": "uint16(math.MaxUint16)", "uint16Min": "uint16(0)",
 	"uint32Max": "uint32(math.MaxUint32)", "uint32Min": "uint32(0)",
 	"uint64Max": "uint64(math.MaxUint64)", "uint64Min": "uint64(0)",
+}
+
+// bitWidth is `.bitWidth` of each fixed-width integer type narrower than Int.
+var bitWidth = map[string]string{"int8": "8", "uint8": "8", "int16": "16", "uint16": "16", "int32": "32", "uint32": "32"}
+
+// bitWidthOwner is the Go type whose `bitWidth` n reads: the type of `Int8.bitWidth`, or of the
+// value in `x.bitWidth`.
+func (e *fileEmitter) bitWidthOwner(n ast.Node) string {
+	base := n.Child("lhs")
+	if base == nil {
+		base = n.Child("base")
+	}
+	if base == nil {
+		return ""
+	}
+	t := e.m.typeOf(base.Type())
+	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
+		t = t.Args[0]
+	}
+	if t == nil {
+		return ""
+	}
+	return e.m.GoType(t, e.generics)
 }
 
 // intTypeArg is "[T]" for a checked-arithmetic call on a fixed-width integer type other than Int, so
