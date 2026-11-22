@@ -412,6 +412,41 @@ func StaleModule(t Target, targets map[string]Target, fresh map[string]bool, sea
 // dumped a second time from a copy, written under expandDir, that holds those extensions as
 // source in place of the macro attributes; the JSON then names the copy as its file.
 func DumpAST(t Target, modulesDir, expandDir string, extra ...string) ([]byte, error) {
+	d, err := NewDumper(t, modulesDir, expandDir, extra...)
+	if err != nil {
+		return nil, err
+	}
+	all := make([]int, len(d.Sources))
+	for i := range all {
+		all[i] = i
+	}
+	dumps, err := d.Dump(all, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []byte
+	for _, f := range dumps {
+		out = append(out, f.Doc...)
+		out = append(out, '\n')
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return nil, fmt.Errorf("swiftc -dump-ast produced no output for %s", t.Name)
+	}
+	return out, nil
+}
+
+// A Dumper dumps the ASTs of a target's source files, all of them or a few at a time, with the
+// frontend command the driver would run for the target.
+type Dumper struct {
+	// Sources are the target's source files, in the order the frontend reads them.
+	Sources   []string
+	dir       string
+	job       []string
+	expandDir string
+}
+
+// NewDumper asks the driver for the frontend command that dumps t's ASTs; see [DumpAST].
+func NewDumper(t Target, modulesDir, expandDir string, extra ...string) (*Dumper, error) {
 	args := []string{"-dump-ast", "-dump-ast-format", "json", "-module-name", t.Name, "-swift-version", "6", "-package-name", filepath.Base(t.Dir)}
 	if modulesDir != "" {
 		args = append(args, "-I", modulesDir)
@@ -422,10 +457,27 @@ func DumpAST(t Target, modulesDir, expandDir string, extra ...string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	outs := make([][]byte, len(sources))
-	errs := make([]string, len(sources))
-	expansions := make([]string, len(sources))
-	dump := func(sources []string, only func(i int) bool, more ...string) error {
+	return &Dumper{Sources: sources, dir: t.Dir, job: job, expandDir: filepath.Join(expandDir, t.Name, "macros")}, nil
+}
+
+// A FileDump is the dump of one source file.
+type FileDump struct {
+	// Doc is the file's JSON AST, nil when the compiler failed on the file.
+	Doc []byte
+	// Copy is the copy of the file that holds its macros' extensions, which the frontend read in
+	// its place; "" when it needs none.
+	Copy string
+}
+
+// Dump dumps the sources at the indices in primaries, type-checking each against all of the
+// target's files, and returns their dumps in the same order. copies names the copies (see
+// [FileDump.Copy]) of the files that are not dumped now: the frontend reads them in place of
+// those files, as it would if they were dumped in the same run.
+func (d *Dumper) Dump(primaries []int, copies map[int]string) ([]FileDump, error) {
+	outs := make([][]byte, len(d.Sources))
+	errs := make([]string, len(d.Sources))
+	expansions := make([]string, len(d.Sources))
+	run := func(sources []string, only []int, more ...string) error {
 		list, err := os.CreateTemp("", "swift2go-sources-*")
 		if err != nil {
 			return err
@@ -433,57 +485,56 @@ func DumpAST(t Target, modulesDir, expandDir string, extra ...string) ([]byte, e
 		defer os.Remove(list.Name())
 		fmt.Fprintln(list, strings.Join(sources, "\n"))
 		_ = list.Close()
-		job := append(append(slices.Clone(job), "-filelist", list.Name()), more...)
+		job := append(append(slices.Clone(d.job), "-filelist", list.Name()), more...)
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, runtime.NumCPU())
-		for i, src := range sources {
-			if !only(i) {
-				continue
-			}
+		for _, i := range only {
 			wg.Go(func() {
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				outs[i], expansions[i], errs[i] = dumpFile(job, t.Dir, src)
+				outs[i], expansions[i], errs[i] = dumpFile(job, d.dir, sources[i])
 			})
 		}
 		wg.Wait()
 		return nil
 	}
-	if err := dump(sources, func(int) bool { return true }, "-dump-macro-expansions"); err != nil {
+	if err := run(d.Sources, primaries, "-dump-macro-expansions"); err != nil {
 		return nil, err
 	}
-	expanded := slices.Clone(sources)
-	redo := map[int]bool{}
-	for i, src := range sources {
+	expanded := slices.Clone(d.Sources)
+	for i, c := range copies {
+		expanded[i] = c
+	}
+	var redo []int
+	for _, i := range primaries {
 		if outs[i] == nil {
 			continue
 		}
-		copied, err := expandedSource(src, filepath.Join(expandDir, t.Name, "macros"), outs[i], expansions[i])
+		copied, err := expandedSource(d.Sources[i], d.expandDir, outs[i], expansions[i])
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", src, err)
+			return nil, fmt.Errorf("%s: %w", d.Sources[i], err)
 		}
 		if copied != "" {
 			expanded[i] = copied
-			redo[i] = true
+			redo = append(redo, i)
 		}
 	}
 	if len(redo) > 0 {
-		if err := dump(expanded, func(i int) bool { return redo[i] }); err != nil {
+		if err := run(expanded, redo); err != nil {
 			return nil, err
 		}
 	}
-	var all []byte
-	for i := range sources {
+	dumps := make([]FileDump, len(primaries))
+	for k, i := range primaries {
 		if errs[i] != "" {
 			fmt.Fprintln(os.Stderr, "swift2go: skipped", errs[i])
 		}
-		all = append(all, outs[i]...)
-		all = append(all, '\n')
+		dumps[k] = FileDump{Doc: outs[i]}
+		if expanded[i] != d.Sources[i] {
+			dumps[k].Copy = expanded[i]
+		}
 	}
-	if len(bytes.TrimSpace(all)) == 0 {
-		return nil, fmt.Errorf("swiftc -dump-ast produced no output for %s", t.Name)
-	}
-	return all, nil
+	return dumps, nil
 }
 
 // dumpFile runs one frontend job with src as its primary file. It returns the file's JSON AST and

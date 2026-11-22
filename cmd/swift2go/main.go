@@ -8,8 +8,11 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ncmud/swift2go/internal/ast"
 	"github.com/ncmud/swift2go/internal/emit"
@@ -27,6 +30,7 @@ func main() {
 	flag.Var(maps, "map", "use the Go package `Module=importpath` for a Swift module instead of transpiling it (repeatable)")
 	overlays := overlayFlag{}
 	flag.Var(overlays, "overlay", "`Target=dir`: hand-written Go files in dir replace the target's Swift files of the same name (repeatable)")
+	incremental := flag.Bool("incremental", false, "re-dump only the files whose content or dependencies changed since an earlier incremental run, which cached the ASTs under OUT/.cache")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: swift2go [flags] dump|transpile|stats <Target> [<TestTarget>]")
 		flag.PrintDefaults()
@@ -39,7 +43,7 @@ func main() {
 	if *buildDir == "" {
 		*buildDir = swiftmod.BuildDir(*pkgDir)
 	}
-	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays); err != nil {
+	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays, *incremental); err != nil {
 		fmt.Fprintln(os.Stderr, "swift2go:", err)
 		os.Exit(1)
 	}
@@ -73,7 +77,7 @@ func (o overlayFlag) Set(v string) error {
 	return nil
 }
 
-func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag) error {
+func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag, incremental bool) error {
 	pkgDir = absPath(pkgDir)
 	targets, err := swiftmod.Describe(pkgDir)
 	if err != nil {
@@ -106,12 +110,17 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 	}
 	searchDirs := []string{mods, filepath.Join(buildDir, "out", "Products", "Debug")}
 	emitted := map[string]bool{}
+	ifaces := map[string]string{}
 	load := func(t swiftmod.Target) ([]ast.File, error) {
 		if err := swiftmod.AddGenerated(&t, buildDir, absPath(filepath.Join(outDir, "derived"))); err != nil {
 			return nil, err
 		}
 		if err := swiftmod.StaleModule(t, targets, emitted, searchDirs); err != nil {
 			return nil, err
+		}
+		if incremental {
+			c := cachedLoad{t: t, targets: targets, outDir: outDir, mods: mods, searchDirs: searchDirs, extra: extra}
+			return c.load(ifaces, emitted)
 		}
 		if t.Type != "test" {
 			if err := swiftmod.EmitModule(t, mods, extra...); err != nil {
@@ -216,6 +225,81 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 		return fmt.Errorf("%d of %d targets not transpiled: %s", len(failures), len(names), strings.Join(failures, ", "))
 	}
 	return nil
+}
+
+// cachedLoad loads a target's AST through the cache under OUT/.cache/<Target>.
+type cachedLoad struct {
+	t          swiftmod.Target
+	targets    map[string]swiftmod.Target
+	outDir     string
+	mods       string
+	searchDirs []string
+	extra      []string
+}
+
+// load dumps the target's files that changed, reusing the cached ASTs of the others, and emits the
+// target's module when its interface changed since the module was last emitted. ifaces holds the
+// interfaces of the targets loaded earlier in the run; load adds the target's own.
+func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]ast.File, error) {
+	t := c.t
+	start := time.Now()
+	derived := absPath(filepath.Join(c.outDir, "derived"))
+	d, err := swiftmod.NewDumper(t, c.mods, derived, c.extra...)
+	if err != nil {
+		return nil, err
+	}
+	env := d.Key() + "\x00" + swiftmod.DependencyKey(t, c.targets, ifaces, c.searchDirs)
+	cacheDir := absPath(filepath.Join(c.outDir, ".cache", t.Name))
+	dump, err := swiftmod.DumpCached(cacheDir, env, d.Sources, d.Dump)
+	if err != nil {
+		return nil, err
+	}
+	ifaces[t.Name] = dump.Interface
+	fmt.Fprintf(os.Stderr, "swift2go: %s: dumped %d of %d files in %s\n", t.Name, dump.Dumped, len(dump.Docs), time.Since(start).Round(time.Millisecond))
+	if t.Type != "test" {
+		stamp := filepath.Join(cacheDir, "module.stamp")
+		want := env + "\x00" + dump.Interface
+		if old, err := os.ReadFile(stamp); err != nil || string(old) != want || !fileExists(filepath.Join(c.mods, t.Name+".swiftmodule")) {
+			start := time.Now()
+			_ = os.Remove(stamp)
+			if err := swiftmod.EmitModule(t, c.mods, c.extra...); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(stamp, []byte(want), 0o644); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(os.Stderr, "swift2go: %s: emitted its module in %s\n", t.Name, time.Since(start).Round(time.Millisecond))
+		}
+		emitted[t.Name] = true
+	}
+	files := make([][]ast.File, len(dump.Docs))
+	errs := make([]error, len(dump.Docs))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.NumCPU())
+	for i, doc := range dump.Docs {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			files[i], errs[i] = ast.Load(doc)
+		})
+	}
+	wg.Wait()
+	var all []ast.File
+	for i := range files {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		all = append(all, files[i]...)
+	}
+	if len(all) == 0 {
+		return nil, fmt.Errorf("swiftc -dump-ast produced no output for %s", t.Name)
+	}
+	return all, nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // foreignMappings resolves the mapped modules that are not transpiled in this run. Their packages must be

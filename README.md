@@ -65,6 +65,29 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage transpil
   `swift build --target <Target>` first; if the outputs are missing, or older than a non-Swift file in
   the target's directory (such as the plugin's input), the target fails and names the command to run.
 
+### Incremental runs
+
+`-incremental` caches each target's ASTs under `out/.cache/<Target>`, and the next run dumps only what
+changed:
+
+```sh
+go run github.com/ncmud/swift2go/cmd/swift2go -incremental -pkg path/to/SwiftPackage transpile Core App
+```
+
+- A file is dumped again when its content changes. The target's other files keep their cached ASTs
+  as long as the changed files' fingerprints hold. A fingerprint covers a file's declarations with
+  their types, attributes and conformances, but not the bodies of functions, initializers and
+  accessors, nor the expressions that give variables their initial values. The body or value that
+  decides an opaque type (`some P`) counts.
+- When a fingerprint changes, a file is added or removed, or the compiler or its flags change, every
+  file of the target is dumped again. A target's `.swiftmodule` is emitted again only when its
+  fingerprints or its dependencies' change, and every file of a target that imports it is then dumped
+  again.
+- The Go of every target in the run is still written from its whole AST, so the output matches a
+  clean run's. The emitter reads function bodies across files and modules, for example to decide
+  whether a call can modify its arguments, so an edited body can change the Go of other files.
+- An incremental run does not write `out/ast/<Target>.json`.
+
 ### Replacing a module with a Go package
 
 `-map Module=importpath` (repeatable) uses a hand-written Go package for a Swift module instead of
