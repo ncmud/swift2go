@@ -48,7 +48,17 @@ type fileEmitter struct {
 	typeParams    []string
 	typeBounds    map[string]string // type parameter → Go constraint, when not `any`
 	hoisted       []ast.Node
-	erased        map[int]bool // parameters paramList types as any, by index
+	erased        map[int]bool        // parameters paramList types as any, by index
+	scopes        *valueScopes        // the file's local variables, resolved to their declarations
+	bindOrigin    origin              // where the subject of the pattern being bound lives
+	opened        map[string]ast.Node // opaque_value_expr identity → the existential it opens
+	snapshots     map[uintptr]string  // receivers already emitted as a copy, by node
+	storeInto     *types.Type         // the collection a mutating library call's arguments are stored into
+	argSink       *sink               // where the call being emitted puts its arguments, when not lent
+	partSink      sink                // where the parts of the aggregate partsOf is building go
+	partsOf       uintptr             // the literal or memberwise call owned is emitting, by node
+	keeps         int                 // owned is emitting a call whose result is stored or returned
+	lent          map[uintptr]bool    // closures a library call holds only inside its result
 }
 
 func (e *fileEmitter) w(format string, args ...any) { fmt.Fprintf(&e.b, format, args...) }
@@ -60,6 +70,7 @@ func (e *fileEmitter) newTmp(prefix string) string {
 
 func (e *fileEmitter) emitFile() string {
 	e.opaque = map[string]string{}
+	e.scopes = e.m.valueScopes()
 	var body strings.Builder
 	saved := e.b
 	e.b = strings.Builder{}
@@ -1540,7 +1551,7 @@ func (e *fileEmitter) storedPropertyInits(typeNode ast.Node) {
 		for _, pe := range mem.List("pattern_entries") {
 			vi := e.findVar(typeNode, patternName(pe.Child("pattern")))
 			if vi != nil && !vi.Static && !vi.Computed && pe.Child("processed_init") != nil {
-				e.w("self.%s = %s\n", vi.GoName, e.expr(pe.Child("processed_init")))
+				e.w("self.%s = %s\n", vi.GoName, e.owned(pe.Child("processed_init"), sinkStore))
 			}
 		}
 	}
@@ -1599,6 +1610,7 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 	} else {
 		for _, p := range n.Child("params").List("params") {
 			if vi := e.findVar(typeNode, p.Name()); vi != nil {
+				// The memberwise initializer keeps its arguments; its callers hand over values of their own.
 				e.w("self.%s = %s\n", vi.GoName, goSafe(p.Name()))
 			}
 		}

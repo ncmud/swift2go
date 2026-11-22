@@ -75,6 +75,10 @@ type Module struct {
 	typeCache       map[string]*types.Type
 	payloadEnums    map[string]bool
 	typeParamNames  map[string][]string // generic struct/class → its Go type parameter names
+	shares          map[string]bool     // memo of sharesStorage for named types
+	classProtos     map[string]bool     // protocols only classes can conform to (`: AnyObject`)
+	scopes          *valueScopes        // local variables of every file, resolved
+	fx              *effects            // which functions can write shared places
 	lazyInits       map[string]bool     // owner|name of stored statics and globals with non-literal initializers
 	lineStarts      map[string][]int
 	sources         map[string][]byte
@@ -445,6 +449,14 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				m.protoReqs[q] = n.List("members")
 				for _, p := range n.Child("inherits").Strings("protocols") {
 					m.protoParents[q] = append(m.protoParents[q], m.demangle(p))
+				}
+				for _, r := range n.Child("requirement_signature").List("requirements") {
+					if r.Str("kind") == "has_layout" && r.Str("layout") == "AnyObject" {
+						if m.classProtos == nil {
+							m.classProtos = map[string]bool{}
+						}
+						m.classProtos[q] = true
+					}
 				}
 			}
 			m.index(n.List("members"), q, n.Kind())
@@ -1227,6 +1239,26 @@ func (m *Module) isLocalProtocol(q string) bool {
 	for _, mod := range append([]*Module{m}, m.Deps...) {
 		if mod.typeKinds[q] == "protocol" {
 			return true
+		}
+	}
+	return false
+}
+
+// classOnly reports whether only classes can conform to the protocol q: it, or a protocol it refines,
+// is constrained to AnyObject.
+func (m *Module) classOnly(q string, seen map[string]bool) bool {
+	if seen[q] {
+		return false
+	}
+	seen[q] = true
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.classProtos[q] {
+			return true
+		}
+		for _, parent := range mod.protoParents[q] {
+			if m.classOnly(parent, seen) {
+				return true
+			}
 		}
 	}
 	return false

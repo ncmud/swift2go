@@ -126,7 +126,9 @@ func structFix(t reflect.Type, building map[reflect.Type]*copyPlan) func(unsafe.
 			continue
 		}
 		deep = true
-		if f.IsExported() {
+		// A Swift stored property is copied whatever its Go name (`_items` is unexported); other
+		// unexported fields are the runtime's own and stay shared.
+		if _, swiftProperty := f.Tag.Lookup("swift"); f.IsExported() || swiftProperty {
 			fields = append(fields, fieldFix{f.Offset, fp})
 		}
 	}

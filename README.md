@@ -178,7 +178,7 @@ option.
 
 - **Overflow traps.** `Int` arithmetic and negation panic on overflow, as a Swift debug build does. `&+` and the other wrapping operators wrap. A range whose upper bound is below its lower bound, and a zero `stride`, trap as in Swift. Shifts are Swift's smart shifts: a negative count shifts the other way.
 - **Optionals are pointers.** `T?` is `*T`, and a class's Optional is the class pointer itself. A generic `T?` instantiated with a class is unwrapped at call sites, so callers see `*C`, not `**C`.
-- **Value semantics by copying.** Struct values, arrays, dictionaries and sets are deep-copied (`swiftrt.Copy`) wherever Swift would copy them. Class references, which embed a marker, are never copied.
+- **Value semantics by ownership.** Every variable, property and element holds its own storage, so a mutation writes in place. A struct, array, dictionary, set, optional or protocol value read from one place is deep-copied (`swiftrt.Copy`) when it is stored in another, returned, or captured as a constant by an escaping closure. A function's own locals move to its caller without a copy. A value lent for the length of a call or a `for … in` loop is copied only when the place it was read from can change meanwhile: a class property or a global, when the callee or the loop body can write shared state, or a local that the loop body or a closure writes. A pass over every function body decides which functions can write shared state. Class references, which embed a marker, are never copied.
 - **Statics are lazy.** Static and global stored properties become `swiftrt.Lazy` cells initialized on first use, as Swift does, so initialization cycles that Swift allows still work in Go.
 - **Swift's evaluation order.** Operands run left to right. Where Go would read a variable after a call to its right, the read is wrapped in `swiftrt.Eval`, a call Go must order first. The right side of `??` runs only when the left is `nil` (`swiftrt.CoalesceFunc`), unless it is a literal or a plain read. A compound assignment evaluates its subscripts and class-returning calls once.
 - **Errors are panics.** `throw` panics with the error, and `do`/`catch`, `try?` and `try!` recover it. Functions keep their Go signatures without an `error` result.
@@ -192,6 +192,11 @@ option.
 
 - Matching for Swift `Regex` is scalar-based, apart from the trailing `\b` handled above.
 - Values in an `HSet` are keyed by a canonical rendering of their fields, not by a custom `hash(into:)`.
+- The pass that decides which functions can write shared state assumes library code does not call back
+  into the program except through the closures it is handed, and it does not follow other tasks: a value
+  lent across an `await` is not copied.
+- A nested function that outlives its parent sees the parent's constants as they are when it runs, not as
+  they were when it was made. Closures copy them.
 - Pointers and C interop cover what the code needs (`gettimeofday`, `clock_gettime`, C strings), not `UnsafePointer` in general.
 - Every untranslated construct is reported, never silently dropped. `swift2go stats` and the
   per-target report list them by kind.
