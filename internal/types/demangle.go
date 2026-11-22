@@ -206,3 +206,95 @@ func localWrappers(mangled, raw, norm string) string {
 func isAlnum(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
+
+// Nominal kinds reported by [Demangler.NominalKinds].
+const (
+	KindClass    = 'C'
+	KindStruct   = 'V'
+	KindEnum     = 'O'
+	KindProtocol = 'P'
+)
+
+// NominalKinds reads the kind of every nominal type of module named in the cached symbols, keyed by its
+// qualified name ("GRDB.Database.ColumnType"): class, struct, enum or protocol.
+func (d *Demangler) NominalKinds(module string) (map[string]byte, error) {
+	prefix := fmt.Sprintf("%d%s", len(module), module)
+	var syms []string
+	for s := range d.cache {
+		if strings.Contains(s, prefix) && !strings.HasPrefix(s, "c:") {
+			syms = append(syms, mangledForm(s))
+		}
+	}
+	kinds := map[string]byte{}
+	if len(syms) == 0 {
+		return kinds, nil
+	}
+	cmd := exec.Command("xcrun", "swift-demangle", "--tree-only")
+	cmd.Stdin = strings.NewReader(strings.Join(syms, "\n") + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("swift-demangle --tree-only: %w", err)
+	}
+	parseNominalKinds(string(out), module, kinds)
+	return kinds, nil
+}
+
+var treeNode = regexp.MustCompile(`^( *)kind=(\w+)(?:, text="([^"]*)")?`)
+
+var nominalKinds = map[string]byte{"Class": KindClass, "Structure": KindStruct, "Enum": KindEnum, "Protocol": KindProtocol}
+
+// parseNominalKinds walks swift-demangle's node trees and records each Class, Structure, Enum and Protocol
+// node of module. A nominal node's first child is its context (a Module or another nominal type) and its
+// Identifier child its name.
+func parseNominalKinds(tree, module string, kinds map[string]byte) {
+	type frame struct {
+		depth int
+		kind  byte // 0 for other nodes
+		name  string
+		named bool
+	}
+	var stack []*frame
+	pop := func() {
+		f := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if f.kind == 0 || !f.named {
+			return
+		}
+		if strings.HasPrefix(f.name, module+".") {
+			kinds[f.name] = f.kind
+		}
+		if len(stack) > 0 {
+			if parent := stack[len(stack)-1]; parent.kind != 0 && parent.name == "" {
+				parent.name = f.name
+			}
+		}
+	}
+	for _, line := range strings.Split(tree, "\n") {
+		m := treeNode.FindStringSubmatch(line)
+		if m == nil {
+			for len(stack) > 0 {
+				pop()
+			}
+			continue
+		}
+		depth := len(m[1])
+		for len(stack) > 0 && stack[len(stack)-1].depth >= depth {
+			pop()
+		}
+		if len(stack) > 0 {
+			if parent := stack[len(stack)-1]; parent.kind != 0 {
+				switch {
+				case m[2] == "Module" && parent.name == "":
+					parent.name = m[3]
+				case m[2] == "Identifier" && parent.name != "" && !parent.named:
+					parent.name += "." + m[3]
+					parent.named = true
+				}
+			}
+		}
+		stack = append(stack, &frame{depth: depth, kind: nominalKinds[m[2]]})
+	}
+	for len(stack) > 0 {
+		pop()
+	}
+}

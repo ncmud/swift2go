@@ -693,6 +693,9 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	dem := e.m.demangle(usr)
 	sig := parseDeclSig(dem)
 	bt := e.m.typeOf(base.Type())
+	if mp := e.m.mappedDecl(usr); mp != nil {
+		return e.mappedMember(mp, n, d, base)
+	}
 	if base.Kind() == "type_expr" || bt.Kind == types.Meta {
 		// A static member is named after the type it belongs to (`Task.isCancelled`), which is
 		// usually also its result type.
@@ -815,6 +818,13 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		}
 		if usr := n.Child("decl").Str("decl_usr"); info == nil && strings.HasPrefix(usr, "c:@S@") && strings.Contains(usr, "@FI@") {
 			return e.lvalue(n.Child("base")) + "." + capitalize(usr[strings.Index(usr, "@FI@")+4:])
+		}
+		if mp := e.m.mappedDecl(n.Child("decl").Str("decl_usr")); info == nil && mp != nil {
+			// A mapped property is reached through its getter and setter: mutate a copy, then set it.
+			tmp := e.newTmp("wb")
+			e.w("%s := %s\n", tmp, e.expr(n))
+			e.post = append(e.post, e.mappedSetter(mp, n.Child("decl"), n.Child("base"), tmp))
+			return tmp
 		}
 		if info == nil && n.Child("decl").Str("decl_usr") != "" {
 			return e.lvalue(n.Child("base")) + "." + capitalize(n.Child("decl").Str("base_name"))
@@ -972,6 +982,9 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 			return e.recvExpr(base) + "." + info.GoName + "(" + strings.Join(ss, ", ") + ")"
 		}
 		return e.m.Unsup("user-subscript", e.where, e.exprGoType(n))
+	}
+	if mp := e.m.mappedDecl(d.Str("decl_usr")); mp != nil {
+		return e.mappedCallExpr(mp, d, e.expr(base), e.args(n.Child("args")), false, false)
 	}
 	bt := e.m.typeOf(base.Type())
 	recv := e.m.Recv(bt)
@@ -1642,6 +1655,9 @@ func (e *fileEmitter) call(n ast.Node) string {
 			ss, _ := e.argStrings(as, false)
 			return goSafe(d.Str("base_name")) + "(" + strings.Join(ss, ", ") + ")"
 		}
+		if mp := e.m.mappedDecl(usr); mp != nil {
+			return e.mappedCallExpr(mp, d, "", as, false, false)
+		}
 		sig := parseDeclSig(dem)
 		ss, kept := e.argStrings(as, true)
 		if (sig.base == "max" || sig.base == "min") && len(kept) >= 2 {
@@ -1831,6 +1847,12 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 	usr := d.Str("decl_usr")
 	dem := e.m.demangle(usr)
 	sig := parseDeclSig(dem)
+	if mp := e.m.mappedDecl(usr); mp != nil {
+		if base == nil || base.Kind() == "type_expr" || e.m.typeOf(base.Type()).Kind == types.Meta {
+			return e.mappedCallExpr(mp, d, "", as, true, false)
+		}
+		return e.mappedCallExpr(mp, d, e.recvArg(base), as, sig.static, false)
+	}
 	if b := d.Str("base_name"); strings.HasPrefix(b, "withLock") || strings.HasPrefix(b, "withValue") || b == "sync" || b == "withCriticalRegion" {
 		e.unitCallee = true
 	}
@@ -1973,6 +1995,9 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return pfx + info.GoName + targs + "(" + strings.Join(ss, ", ") + ")"
 	}
+	if mp := e.m.mappedDecl(usr); mp != nil {
+		return e.mappedCtor(mp, n, d, as)
+	}
 	sig := parseDeclSig(e.m.demangle(usr))
 	ss, kept := e.argStrings(as, true)
 	if rt := e.m.typeOf(n.Type()); len(kept) == 1 {
@@ -2103,6 +2128,9 @@ func (e *fileEmitter) unappliedDot(n ast.Node) string {
 		usr := d.Str("decl_usr")
 		sig := parseDeclSig(e.m.demangle(usr))
 		t := e.m.typeOf(n.Type())
+		if mp := e.m.mappedDecl(usr); mp != nil && t != nil && t.Kind != types.Func {
+			return e.mappedName(mp, sig, nil, false)
+		}
 		if t != nil && t.Kind != types.Func {
 			name := capitalize(d.Str("base_name"))
 			if gt := e.m.GoType(t, e.generics); strings.HasPrefix(gt, "swiftrt.") {
@@ -2168,6 +2196,12 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 	l, r := as[0].node, as[1].node
 	if info, pfx := e.lookup(d.Str("decl_usr")); info != nil {
 		return pfx + info.GoName + "(" + e.expr(l) + ", " + e.expr(r) + ")"
+	}
+	if mp := e.m.mappedDecl(d.Str("decl_usr")); mp != nil {
+		return e.mappedCallExpr(mp, d, "", as, false, false)
+	}
+	if call, ok := e.foreignOperatorCall(n, d, as, false); ok {
+		return call
 	}
 	lt := e.m.typeOf(l.Type())
 	if e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
@@ -2360,6 +2394,12 @@ func (e *fileEmitter) prefix(n ast.Node) string {
 	}
 	if info, pfx := e.lookup(d.Str("decl_usr")); info != nil {
 		return pfx + info.GoName + "(" + e.expr(as[0].node) + ")"
+	}
+	if mp := e.m.mappedDecl(d.Str("decl_usr")); mp != nil {
+		return e.mappedCallExpr(mp, d, "", as, false, true)
+	}
+	if call, ok := e.foreignOperatorCall(n, d, as, true); ok {
+		return call
 	}
 	x := e.expr(as[0].node)
 	switch op {
@@ -2591,6 +2631,9 @@ func (e *fileEmitter) literalInit(n ast.Node, label string) (string, bool) {
 	t := e.m.typeOf(n.Type())
 	if t == nil || t.Kind != types.Named {
 		return "", false
+	}
+	if mp := e.m.mappedTypeModule(t.Name); mp != nil {
+		return e.mappedLiteral(mp, n, t, label), true
 	}
 	var ctor *DeclInfo
 	pfx := ""

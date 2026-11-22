@@ -9,10 +9,12 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/ncmud/swift2go/internal/ast"
+	"github.com/ncmud/swift2go/internal/swiftmod"
 	"github.com/ncmud/swift2go/internal/types"
 )
 
@@ -27,6 +29,9 @@ type Mapping struct {
 	Exports map[string]bool
 	// Generic holds the number of type parameters of each exported generic type.
 	Generic map[string]int
+	// Requirements lists the requirements of the module's protocols, keyed by protocol name without the
+	// module. A local type conforming to one registers its implementations of them with the package.
+	Requirements map[string][]swiftmod.Requirement
 }
 
 // Alias is the name generated code imports the package under: its package name, or the module name in lower
@@ -277,12 +282,18 @@ func ownGenericParams(dem string) []string {
 
 var genericRef = regexp.MustCompile(`(^|[^\w.])([A-Z])(\d*)\b`)
 
-var callHead = regexp.MustCompile(`^swiftrt\.([A-Za-z_][A-Za-z0-9_]*)[\[(]`)
+var callHead = regexp.MustCompile(`^(\w+)\.([A-Za-z_][A-Za-z0-9_]*)[\[(]`)
 
 // mappedCall reports whether a rendered expression is a single call to a function of a mapped package.
 func (m *Module) mappedCall(src string) bool {
 	sm := callHead.FindStringSubmatch(src)
-	if sm == nil || !m.mappedName(sm[1]) {
+	if sm == nil {
+		return false
+	}
+	switch {
+	case sm[1] == "swiftrt" && m.mappedName(sm[2]):
+	case sm[1] != "swiftrt" && slices.ContainsFunc(m.Mappings, func(mp Mapping) bool { return mp.Alias() == sm[1] }):
+	default:
 		return false
 	}
 	open := strings.IndexByte(src, '(')
@@ -312,6 +323,9 @@ func (e *fileEmitter) mappedCase(p ast.Node, st *types.Type) string {
 	}
 	if st == nil || st.Kind != types.Named {
 		return ""
+	}
+	if mp := e.m.mappedTypeModule(st.Name); mp != nil {
+		return mp.Alias() + "." + mappedOwner(st.Name) + capitalize(p.Child("element").Child("base_name").Str("name"))
 	}
 	name := lastComponent(st.Name) + capitalize(p.Child("element").Child("base_name").Str("name"))
 	if !e.m.mappedName(name) {

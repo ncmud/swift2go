@@ -17,8 +17,8 @@ func TestMappedModules(t *testing.T) {
 	if testing.Short() {
 		t.Skip("transpiles a Swift package")
 	}
-	if _, err := exec.LookPath("swiftc"); err != nil {
-		t.Skip("needs the Swift toolchain")
+	if _, err := exec.LookPath("xcrun"); err != nil {
+		t.Skip("needs the Xcode Swift toolchain (swiftc and swift-demangle through xcrun)")
 	}
 	pkgDir, err := filepath.Abs("testdata/mapping/swift")
 	if err != nil {
