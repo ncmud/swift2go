@@ -2374,7 +2374,12 @@ func (e *fileEmitter) nativeMethod(recv, base string, self ast.Node, kept []arg,
 	switch {
 	case base == "append" && len(kept) == 1 && self.Kind() == "inout_expr" && isUnicodeScalarsOfString(self.Child("sub_expr")):
 		// s.unicodeScalars.append(x) appends to the String itself.
-		return e.lvalue(stripLoads(self.Child("sub_expr")).Child("base")) + " += string(" + ss[0] + ")", true
+		strExpr := stripLoads(self.Child("sub_expr")).Child("base")
+		lv := e.lvalue(strExpr)
+		if goAddressable(strExpr, lv) {
+			return "swiftrt.StringAppend(&" + lv + ", string(" + ss[0] + "))", true
+		}
+		return lv + " += string(" + ss[0] + ")", true
 	case recv == "Slice" && base == "append" && len(kept) == 1 && kept[0].label == "" && self.Kind() == "inout_expr":
 		lv := e.lvalue(self.Child("sub_expr"))
 		return lv + " = append(" + lv + ", " + ss[0] + ")", true
@@ -2390,6 +2395,9 @@ func (e *fileEmitter) nativeMethod(recv, base string, self ast.Node, kept []arg,
 		return lv + " = append(" + lv + ", swiftrt.Iterate[" + elem + "](" + ss[0] + ")...)", true
 	case recv == "String" && base == "append" && len(kept) == 1 && self.Kind() == "inout_expr" && kept[0].label == "":
 		lv := e.lvalue(self.Child("sub_expr"))
+		if e.m.GoType(e.m.typeOf(self.Child("sub_expr").Type()), e.generics) == "string" && goAddressable(self.Child("sub_expr"), lv) {
+			return "swiftrt.StringAppend(&" + lv + ", " + ss[0] + ")", true
+		}
 		return lv + " += " + ss[0], true
 	}
 	return "", false
@@ -3024,7 +3032,25 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 	if lt.Kind == types.Named && isIntegerName(lt.Name) || base == "+" && e.m.Recv(lt) == "Slice" || len(base) == 2 && base[0] == '&' || e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
 		return lv + " = " + combine(lv), true
 	}
+	if base == "+" && e.m.GoType(lt, e.generics) == "string" && goAddressable(l, lv) {
+		// Swift appends to a String in amortised constant time; Go's += copies it.
+		return "swiftrt.StringAppend(&" + lv + ", " + rs + ")", true
+	}
 	return lv + " " + op + " " + rs, true
+}
+
+// goAddressable reports whether lv, the Go form of the Swift lvalue n, is a variable or a field
+// Go can take the address of: no map or slice index, which could be a map element.
+func goAddressable(n ast.Node, lv string) bool {
+	n = stripLoads(n)
+	for n.Kind() == "paren_expr" {
+		n = stripLoads(n.Child("sub_expr"))
+	}
+	switch n.Kind() {
+	case "declref_expr", "member_ref_expr":
+		return !strings.ContainsAny(lv, "[(")
+	}
+	return false
 }
 
 // integerLiterals returns the values of two integer literals.

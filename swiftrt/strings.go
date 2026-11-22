@@ -145,24 +145,21 @@ func StringUppercased(s string) string { return mapCase(s, upperSpecial, unicode
 // StringLowercased is String.lowercased().
 func StringLowercased(s string) string { return mapCase(s, lowerSpecial, unicode.ToLower) }
 
-// StringReserveCapacity is String.reserveCapacity(_:); a no-op.
-func StringReserveCapacityInt(s *string, n int) {}
-
 // StringAppendCharacter is String.append(_: Character).
-func StringAppendCharacter(s *string, c Character) { *s += c }
+func StringAppendCharacter(s *string, c Character) { StringAppend(s, c) }
 
 // StringAppendString is String.append(_: String).
-func StringAppendString(s *string, t string) { *s += t }
+func StringAppendString(s *string, t string) { StringAppend(s, t) }
 
 // StringAppendContentsOf is String.append(contentsOf:).
 func StringAppendContentsOf[T []Character | string | Substring](s *string, cs T) {
 	switch v := any(cs).(type) {
 	case string:
-		*s += v
+		StringAppend(s, v)
 	case Substring:
-		*s += v.String()
+		StringAppend(s, v.String())
 	case []Character:
-		*s += strings.Join(v, "")
+		StringAppend(s, strings.Join(v, ""))
 	}
 }
 
