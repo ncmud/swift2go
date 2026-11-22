@@ -539,7 +539,7 @@ func (e *fileEmitter) witness(q, goT string, req swiftmod.Requirement) string {
 	}
 	pfx := ""
 	if implMod.Pkg != e.m.Pkg {
-		e.m.importPkgs[implMod.Pkg] = implMod.ImportPath
+		e.m.importPkg(implMod)
 		pfx = implMod.Pkg + "."
 	}
 	saveM, saveIO := e.m, e.inoutParams
@@ -637,8 +637,7 @@ func (e *fileEmitter) retroactiveSelf(q, goT, proto string) (string, bool) {
 		ptrT = "*" + goT
 	}
 	field := strings.TrimPrefix(ptrT[strings.LastIndex(ptrT, ".")+1:], "*")
-	if !e.m.adapters[name] {
-		e.m.adapters[name] = true
+	if e.m.claim(claimAdapter, e.m.adapters, name) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "// %s gives %s the accessors of %s, which it conforms to here.\n", name, lastComponent(q), lastComponent(proto))
 		fmt.Fprintf(&b, "type %s struct{ %s }\n\n", name, ptrT)

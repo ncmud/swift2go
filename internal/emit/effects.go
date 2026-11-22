@@ -51,6 +51,13 @@ func (m *Module) valueScopes() *valueScopes {
 // mayWrite reports whether calling the function or reading the computed property with this USR can
 // write a shared place. An unknown USR can.
 func (m *Module) mayWrite(usr string) bool {
+	w := m.mayWriteFact(usr)
+	m.observe(obsEffect, "", usr, boolObs(w))
+	return w
+}
+
+// mayWriteFact is [Module.mayWrite] without recording the answer for an incremental run.
+func (m *Module) mayWriteFact(usr string) bool {
 	for _, mod := range append([]*Module{m}, m.Deps...) {
 		if _, ok := mod.decls[usr]; ok {
 			w, known := mod.effectsOf().writes[usr]

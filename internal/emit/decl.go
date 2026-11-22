@@ -69,6 +69,7 @@ type fileEmitter struct {
 	lent          map[uintptr]bool    // closures a library call holds only inside its result
 	sliceLos      map[string]string   // local ArraySlice constant → the Go variable holding its start index
 	sliceDry      bool                // sliceBase only reports whether a start index can be told
+	localFuncs    map[string]ast.Node // functions declared inside the file's function bodies, by USR
 }
 
 func (e *fileEmitter) w(format string, args ...any) { fmt.Fprintf(&e.b, format, args...) }
@@ -103,10 +104,8 @@ func (e *fileEmitter) emitFile() string {
 	if strings.Contains(src, "swiftrt.") {
 		imports = append(imports, `"`+e.m.RTPath+`"`)
 	}
-	for pkg, path := range e.m.importPkgs {
-		if strings.Contains(src, pkg+".") {
-			imports = append(imports, importSpec(pkg, path))
-		}
+	for pkg, path := range e.m.importedPackages(src) {
+		imports = append(imports, importSpec(pkg, path))
 	}
 	if strings.Contains(src, "testing.T") {
 		imports = append(imports, `"testing"`)
@@ -356,7 +355,7 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	for _, sup := range e.m.ancestors(info.GoName) {
 		if pkg, _, ok := strings.Cut(sup, "."); ok {
 			if dep := e.m.depByPkg(pkg); dep != nil {
-				e.m.importPkgs[pkg] = dep.ImportPath
+				e.m.importPkg(dep)
 			}
 		}
 		e.w("// %s upcasts to the superclass.\nfunc (self *%s) %s() *%s {\n\tif self == nil {\n\t\treturn nil\n\t}\n\treturn &self.%s\n}\n\n", upcastMethod(sup), recvT, upcastMethod(sup), sup, embeddedField(sup))
@@ -912,7 +911,7 @@ func (e *fileEmitter) protocolDecl(n ast.Node) {
 			if mod.typeKinds[pn] == "protocol" {
 				g := mod.LocalTypeName(pn)
 				if mod.Pkg != e.m.Pkg {
-					e.m.importPkgs[mod.Pkg] = mod.ImportPath
+					e.m.importPkg(mod)
 					g = mod.Pkg + "." + g
 				}
 				e.w("\t%s\n", g)
@@ -1034,7 +1033,7 @@ func (e *fileEmitter) retroactiveConformances(n ast.Node, q string) {
 				params, args = e.paramList(r)
 				res = e.resultGo(r)
 			}
-			if existing[name] || e.m.retroDone[dep.Pkg+"."+typeName+"."+name] {
+			if existing[name] || e.m.taken(claimRetro, e.m.retroDone, dep.Pkg+"."+typeName+"."+name) {
 				continue
 			}
 			// Types are written from inside the dependency's package.
@@ -1066,7 +1065,7 @@ func (e *fileEmitter) retroactiveConformances(n ast.Node, q string) {
 				e.m.retro(dep.Pkg, "// %s is set by the package that conforms %s to a protocol of its own.\nvar %s func(%s) %s\n\n", hook, typeName, hook, local(strings.TrimSuffix("self "+recv+", "+params, ", ")), local(res))
 				body = ret + hook + "(self" + prefixComma(args) + ")"
 				e.w("func init() { %s.%s = %s }\n\n", dep.Pkg, hook, mine.GoName)
-				e.m.importPkgs[dep.Pkg] = dep.ImportPath
+				e.m.importPkg(dep)
 			case own != nil && own.Kind == "var_decl" && !own.FreeSelf():
 				body = "return self." + own.GoName
 				if own.Computed {
@@ -1078,7 +1077,7 @@ func (e *fileEmitter) retroactiveConformances(n ast.Node, q string) {
 				e.m.Unsup("retroactive-conformance:"+name, e.where, "")
 				continue
 			}
-			e.m.retroDone[dep.Pkg+"."+typeName+"."+name] = true
+			e.m.take(claimRetro, e.m.retroDone, dep.Pkg+"."+typeName+"."+name)
 			e.m.retro(dep.Pkg, "// %s lets %s satisfy %s.%s.\nfunc (self %s) %s(%s) %s { %s }\n\n", name, typeName, e.m.Pkg, e.m.LocalTypeName(proto), recv, name, local(params), local(res), body)
 		}
 	}

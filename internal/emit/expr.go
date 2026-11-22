@@ -783,7 +783,7 @@ func (e *fileEmitter) lookup(usr string) (*DeclInfo, string) {
 			if d.Pkg == e.m.Pkg {
 				return info, ""
 			}
-			e.m.importPkgs[d.Pkg] = d.ImportPath
+			e.m.importPkg(d)
 			return info, d.Pkg + "."
 		}
 	}
@@ -797,7 +797,7 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 	if localKey == "" {
 		localKey = "local:" + name
 	}
-	if fn, ok := e.m.localFuncs[localKey]; ok && n != nil && n.Child("function_ref").Str("apply_level") == "unapplied" && len(fn.Child("generic_signature").Strings("generic_params")) > 0 {
+	if fn, ok := e.localFuncs[localKey]; ok && n != nil && n.Child("function_ref").Str("apply_level") == "unapplied" && len(fn.Child("generic_signature").Strings("generic_params")) > 0 {
 		// A local generic function used as a value at one specialization: Go's closure takes the
 		// protocol's interface, so a function of the specialized type forwards to it.
 		if ft := e.m.typeOf(n.Type()); ft != nil && ft.Kind == types.Func {
@@ -1051,7 +1051,7 @@ func (e *fileEmitter) stringValueInit(owner string) string {
 			if d.Pkg == e.m.Pkg {
 				return info.GoName
 			}
-			e.m.importPkgs[d.Pkg] = d.ImportPath
+			e.m.importPkg(d)
 			return d.Pkg + "." + info.GoName
 		}
 	}
@@ -1817,7 +1817,7 @@ func (e *fileEmitter) defaultArg(n ast.Node) string {
 		if key == "" {
 			key = "local:" + n.Child("default_args_owner").Str("base_name")
 		}
-		if fn, ok := e.m.localFuncs[key]; ok {
+		if fn, ok := e.localFuncs[key]; ok {
 			info = &DeclInfo{Node: fn, Kind: fn.Kind()}
 		}
 	}
@@ -1850,7 +1850,7 @@ func (e *fileEmitter) defaultArg(n ast.Node) string {
 			return e.expr(ex)
 		}
 		if info.Kind == "constructor_decl" && info.Node.Implicit() {
-			if init := e.m.varInit[info.Owner+"|"+params[idx].Name()]; init != nil {
+			if init := e.m.initialValue(info.Owner + "|" + params[idx].Name()); init != nil {
 				if s, ok := emptyAtCallSite(init); ok {
 					return s
 				}
@@ -3495,7 +3495,7 @@ func (e *fileEmitter) literalInit(n ast.Node, label string) (string, bool) {
 			if len(ps) == 1 && ps[0].Str("apiName") == label || len(ps) == 1 && ps[0].Name() == label {
 				ctor = d
 				if mod.Pkg != e.m.Pkg {
-					e.m.importPkgs[mod.Pkg] = mod.ImportPath
+					e.m.importPkg(mod)
 					pfx = mod.Pkg + "."
 				}
 			}
@@ -3831,7 +3831,7 @@ func (e *fileEmitter) operatorFunc(t *types.Type, op string) string {
 		for _, d := range mod.sortedDecls() {
 			if d.Kind == "func_decl" && d.Owner == t.Name && d.Node != nil && d.Node.Name() == op {
 				if mod.Pkg != e.m.Pkg {
-					e.m.importPkgs[mod.Pkg] = mod.ImportPath
+					e.m.importPkg(mod)
 					return mod.Pkg + "." + d.GoName
 				}
 				return d.GoName
