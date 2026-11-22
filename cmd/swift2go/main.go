@@ -215,7 +215,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			fmt.Printf("%s: %d files\n", name, len(files))
 			continue
 		}
-		var opts []emit.Option
+		opts := []emit.Option{emit.Dependencies(done)}
 		if dest.CorelibsFoundation() {
 			opts = append(opts, emit.CorelibsFoundation())
 		}
@@ -224,7 +224,6 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			fail(name, err)
 			continue
 		}
-		m.Deps = done
 		m.Overlay = overlays[name]
 		m.Mappings = mappings
 		if importPath, ok := maps[name]; ok {

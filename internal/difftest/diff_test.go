@@ -5,6 +5,9 @@
 // transpiles every case into one Go package and runs each case's function as its own process. A case
 // that traps records what it printed before the trap, then a line "TRAP"; the trap's own message
 // differs between the languages and is not compared.
+//
+// testdata/diff/base holds the library DiffBase, which Cases depends on, for cases that use
+// declarations of another package.
 package difftest
 
 import (
@@ -32,7 +35,8 @@ let package = Package(
     name: "DiffCases",
     platforms: [.macOS(.v13)],
     targets: [
-        .target(name: "Cases", swiftSettings: [.swiftLanguageMode(.v5)]),
+        .target(name: "DiffBase", swiftSettings: [.swiftLanguageMode(.v5)]),
+        .target(name: "Cases", dependencies: ["DiffBase"], swiftSettings: [.swiftLanguageMode(.v5)]),
         .executableTarget(name: "Runner", dependencies: ["Cases"], swiftSettings: [.swiftLanguageMode(.v5)]),
     ])
 `
@@ -68,7 +72,7 @@ func TestDiff(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(gomod, "go.sum"), sum, 0o644))
 	tool := filepath.Join(work, "swift2go")
 	run(t, root, "go", "build", "-o", tool, "./cmd/swift2go")
-	run(t, gomod, tool, "-pkg", pkg, "-out", "out", "transpile", "Cases")
+	run(t, gomod, tool, "-pkg", pkg, "-out", "out", "transpile", "DiffBase", "Cases")
 
 	var mainGo strings.Builder
 	mainGo.WriteString("package main\n\nimport (\n\t\"os\"\n\n\tcases \"difftest/out/cases\"\n)\n\nvar all = map[string]func(){\n")
@@ -112,15 +116,23 @@ func readSources(t *testing.T, root string) {
 
 func writeSwiftPackage(t *testing.T, pkg string, sources, names []string) {
 	cases := filepath.Join(pkg, "Sources", "Cases")
+	base := filepath.Join(pkg, "Sources", "DiffBase")
 	runner := filepath.Join(pkg, "Sources", "Runner")
 	must(t, os.MkdirAll(cases, 0o755))
+	must(t, os.MkdirAll(base, 0o755))
 	must(t, os.MkdirAll(runner, 0o755))
 	must(t, os.WriteFile(filepath.Join(pkg, "Package.swift"), []byte(packageSwift), 0o644))
-	for _, s := range sources {
-		data, err := os.ReadFile(s)
-		must(t, err)
-		must(t, os.WriteFile(filepath.Join(cases, filepath.Base(s)), data, 0o644))
+	baseSources, err := filepath.Glob(filepath.Join(filepath.Dir(sources[0]), "base", "*.swift"))
+	must(t, err)
+	copyInto := func(dir string, files []string) {
+		for _, s := range files {
+			data, err := os.ReadFile(s)
+			must(t, err)
+			must(t, os.WriteFile(filepath.Join(dir, filepath.Base(s)), data, 0o644))
+		}
 	}
+	copyInto(cases, sources)
+	copyInto(base, baseSources)
 	var main strings.Builder
 	main.WriteString("import Cases\n\nlet all: [String: () -> Void] = [\n")
 	for _, n := range names {

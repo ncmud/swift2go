@@ -92,11 +92,10 @@ func transpileMapped(t *testing.T, fixture string, mapped map[string]string, tar
 		if err != nil {
 			t.Fatal(err)
 		}
-		m, err := New(name, files, fixtureRT)
+		m, err := New(name, files, fixtureRT, Dependencies(done))
 		if err != nil {
 			t.Fatal(err)
 		}
-		m.Deps = done
 		m.Mappings = mappings
 		pkgOut := strings.ToLower(name)
 		if tg.Type == "test" {

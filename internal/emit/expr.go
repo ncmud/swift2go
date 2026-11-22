@@ -136,7 +136,7 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.expr(n.Child("sub_expr"))
 	case "super_ref_expr":
 		if t := e.m.typeOf(n.Type()); t != nil {
-			return "(&self." + strings.TrimPrefix(e.m.GoType(t, e.generics), "*") + ")"
+			return "(&self." + embeddedField(e.m.GoType(t, e.generics)) + ")"
 		}
 		return "self"
 	case "destructure_tuple_expr":
@@ -346,11 +346,7 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		}
 		if fn := stripConv(sub.Child("fn")); fn != nil && fn.Kind() == "dot_syntax_call_expr" {
 			if as := fn.Child("args").List("args"); len(as) > 0 && as[0].Child("expr").Kind() == "super_ref_expr" {
-				sup := strings.TrimPrefix(e.m.GoType(e.m.typeOf(as[0].Child("expr").Type()), e.generics), "*")
-				root := sup
-				for e.m.Superclass(root) != "" {
-					root = e.m.Superclass(root)
-				}
+				sup := embeddedField(e.m.GoType(e.m.typeOf(as[0].Child("expr").Type()), e.generics))
 				e.w("self.%s = *%s\n", sup, call)
 				return "self.SwiftSub = self"
 			}
@@ -2548,7 +2544,7 @@ func (e *fileEmitter) classDelegation(sub ast.Node) string {
 	args := strings.Join(ss, ", ")
 	invoke := e.initDispatch(info, args)
 	if target := stripConv(selfArgs[0].Child("expr")); target.Kind() == "super_ref_expr" {
-		invoke = "self." + strings.TrimPrefix(e.m.GoType(e.m.typeOf(target.Type()), e.generics), "*") + "." + e.initBodyName(info) + "(" + args + ")"
+		invoke = "self." + embeddedField(e.m.GoType(e.m.typeOf(target.Type()), e.generics)) + "." + e.initBodyName(info) + "(" + args + ")"
 	}
 	if !info.Node.Bool("failable") {
 		return invoke
@@ -2598,8 +2594,8 @@ func (e *fileEmitter) superTarget(info *DeclInfo, base ast.Node) string {
 func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 	usr := d.Str("decl_usr")
 	info, pfx := e.lookup(usr)
-	if info != nil && pfx == "" && info.OwnerKind == "class_decl" {
-		owner := e.m.ownerGoName(info)
+	if info != nil && info.OwnerKind == "class_decl" {
+		owner := pfx + e.m.ownerGoName(info)
 		if made := e.constructedClass(n); made != owner && e.m.IsAncestor(owner, made) {
 			// An initializer a subclass inherits from its superclass runs on a new subclass object.
 			e.callee = info
@@ -2995,7 +2991,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			fn := map[string]string{"+": "Add", "-": "Sub", "*": "Mul"}[op]
 			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
-		if op == "+" && (lt.Kind == types.Array || e.m.Recv(lt) == "Slice") {
+		if op == "+" && (lt.Kind == types.Array || e.m.Recv(lt) == "Slice" || e.m.Recv(lt) == "Data") {
 			rs := e.expr(r)
 			if lg, rg := e.m.GoType(lt, e.generics), e.exprGoType(r); strings.HasPrefix(lg, "[]") && !strings.HasPrefix(rg, "[]") {
 				// `array + sequence`: the other sequence (a lazy one, a Set) is read into a slice.
@@ -3158,7 +3154,7 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 		if (base == "<<" || base == ">>") && lt.Kind == types.Named && isIntegerName(lt.Name) && !isNonNegativeLiteral(as[1].node) {
 			return "swiftrt." + map[string]string{"<<": "Shl", ">>": "Shr"}[base] + e.intTypeArg(lt) + "(" + cur + ", " + rs + ")"
 		}
-		if base == "+" && e.m.Recv(lt) == "Slice" {
+		if base == "+" && (e.m.Recv(lt) == "Slice" || e.m.Recv(lt) == "Data") {
 			return "append(" + cur + ", " + rs + "...)"
 		}
 		if base == "+" && e.m.Recv(lt) == "String" {
@@ -3183,7 +3179,7 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 		return pfx + info.GoName + "(&" + e.lvalue(l) + ", " + rs + ")", true
 	}
 	lv := e.lvalue(l)
-	if lt.Kind == types.Named && isIntegerName(lt.Name) || base == "+" && e.m.Recv(lt) == "Slice" || len(base) == 2 && base[0] == '&' || e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
+	if lt.Kind == types.Named && isIntegerName(lt.Name) || base == "+" && (e.m.Recv(lt) == "Slice" || e.m.Recv(lt) == "Data") || len(base) == 2 && base[0] == '&' || e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
 		return lv + " = " + combine(lv), true
 	}
 	if base == "+" && e.m.GoType(lt, e.generics) == "string" && goAddressable(l, lv) {

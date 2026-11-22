@@ -1,0 +1,12 @@
+descriptor:label(plain):[descriptor] hi
+plain false false false
+silent:label(s):
+s true false false
+silent:label(anon):
+anon true false false
+descriptor:LOUD+label(loud2):[DESCRIPTOR] HI
+loud2 false true false
+louder:LOUD+label(loud5):[LOUDER] HI
+loud5 false true true
+3 [DESCRIPTOR] A
+XPDescriptor.init descriptor,XPDescriptor.init silent,XPDescriptor.init silent,XPDescriptor.init descriptor,OSLoud.init,XPDescriptor.init louder,OSLoud.init,XPDescriptor.init descriptor,OSLoud.init

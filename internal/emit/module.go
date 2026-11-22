@@ -30,6 +30,9 @@ type DeclInfo struct {
 	NotWitness bool
 	// Overrides is the USR of the superclass member this member overrides.
 	Overrides string
+	// OpenOverridable marks a member that a subclass in another module can override: an open method
+	// or property, or a designated initializer of an open class visible outside its module.
+	OpenOverridable bool
 	// GenericFree marks a method whose generic parameter needs a protocol's static requirements; Go methods
 	// cannot declare type parameters, so it is emitted as a package-level function taking self.
 	GenericFree bool
@@ -95,8 +98,9 @@ type Module struct {
 	hoists          int
 	keyable         map[string]bool // whether a local struct can be a Go map key
 	mutatingTypes   map[string]bool
-	overridden      map[string]bool // USRs of class members some subclass overrides
-	superOf         map[string]string
+	overridden      map[string]bool   // USRs of class members some subclass overrides
+	superOf         map[string]string // a class's superclass, qualified by package when a dependency declares it
+	openClasses     map[string]bool   // local open classes, which another module can subclass
 	methodNames     map[string]bool   // "owner name" of every function declared on a type
 	typeAliases     map[string]string // qualified typealias name → mangled aliased type
 	members         map[string][]*DeclInfo
@@ -212,9 +216,13 @@ func (m *Module) Superclass(goName string) string {
 	return m.superOf[goName]
 }
 
-// HasSubclass reports whether some local class inherits from goName.
+// HasSubclass reports whether some local class inherits from goName, or goName is an open class,
+// which a class of another module can inherit from.
 func (m *Module) HasSubclass(goName string) bool {
 	m.classTree()
+	if m.openClasses[goName] {
+		return true
+	}
 	for _, sup := range m.superOf {
 		if sup == goName {
 			return true
@@ -226,6 +234,51 @@ func (m *Module) HasSubclass(goName string) bool {
 // inHierarchy reports whether a local class has a superclass or a subclass.
 func (m *Module) inHierarchy(goName string) bool {
 	return m.Superclass(goName) != "" || m.HasSubclass(goName)
+}
+
+// ancestors lists goName's superclasses, nearest first, following the chain into the dependencies
+// that declare them. A dependency's class is qualified by its package ("networking.Descriptor").
+func (m *Module) ancestors(goName string) []string {
+	var out []string
+	mod, name, prefix := m, goName, ""
+	for {
+		s := mod.Superclass(name)
+		if s == "" {
+			return out
+		}
+		pkg, rest, qualified := strings.Cut(s, ".")
+		if !qualified {
+			out = append(out, prefix+s)
+			name = s
+			continue
+		}
+		out = append(out, s)
+		dep := mod.depByPkg(pkg)
+		if dep == nil {
+			return out
+		}
+		mod, name, prefix = dep, rest, pkg+"."
+	}
+}
+
+// depByPkg returns the transpiled dependency whose Go package is pkg.
+func (m *Module) depByPkg(pkg string) *Module {
+	for _, d := range m.Deps {
+		if d.Pkg == pkg {
+			return d
+		}
+	}
+	return nil
+}
+
+// embeddedField is the field name Go gives an embedded type: its name without package or type
+// arguments.
+func embeddedField(goType string) string {
+	goType = strings.TrimPrefix(goType, "*")
+	if i := strings.Index(goType, "["); i >= 0 {
+		goType = goType[:i]
+	}
+	return goType[strings.LastIndex(goType, ".")+1:]
 }
 
 // IsAncestor reports whether anc is goName's superclass, directly or transitively. Both names may be
@@ -243,12 +296,24 @@ func (m *Module) IsAncestor(anc, goName string) bool {
 		}
 		return false
 	}
-	for s := m.Superclass(goName); s != ""; s = m.Superclass(s) {
-		if s == anc {
-			return true
+	return slices.Contains(m.ancestors(goName), anc)
+}
+
+// markOpenOverridable marks the members of the open class n that another module can override.
+func (m *Module) markOpenOverridable(n ast.Node) {
+	for _, mem := range n.List("members") {
+		info := m.decls[mem.Str("usr")]
+		if info == nil || info.Static || mem.Bool("final") {
+			continue
+		}
+		switch mem.Kind() {
+		case "func_decl", "var_decl", "subscript_decl":
+			info.OpenOverridable = mem.Str("access") == "open"
+		case "constructor_decl":
+			access := mem.Str("access")
+			info.OpenOverridable = mem.Bool("designated") && (access == "open" || access == "public")
 		}
 	}
-	return false
 }
 
 // upcastMethod names the generated method that upcasts to class goName, which may be package-qualified.
@@ -261,18 +326,30 @@ func (m *Module) classTree() {
 		return
 	}
 	m.superOf = map[string]string{}
+	m.openClasses = map[string]bool{}
 	for _, d := range m.decls {
 		if d.Kind != "class_decl" || d.Node == nil {
 			continue
+		}
+		if d.Node.Str("access") == "open" {
+			m.openClasses[d.GoName] = true
 		}
 		st := d.Node.Child("inherits").Str("superclass_type")
 		if st == "" {
 			continue
 		}
-		g := strings.TrimPrefix(m.GoType(m.typeOf(st), nil), "*")
-		if g != "" && !strings.Contains(g, ".") && g != "any" {
-			m.superOf[d.GoName] = g
+		t := m.typeOf(st)
+		g := strings.TrimPrefix(m.GoType(t, nil), "*")
+		if g == "" || g == "any" {
+			continue
 		}
+		if pkg, _, ok := strings.Cut(g, "."); ok {
+			// A superclass another transpiled module declares.
+			if dep := m.depByPkg(pkg); dep == nil || dep.typeKinds[t.Name] != "class_decl" {
+				continue
+			}
+		}
+		m.superOf[d.GoName] = g
 	}
 }
 
@@ -296,6 +373,12 @@ func (m *Module) IsPayloadEnum(owner string) bool {
 
 // An Option configures a module that [New] prepares.
 type Option func(*Module)
+
+// Dependencies sets the transpiled modules the module imports, so that indexing sees the classes it
+// inherits from them.
+func Dependencies(deps []*Module) Option {
+	return func(m *Module) { m.Deps = deps }
+}
 
 // CorelibsFoundation marks a module compiled against Foundation as Linux and the other platforms
 // without Objective-C declare it. Its Foundation names are respelled as Darwin's, so it calls the
@@ -492,6 +575,9 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				}
 			}
 			m.index(n.List("members"), q, n.Kind())
+			if n.Kind() == "class_decl" && n.Str("access") == "open" {
+				m.markOpenOverridable(n)
+			}
 		case "extension_decl":
 			t := m.typeOf(n.Str("extended_type"))
 			q := t.Name
@@ -799,8 +885,8 @@ func (m *Module) settleClassMemberNames() {
 			continue
 		}
 		root := info
-		for root.Overrides != "" && m.decls[root.Overrides] != nil {
-			root = m.decls[root.Overrides]
+		for root.Overrides != "" && m.declOf(root.Overrides) != nil {
+			root = m.declOf(root.Overrides)
 		}
 		info.GoName, info.NotWitness = root.GoName, root.NotWitness
 	}
