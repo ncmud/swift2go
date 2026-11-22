@@ -1,7 +1,10 @@
 package swiftrt
 
 import (
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -225,6 +228,63 @@ func TestBundle(t *testing.T) {
 	}
 	if got, want := URLPath(NSBundleBundleURL(NSBundleMain)), filepath.Dir(exe); got != want {
 		t.Errorf("Bundle.main.bundleURL path = %q, want %q", got, want)
+	}
+}
+
+// TestBundleBesideTheRealExecutable copies the test binary beside a resource bundle and runs it
+// through a symlink in another directory, by a relative path, from a third working directory. The
+// child finds the bundle the way a generated Bundle.module accessor does.
+func TestBundleBesideTheRealExecutable(t *testing.T) {
+	const bundle = "pkg_Target.bundle"
+	if os.Getenv("SWIFTRT_BUNDLE_CHILD") != "" {
+		main := NSBundleBundleURL(NSBundleMain)
+		found := NSBundleOptInitURL(URLAppendingPathComponentString(main, bundle)) != nil
+		fmt.Printf("%s %v", URLPath(main), found)
+		os.Exit(0)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, bin, lib := filepath.Join(root, "app"), filepath.Join(root, "bin"), filepath.Join(root, "lib")
+	for _, dir := range []string{filepath.Join(app, bundle), bin, lib} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	copyExecutable(t, filepath.Join(app, "server"))
+	if err := os.Symlink(filepath.Join(app, "server"), filepath.Join(bin, "server")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("../bin/server", "-test.run=^TestBundleBesideTheRealExecutable$")
+	cmd.Dir = lib
+	cmd.Env = append(os.Environ(), "SWIFTRT_BUNDLE_CHILD=1")
+	out, err := cmd.Output()
+	if want := app + " true"; err != nil || string(out) != want {
+		t.Fatalf("child printed %q, err %v; want %q", out, err, want)
+	}
+}
+
+func copyExecutable(t *testing.T, dst string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.Open(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
