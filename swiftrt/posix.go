@@ -152,3 +152,19 @@ func UnsafePointerPointee(p any) int8 { return cCharAt(p, 0) }
 func StringWithCString[R any](s string, body func(*any) R) R {
 	return body(cStringResult(s))
 }
+
+// UnsafeMutablePointerSubscriptInt is Swift `UnsafeMutablePointer<CChar>[i]`: the C character at
+// offset i.
+func UnsafeMutablePointerSubscriptInt(p any, i int) int8 { return cCharAt(p, i) }
+
+// UnsafeMutablePointerPointee is Swift `UnsafeMutablePointer<CChar>.pointee`: the first C character.
+func UnsafeMutablePointerPointee(p any) int8 { return cCharAt(p, 0) }
+
+// CFStrlen is C `strlen(_:)`: the number of C characters before the terminating NUL.
+func CFStrlen(p any) int {
+	n := 0
+	for cCharAt(p, n) != 0 {
+		n++
+	}
+	return n
+}

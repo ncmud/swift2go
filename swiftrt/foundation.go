@@ -378,6 +378,43 @@ func AtomicStoreOrdering[T any](a *Atomic[T], v T, _ any) {
 	a.v = v
 }
 
+// AtomicExchangeOrdering is Synchronization `Atomic.exchange(_:ordering:)`: it stores v and returns
+// the value it replaced.
+func AtomicExchangeOrdering[T any](a *Atomic[T], v T, _ any) T {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	old := a.v
+	a.v = v
+	return old
+}
+
+// AtomicUpdate is the result of an Atomic read-modify-write: the value before and after.
+type AtomicUpdate[T any] struct {
+	OldValue T
+	NewValue T
+}
+
+func atomicUpdate[T any](a *Atomic[T], f func(T) T) AtomicUpdate[T] {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	old := a.v
+	a.v = f(old)
+	return AtomicUpdate[T]{OldValue: old, NewValue: a.v}
+}
+
+// AtomicWrappingAddOrdering is Synchronization `Atomic.wrappingAdd(_:ordering:)`.
+func AtomicWrappingAddOrdering[T Integer](a *Atomic[T], v T, _ any) AtomicUpdate[T] {
+	return atomicUpdate(a, func(old T) T { return old + v })
+}
+
+// AtomicBitwiseOrOrdering is Synchronization `Atomic.bitwiseOr(_:ordering:)`.
+func AtomicBitwiseOrOrdering[T Integer](a *Atomic[T], v T, _ any) AtomicUpdate[T] {
+	return atomicUpdate(a, func(old T) T { return old | v })
+}
+
+// AtomicUpdateOrderingRelaxed is `AtomicUpdateOrdering.relaxed`.
+var AtomicUpdateOrderingRelaxed any = "relaxed"
+
 // ContinuousClockInstant is `ContinuousClock.Instant`.
 type ContinuousClockInstant time.Time
 
