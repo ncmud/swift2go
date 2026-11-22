@@ -1035,24 +1035,38 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 	}
 	find(n.Child("sub_expr"))
 	var pre, post strings.Builder
+	// Swift marks the collection a bound subscript reads from as inout even when the chain only reads.
+	access := map[string]bool{}
+	for _, b := range binds {
+		if ds := stripLoads(b.Child("sub_expr")); ds.Kind() == "subscript_expr" && ds.Child("base").Kind() == "inout_expr" {
+			access[nodeID(ds.Child("base"))] = true
+		}
+	}
 	mutates := false
 	ast.Walk(n.Child("sub_expr"), func(x ast.Node) {
-		if x.Kind() == "assign_expr" || x.Kind() == "inout_expr" {
+		if x.Kind() == "assign_expr" || x.Kind() == "inout_expr" && !access[nodeID(x)] {
 			mutates = true
 		}
 	})
 	for _, b := range binds {
 		v := e.newTmp("bound")
 		sub := b.Child("sub_expr")
-		// `dict[k]?.field = v` mutates the dictionary entry in Swift; MapGet hands back a copy, so write it back.
-		if ds := stripLoads(sub); mutates && ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "Map" && len(ds.Child("args").List("args")) == 1 && e.assignable(stripLoads(ds.Child("base"))) {
-			if vt := e.m.typeOf(sub.Type()); vt != nil && vt.Kind == types.Optional && len(vt.Args) == 1 && !e.m.isReferenceGo(vt.Args[0], e.m.GoType(vt.Args[0], e.generics)) {
-				k := e.newTmp("key")
-				m := e.lvalue(stripLoads(ds.Child("base")))
-				fmt.Fprintf(&pre, "%s := %s\n%s := swiftrt.MapGet(%s, %s)\nif %s == nil { %s }\n", k, e.expr(ds.Child("args").List("args")[0].Child("expr")), v, m, k, v, chainReturn)
-				fmt.Fprintf(&post, "%s[%s] = *%s\n", m, k, v)
-				e.opaque[nodeID(b)] = "(*" + v + ")"
-				continue
+		// `dict[k]?.field = v` mutates the dictionary entry in Swift; the Get functions hand back a copy, so write it back.
+		if ds := stripLoads(sub); mutates && ds.Kind() == "subscript_expr" && len(ds.Child("args").List("args")) == 1 {
+			recv := e.m.Recv(e.m.typeOf(ds.Child("base").Type()))
+			vt := e.m.typeOf(sub.Type())
+			if (recv == "Map" || isFuncDict(recv)) && vt != nil && vt.Kind == types.Optional && len(vt.Args) == 1 && !e.m.isReferenceGo(vt.Args[0], e.m.GoType(vt.Args[0], e.generics)) {
+				if m, ok := e.dictRoot(stripLoads(ds.Child("base")), &pre); ok {
+					k := e.newTmp("key")
+					fmt.Fprintf(&pre, "%s := %s\n%s := swiftrt.%sGet(%s, %s)\nif %s == nil { %s }\n", k, e.expr(ds.Child("args").List("args")[0].Child("expr")), v, recv, m, k, v, chainReturn)
+					if recv == "Map" {
+						fmt.Fprintf(&post, "%s[%s] = *%s\n", m, k, v)
+					} else {
+						fmt.Fprintf(&post, "swiftrt.%sSet(&%s, %s, %s)\n", recv, m, k, v)
+					}
+					e.opaque[nodeID(b)] = "(*" + v + ")"
+					continue
+				}
 			}
 		}
 		fmt.Fprintf(&pre, "%s := %s\nif %s == nil { %s }\n", v, e.expr(sub), v, chainReturn)
@@ -1080,6 +1094,32 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 		return "func() " + rt + " {\n" + chainPre + "res := " + body + "\n" + post.String() + "return res\n}()"
 	}
 	return "func() " + rt + " {\n" + chainPre + "return " + body + "\n}()"
+}
+
+// dictRoot renders a dictionary an optional chain writes back into: an assignable path, or a stored
+// property of a class reference, whose reference it binds once into pre.
+func (e *fileEmitter) dictRoot(n ast.Node, pre *strings.Builder) (string, bool) {
+	if e.assignable(n) {
+		return e.lvalue(n), true
+	}
+	if n.Kind() != "member_ref_expr" {
+		return "", false
+	}
+	info, _ := e.lookup(n.Child("decl").Str("decl_usr"))
+	if info == nil || info.Kind != "var_decl" || info.Computed || info.Static || info.Observed {
+		return "", false
+	}
+	base := stripLoads(n.Child("base"))
+	bt := e.m.typeOf(base.Type())
+	if bt == nil || bt.Kind == types.Optional {
+		return "", false
+	}
+	if gt := e.m.GoType(bt, e.generics); !strings.HasPrefix(gt, "*") || !e.m.isReferenceGo(bt, gt) {
+		return "", false
+	}
+	ref := e.newTmp("ref")
+	fmt.Fprintf(pre, "%s := %s\n", ref, e.expr(base))
+	return ref + "." + info.GoName, true
 }
 
 func (e *fileEmitter) tuple(n ast.Node) string {
