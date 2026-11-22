@@ -1,0 +1,14 @@
+0: struct | struct 4 | as? struct 4
+   rethrow escaped: struct=true kinded=false
+1: other | enum missing | if-case missing
+   rethrow: handled enum
+2: other | enum failed("disk") | if-case failed disk
+   rethrow: handled enum
+3: kinded | kinded proto | is kinded
+   rethrow escaped: struct=false kinded=true
+4: class | class cls | if-case other
+   rethrow escaped: struct=false kinded=false
+5: other | other | if-case other
+   rethrow escaped: struct=false kinded=false
+6: none | none | none
+   rethrow: none

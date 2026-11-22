@@ -611,7 +611,7 @@ func (e *fileEmitter) conds(cs []ast.Node, inner func()) {
 		e.bindFromExpr(p, src)
 		e.conds(rest, inner)
 		e.w("}\n")
-	case "pattern_enum_element", "pattern_expr", "pattern_bool":
+	case "pattern_enum_element", "pattern_expr", "pattern_bool", "pattern_is":
 		tmp := e.newTmp("subj")
 		e.w("if %s := %s; %s {\n", tmp, e.expr(init), e.patternTest(p, tmp, e.m.typeOf(init.Type())))
 		e.bindOrigin = e.origin(init)
