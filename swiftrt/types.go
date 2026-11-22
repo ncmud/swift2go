@@ -1,6 +1,9 @@
 package swiftrt
 
-import "reflect"
+import (
+	"reflect"
+	"strings"
+)
 
 // Type is a Swift metatype value such as `Foo.self`.
 type Type interface {
@@ -20,13 +23,33 @@ func (TypeT[T]) Description() string { return typeName(reflect.TypeFor[T]()) }
 // TypeOf is Swift `T.self`.
 func TypeOf[T any]() TypeT[T] { return TypeT[T]{} }
 
-type dynType struct{ t reflect.Type }
+// dynType is the dynamic type of a value. A payload enum's value is a Go type of its case, so it
+// carries the enum's Swift name for its description.
+type dynType struct {
+	t    reflect.Type
+	name string
+}
 
 func (d dynType) Reflect() reflect.Type { return d.t }
-func (d dynType) Description() string   { return typeName(d.t) }
+
+func (d dynType) Description() string {
+	if d.name != "" {
+		return d.name
+	}
+	return typeName(d.t)
+}
 
 // TypeOfValue is Swift `type(of:)`.
-func TypeOfValue(v any) Type { return dynType{reflect.TypeOf(Dynamic(v))} }
+func TypeOfValue(v any) Type {
+	v = Dynamic(v)
+	if _, ok := v.(SwiftCase); ok {
+		if n, ok := v.(SwiftNamed); ok {
+			name := n.SwiftTypeName()
+			return dynType{reflect.TypeOf(v), name[strings.LastIndexByte(name, '.')+1:]}
+		}
+	}
+	return dynType{t: reflect.TypeOf(v)}
+}
 
 func typeName(t reflect.Type) string {
 	if t == nil {
