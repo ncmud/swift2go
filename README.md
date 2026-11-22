@@ -77,23 +77,44 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
   declarations, but no Go is written for it. Dependents import the mapped path and call it by the names
   swift2go would have generated: transpile the target once without `-map` and implement the exported API
   of the output.
-- **A module that is not transpiled** (a third-party product, or a C module such as `CEngine`) is
-  referenced the way any foreign module is: its members become runtime-style names
-  (`swiftrt.<Receiver><Member><Labels>`, `swiftrt.CF<function>` for C functions, `swiftrt.CV<name>` for
-  C macros and globals) and its types are qualified by the module name in lower case. Each such name
-  that the mapped package exports is taken from that package, imported under the module name in lower
-  case. Names it does not export stay in `swiftrt`. When two mapped packages export a name, the module
-  that sorts first wins.
+- **A Swift module that is not transpiled** (a third-party product such as GRDB) is called by names built
+  from its declarations, so one hand-written Go function covers every call site of a Swift declaration.
+  Its package is imported under its package name.
+  - A member is named after the type or protocol that **declares** it, with nested owners flattened, then
+    the base name and the argument-label suffix the runtime uses: `record.insert(db)` from an extension of
+    `PersistableRecord` is `grdb.PersistableRecordInsert(record, db)`, `Database.ColumnType.text` is
+    `grdb.DatabaseColumnTypeText`. A free function has no owner; an initializer is `<Type>Init<labels>`
+    (unlabeled arguments add their runtime kind, as for runtime initializers); a member a module declares
+    in an extension of another module's type is that module's (`grdb.SequenceContains`).
+  - The receiver is the first argument (`&v` for a mutating method on a struct). An instance property is
+    read with `<Owner><Prop>(recv)` and written with `<Owner>Set<Prop>(&v, x)`. A static property is a
+    package variable, or `<Protocol><Prop>[T]()` when a protocol declares it. A payload case is a
+    constructor function and a payload-free case a value that `case` patterns compare with.
+  - An operator is a call, `<Owner>Op<Word>` or `Op<Word>` at module level (`==` is `OpEqual`, `&&`
+    `OpAnd`, `!` `OpNot`, …), with the label suffix's kind for concrete standard-library operands:
+    `Column("read") == false` is `grdb.SQLSpecificExpressibleOpEqualBool(…, false)`.
+  - Type arguments are explicit when Go cannot infer them: the conforming type for a static member of a
+    protocol (`MailRecord.filter(e)` is `grdb.TableRecordFilter[MailRecord](e)`), then all of a member's
+    own type parameters when one occurs in its result (`row["id"]` is `grdb.RowSubscriptString[int64]`).
+    `Void` is `struct{}`.
+  - An array or dictionary literal of one of its types calls `<Type>InitArrayLiteral(elems...)` or
+    `<Type>InitDictionaryLiteral(swiftrt.KV[K, V]{…}...)`.
+  - Its classes are pointers (`*grdb.Database`) and its protocols interfaces, nil for none.
+  - A local type or extension that conforms to its protocols registers in `init()`:
+    `grdb.RegisterConformance[T](swiftrt.Conformance{Type, Protocols, Witnesses})`. Witnesses map each
+    protocol requirement the type implements, itself or through a local protocol's default, to a Go
+    function, keyed as Swift names the requirement (`"didInsert(_:)"`); the requirements come from the
+    module's symbol graph. See `swiftrt.Conformance` for the function shapes.
+- **A C module that is not transpiled** (such as `CEngine`) is referenced the way any C module is
+  (`swiftrt.CF<function>` for C functions, `swiftrt.CV<name>` for C macros and globals). Each such name
+  that the mapped package exports is taken from that package, imported under its package name. Names it
+  does not export stay in `swiftrt`. When two mapped packages export a name, the module that sorts first
+  wins.
 - A mapped package's declarations decide a few shapes at call sites:
   - a type the package declares generic keeps its Swift type arguments (`Box<Int>` becomes
     `glue.Box[int]`, and its initializers are called as `BoxInit…[int]`); other foreign types drop them;
-  - a function whose result depends on a generic parameter Go cannot infer (one the function declares, or
-    for a free or static function one of its generic type) is called with the Go type of the result as an
-    explicit first type argument (`unbox(b)` becomes `glue.Unbox[int](b)`);
   - a `for` loop over a value a mapped function returns, other than an array, dictionary or set, ranges
-    over it directly, so the function can return a lazy `iter.Seq`;
-  - a payload-free case of a mapped enum matches by comparison with the exported constant
-    (`glue.ShadeDark`).
+    over it directly, so the function can return a lazy `iter.Seq`.
 
 From a checkout, `just check <Target> <TestTarget>` transpiles a target and its tests and runs them
 with `go test`. Set `SWIFT_PKG` to the package directory.

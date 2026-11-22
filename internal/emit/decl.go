@@ -272,7 +272,9 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 
 // protocolForwarders gives a conforming type the protocol-extension default methods it does not define.
 func (e *fileEmitter) protocolForwarders(n ast.Node, self *DeclInfo) {
-	e.protocolForwardersFor(n, e.m.qualify(self.Owner, n.Name()))
+	q := e.m.qualify(self.Owner, n.Name())
+	e.protocolForwardersFor(n, q)
+	e.conformanceRegistrations(n, q)
 }
 
 func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
@@ -661,6 +663,9 @@ func (e *fileEmitter) extensionDecl(n ast.Node) {
 	e.generics = saveG
 	if self.Kind != "foreign" && self.Kind != "protocol_ext" && len(n.Child("inherits").List("conformances")) > 0 {
 		e.protocolForwardersFor(n, q)
+	}
+	if self.Kind != "protocol_ext" {
+		e.conformanceRegistrations(n, q)
 	}
 }
 

@@ -77,6 +77,17 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 		return err
 	}
 	extra := append(append(swiftmod.TestingFlags(), swiftmod.PrebuiltFlags(buildDir)...), cflags...)
+	for i, mp := range mappings {
+		if t, ok := targets[mp.Module]; ok && t.ModuleType == "ClangTarget" {
+			continue
+		}
+		reqs, err := swiftmod.ProtocolRequirements(mp.Module, append([]string{"-I", mods}, extra...))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "swift2go: -map %s: conformances register no witnesses: %v\n", mp.Module, err)
+			continue
+		}
+		mappings[i].Requirements = reqs
+	}
 	searchDirs := []string{mods, filepath.Join(buildDir, "out", "Products", "Debug")}
 	emitted := map[string]bool{}
 	load := func(t swiftmod.Target) ([]ast.File, error) {

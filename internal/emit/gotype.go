@@ -233,6 +233,9 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		}
 	}
 	parts := strings.SplitN(name, ".", 2)
+	if len(parts) == 2 && m.mappedKind(name) == types.KindClass {
+		return "*" + strings.ToLower(parts[0]) + "." + strings.ReplaceAll(parts[1], ".", "") + m.mappedTypeArgs(&types.Type{Kind: types.Named, Name: name, Args: args}, generics)
+	}
 	if len(parts) == 2 {
 		return strings.ToLower(parts[0]) + "." + strings.ReplaceAll(parts[1], ".", "") + m.mappedTypeArgs(&types.Type{Kind: types.Named, Name: name, Args: args}, generics)
 	}
@@ -246,7 +249,7 @@ func (m *Module) isReferenceGo(t *types.Type, goType string) bool {
 	if t.Kind == types.Existential {
 		return true
 	}
-	if t.Kind == types.Named && m.isLocalProtocol(t.Name) {
+	if t.Kind == types.Named && (m.isLocalProtocol(t.Name) || m.mappedKind(t.Name) == types.KindProtocol) {
 		return true
 	}
 	return false

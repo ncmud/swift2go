@@ -332,7 +332,13 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 	}
 	if r == nil || e.resultType == "" {
 		if r != nil {
+			savePost := e.post
+			e.post = nil
 			e.stmt(r)
+			for _, p := range e.post {
+				e.w("%s\n", p)
+			}
+			e.post = savePost
 		}
 		e.w("return\n")
 		return
@@ -1463,6 +1469,9 @@ func (e *fileEmitter) setterCall(dest ast.Node, value string) (string, bool) {
 		d = dest.Child("decl")
 	default:
 		return "", false
+	}
+	if mp := e.m.mappedDecl(d.Str("decl_usr")); mp != nil {
+		return e.mappedSetter(mp, d, base, value), true
 	}
 	info, pfx := e.lookup(d.Str("decl_usr"))
 	if info == nil || !(info.Settable || info.Observed) || info.Kind != "var_decl" {
