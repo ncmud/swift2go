@@ -367,7 +367,14 @@ func SetUnion[T comparable](a map[T]struct{}, b []T) map[T]struct{} {
 }
 
 // SetFormUnion is Swift `Set.formUnion`.
-func SetFormUnion[T comparable](a *map[T]struct{}, b any) { *a = SetUnion(*a, Iterate[T](b)) }
+func SetFormUnion[T comparable](a *map[T]struct{}, b any) {
+	if *a == nil {
+		*a = map[T]struct{}{}
+	}
+	for _, k := range Iterate[T](b) {
+		(*a)[k] = struct{}{}
+	}
+}
 
 // SetIntersection is Swift `Set.intersection`.
 func SetIntersection[T comparable](a map[T]struct{}, b []T) map[T]struct{} {
