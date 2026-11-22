@@ -2,11 +2,14 @@
 package emit
 
 import (
+	"cmp"
 	"fmt"
 	"go/format"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -575,11 +578,7 @@ func (m *Module) assignNames() {
 // dedupePackageNames renames package-level Go names that collide, keeping type names unchanged.
 func (m *Module) dedupePackageNames() {
 	byName := map[string][]*DeclInfo{}
-	var usrs []string
-	for usr := range m.decls {
-		usrs = append(usrs, usr)
-	}
-	sort.Strings(usrs)
+	usrs := slices.Sorted(maps.Keys(m.decls))
 	for _, usr := range usrs {
 		info := m.decls[usr]
 		if info.GoName == "" || !m.packageLevel(info) {
@@ -771,7 +770,7 @@ func (m *Module) Report() string {
 		all = append(all, kv{k, v})
 		total += v
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].v > all[j].v || all[i].v == all[j].v && all[i].k < all[j].k })
+	slices.SortFunc(all, func(a, b kv) int { return cmp.Or(cmp.Compare(b.v, a.v), strings.Compare(a.k, b.k)) })
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %d unsupported\n", m.Name, total)
 	for _, e := range all {
@@ -822,10 +821,7 @@ func (m *Module) lineCol(file string, off int) (int, int) {
 	if off < 0 {
 		return 0, 0
 	}
-	i := sort.SearchInts(starts, off+1) - 1
-	if i < 0 {
-		i = 0
-	}
+	i := max(sort.SearchInts(starts, off+1)-1, 0)
 	return i + 1, off - starts[i] + 1
 }
 

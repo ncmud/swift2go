@@ -181,7 +181,7 @@ func currentModule() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("run swift2go from the root of the Go module that will hold the output: %w", err)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if mod, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
 			return strings.Trim(strings.TrimSpace(mod), `"`), nil
 		}
