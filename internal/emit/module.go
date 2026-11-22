@@ -981,8 +981,41 @@ func (m *Module) HasMutatingMethods(q string) bool {
 				}
 			}
 		}
+		m.markMutatingDefaults()
 	}
 	return m.mutatingTypes[q]
+}
+
+// markMutatingDefaults marks the structs that receive a mutating protocol-extension default as a
+// pointer-receiver forwarder, since only a pointer to them then satisfies the protocol.
+func (m *Module) markMutatingDefaults() {
+	mods := append([]*Module{m}, m.Deps...)
+	for _, pm := range mods {
+		for _, d := range pm.sortedDecls() {
+			if !d.ProtoExt || !d.Mutating || d.Kind != "func_decl" || m.inheritedRequirementName(d.Owner, d.Node) == "" {
+				continue
+			}
+			key := funcSignatureKey(d.Node)
+			for _, cm := range mods {
+				for _, q := range cm.conformers[d.Owner] {
+					if cm.typeKinds[q] != "struct_decl" || m.mutatingTypes[q] || !m.extensionApplies(d.Node, q, d.Owner, pm) {
+						continue
+					}
+					defined := false
+					for _, om := range mods {
+						for _, mem := range om.membersOf(q) {
+							if mem.Kind == "func_decl" && !mem.ProtoExt && funcSignatureKey(mem.Node) == key {
+								defined = true
+							}
+						}
+					}
+					if !defined {
+						m.mutatingTypes[q] = true
+					}
+				}
+			}
+		}
+	}
 }
 
 // paramTypeSuffix names an overload by its parameter types, for overloads whose labels match.
