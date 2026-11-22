@@ -25,3 +25,12 @@ type Conformance struct {
 	// class pointer itself for a class). Requirements the type leaves to the protocol's default are absent.
 	Witnesses map[string]any
 }
+
+// Closure is a function generated code passes to a hand-written package for a parameter whose function type
+// takes the declaration's generic parameters, such as `memberfn<A>(_ fn: (Self, A) -> Ret)`, where the
+// package works out the parameter types from Fn. Go gives a class or protocol `C` and its Optional `C?` the
+// same type, so Optional records, for each of Fn's parameters in order, whether Swift declared it Optional.
+type Closure struct {
+	Fn       any
+	Optional []bool
+}

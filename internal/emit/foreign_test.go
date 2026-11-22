@@ -10,7 +10,8 @@ import (
 // package testdata/foreignapi/go/ledger, then runs App's transpiled tests against that package. App calls
 // protocol-extension members, operators, generic members with result-only type parameters, literals of
 // Ledger types, a class, a setter and enum cases, and registers conformances to Ledger's protocols: one
-// with a witness from a local protocol's default, and one declared on Model's type in App.
+// with a witness from a local protocol's default, and one declared on Model's type in App. Closures passed
+// for function types over a generic parameter record which of their parameters are Optional.
 func TestMappedForeignModule(t *testing.T) {
 	out := transpileMapped(t, "foreignapi", map[string]string{"Ledger": "go/ledger"}, "Model", "App", "AppTests")
 	src := readGo(t, filepath.Join(out, "app"))
@@ -35,6 +36,8 @@ func TestMappedForeignModule(t *testing.T) {
 		`func() string { return LogTableName },`,
 		`func(self *Mail, id int64) { self.DidInsert(id) },`,
 		`AutoIncrementedDidInsert(scoreAutoIncrementedAdapter{self}, id)`,
+		"Optional: []bool{false, false}}",
+		"Optional: []bool{false, true}}",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("transpiled App lacks %q", want)

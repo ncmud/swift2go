@@ -135,6 +135,11 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
   - An enum case with a payload is a struct type `<Enum><Case>` with fields `F0`, `F1`, …, which `case`
     patterns match by type and bind from.
   - Its classes are pointers (`*grdb.Database`) and its protocols interfaces, nil for none.
+  - A closure passed for a parameter whose function type takes the declaration's generic parameters
+    (`memberfn<A>(_ fn: (Self, A) -> R)`) arrives as a `swiftrt.Closure`: the Go function, and whether
+    Swift declared each of its parameters Optional. Go gives a class `C` and `C?` the same pointer type, so
+    a package that converts values for such a closure reads the flags to tell a required argument from an
+    optional one.
   - A local type or extension that conforms to its protocols registers in `init()`:
     `grdb.RegisterConformance[T](swiftrt.Conformance{Type, Protocols, Witnesses})`. Witnesses map each
     protocol requirement the type implements, itself or through a local protocol's default, to a Go

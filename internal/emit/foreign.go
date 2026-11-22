@@ -206,10 +206,71 @@ func (e *fileEmitter) mappedCallExpr(mp *Mapping, d ast.Node, recv string, as []
 			ss[i] = "swiftrt.UnitFn" + itoa(len(e.m.typeOf(a.node.Type()).Args)) + "(" + ss[i] + ")"
 		}
 	}
+	e.annotateGenericClosures(sig, as, kept, ss)
 	if recv != "" {
 		ss = append([]string{recv}, ss...)
 	}
 	return e.mappedName(mp, sig, kept, prefixOp) + e.mappedTypeArgs(d, dem, static) + "(" + strings.Join(ss, ", ") + ")"
+}
+
+// annotateGenericClosures wraps each closure passed for a parameter whose function type takes the
+// declaration's generic parameters (`memberfn<A>(_: (Self, A) -> Ret)`) in a swiftrt.Closure that records
+// which of the closure's parameters are Optional: Go lowers `C` and `C?` alike for a class or protocol C,
+// and the package infers the closure's parameter types from the Go function alone.
+func (e *fileEmitter) annotateGenericClosures(sig declSig, as, kept []arg, ss []string) {
+	if len(as) != len(sig.params) {
+		return
+	}
+	for i, k := 0, 0; i < len(as) && k < len(kept); i++ {
+		if as[i].node.Kind() == "default_argument_expr" {
+			continue
+		}
+		if takesGenericParams(sig.params[i].typ) {
+			if ft := e.closureType(as[i].node); ft != nil {
+				opt := make([]string, len(ft.Args))
+				for j, p := range ft.Args {
+					opt[j] = strconv.FormatBool(p.Kind == types.Optional)
+				}
+				ss[k] = "swiftrt.Closure{Fn: " + ss[k] + ", Optional: []bool{" + strings.Join(opt, ", ") + "}}"
+			}
+		}
+		k++
+	}
+}
+
+// closureType is the function type of an argument that is a function, or one injected into an Optional,
+// and nil for any other argument, which may be nil.
+func (e *fileEmitter) closureType(n ast.Node) *types.Type {
+	n = stripConv(n)
+	if n != nil && n.Kind() == "inject_into_optional" {
+		n = stripConv(n.Child("sub_expr"))
+	}
+	if n == nil {
+		return nil
+	}
+	if ft := e.m.typeOf(n.Type()); ft != nil && ft.Kind == types.Func {
+		return ft
+	}
+	return nil
+}
+
+var (
+	genericParamRef = regexp.MustCompile(`(^|[^\w.])[A-Z]\d*($|[^\w.])`)
+	funcArrow       = regexp.MustCompile(`^ (\w+(\([^)]*\))? )*->`)
+)
+
+// takesGenericParams reports whether a demangled parameter type is a function type, or an Optional one,
+// with a generic parameter (`A`, `A1`, …) among its own parameter types.
+func takesGenericParams(typ string) bool {
+	t := strings.TrimPrefix(typ, "@escaping ")
+	if strings.HasPrefix(t, "(") && strings.HasSuffix(t, "?") && len(matchParen(t))+3 == len(t) {
+		t = matchParen(t)
+	}
+	if !strings.HasPrefix(t, "(") {
+		return false
+	}
+	params := matchParen(t)
+	return funcArrow.MatchString(t[len(params)+2:]) && genericParamRef.MatchString(params)
 }
 
 // returnsVoidTypeParam reports whether an argument is a function without a result passed for a parameter
