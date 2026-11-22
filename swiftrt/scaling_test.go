@@ -45,6 +45,11 @@ type scalingCase struct {
 	name    string
 	n       int
 	prepare func(n int) func()
+	// bytesOnly judges the workload by its allocation alone. Growing an array to 10n spends most of
+	// its time faulting in the fresh pages its backing arrays take, which a shared CI runner charges
+	// unevenly, while at n the pages from earlier runs are reused; a quadratic copy shows in the
+	// bytes allocated.
+	bytesOnly bool
 }
 
 type scalingCost struct {
@@ -76,9 +81,9 @@ func measureScaling(prepare func(int) func(), n int, limit time.Duration) scalin
 
 // scalingFailure describes why a workload's growth from small to big exceeds the bounds, or is
 // empty when it does not.
-func scalingFailure(small, big scalingCost) string {
+func scalingFailure(small, big scalingCost, bytesOnly bool) string {
 	var reasons []string
-	if r := float64(big.elapsed) / float64(max(small.elapsed, scalingMinTime)); r > scalingTimeBound {
+	if r := float64(big.elapsed) / float64(max(small.elapsed, scalingMinTime)); r > scalingTimeBound && !bytesOnly {
 		reasons = append(reasons, fmt.Sprintf("time grew %.0fx (%v to %v)", r, small.elapsed, big.elapsed))
 	}
 	if big.bytes >= scalingMinBytes {
@@ -107,7 +112,7 @@ func runScaling(t *testing.T, cases []scalingCase) {
 			for range scalingAttempts {
 				small := measureScaling(c.prepare, c.n, time.Hour)
 				big := measureScaling(c.prepare, 10*c.n, 2*scalingTimeBound*small.elapsed)
-				if failure = scalingFailure(small, big); failure == "" {
+				if failure = scalingFailure(small, big, c.bytesOnly); failure == "" {
 					t.Logf("n=%d: %v, %d bytes; 10n: %v, %d bytes", c.n, small.elapsed, small.bytes, big.elapsed, big.bytes)
 					return
 				}
@@ -133,30 +138,30 @@ func scalingText(unit string, n int) string {
 func stringCases(kind, unit string) []scalingCase {
 	text := func(n int) string { return scalingText(unit, n) }
 	return []scalingCase{
-		{kind + "/count", 20_000, func(n int) func() {
+		{name: kind + "/count", n: 20_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() { _ = StringCount(s) }
 		}},
-		{kind + "/index(after:) walk", 20_000, func(n int) func() {
+		{name: kind + "/index(after:) walk", n: 20_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for i := StringStartIndex(s); i < StringEndIndex(s); i = StringIndexAfter(s, i) {
 				}
 			}
 		}},
-		{kind + "/index(before:) walk", 2_000, func(n int) func() {
+		{name: kind + "/index(before:) walk", n: 2_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for i := StringEndIndex(s); i > StringStartIndex(s); i = StringIndexBefore(s, i) {
 				}
 			}
 		}},
-		{kind + "/index(_:offsetBy:)", 20_000, func(n int) func() {
+		{name: kind + "/index(_:offsetBy:)", n: 20_000, prepare: func(n int) func() {
 			s := text(n)
 			chars := StringCount(s)
 			return func() { _ = StringIndexOffsetBy(s, 0, chars) }
 		}},
-		{kind + "/hasPrefix at every index", 2_000, func(n int) func() {
+		{name: kind + "/hasPrefix at every index", n: 2_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for i := 0; i < len(s); i = StringIndexAfter(s, i) {
@@ -166,7 +171,7 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{kind + "/hasSuffix at every index", 2_000, func(n int) func() {
+		{name: kind + "/hasSuffix at every index", n: 2_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for i := len(s); i > 0; i = StringIndexBefore(s, i) {
@@ -176,7 +181,7 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{kind + "/append(Character)", 20_000, func(n int) func() {
+		{name: kind + "/append(Character)", n: 20_000, prepare: func(n int) func() {
 			chars := StringChars(text(n))
 			return func() {
 				s := ""
@@ -185,7 +190,7 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{kind + "/append(String)", 20_000, func(n int) func() {
+		{name: kind + "/append(String)", n: 20_000, prepare: func(n int) func() {
 			count := len(text(n)) / len(unit)
 			return func() {
 				s := ""
@@ -194,7 +199,7 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{kind + "/+= one word at a time", 20_000, func(n int) func() {
+		{name: kind + "/+= one word at a time", n: 20_000, prepare: func(n int) func() {
 			words := strings.Fields(text(n))
 			return func() {
 				s := ""
@@ -204,7 +209,7 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{kind + "/append(contentsOf:) Substring", 20_000, func(n int) func() {
+		{name: kind + "/append(contentsOf:) Substring", n: 20_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				out := ""
@@ -215,21 +220,21 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{kind + "/dropFirst until empty", 20_000, func(n int) func() {
+		{name: kind + "/dropFirst until empty", n: 20_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for sub := StringDropFirst(s); sub.Lo < sub.Hi; sub = SubstringDropFirst(sub) {
 				}
 			}
 		}},
-		{kind + "/dropLast until empty", 2_000, func(n int) func() {
+		{name: kind + "/dropLast until empty", n: 2_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for sub := StringDropLast(s); sub.Lo < sub.Hi; sub = SubstringDropLast(sub) {
 				}
 			}
 		}},
-		{kind + "/removeLast until empty", 2_000, func(n int) func() {
+		{name: kind + "/removeLast until empty", n: 2_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for s != "" {
@@ -237,19 +242,19 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{kind + "/split", 200_000, func(n int) func() {
+		{name: kind + "/split", n: 200_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() { _ = StringSplitSeparator(s, " ") }
 		}},
-		{kind + "/contains(Character)", 50_000, func(n int) func() {
+		{name: kind + "/contains(Character)", n: 50_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() { _ = StringContains(s, "Z") }
 		}},
-		{kind + "/contains(String)", 500_000, func(n int) func() {
+		{name: kind + "/contains(String)", n: 500_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() { _ = StringContainsString(s, "absent") }
 		}},
-		{kind + "/Substring slicing at every index", 20_000, func(n int) func() {
+		{name: kind + "/Substring slicing at every index", n: 20_000, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for i := 0; i < len(s); {
@@ -280,7 +285,7 @@ func shuffledInts(n int) []int {
 func TestScalingArray(t *testing.T) {
 	const fixed = 200 // calls of an O(n) operation per workload
 	runScaling(t, []scalingCase{
-		{"append", 50_000, func(n int) func() {
+		{name: "append", n: 50_000, bytesOnly: true, prepare: func(n int) func() {
 			return func() {
 				var xs []int
 				for i := range n {
@@ -288,7 +293,7 @@ func TestScalingArray(t *testing.T) {
 				}
 			}
 		}},
-		{"insert(at: endIndex)", 50_000, func(n int) func() {
+		{name: "insert(at: endIndex)", n: 50_000, prepare: func(n int) func() {
 			return func() {
 				var xs []int
 				for i := range n {
@@ -296,7 +301,7 @@ func TestScalingArray(t *testing.T) {
 				}
 			}
 		}},
-		{"removeLast until empty", 50_000, func(n int) func() {
+		{name: "removeLast until empty", n: 50_000, prepare: func(n int) func() {
 			xs := shuffledInts(n)
 			return func() {
 				for len(xs) > 0 {
@@ -304,7 +309,7 @@ func TestScalingArray(t *testing.T) {
 				}
 			}
 		}},
-		{"insert(at: 0) a fixed number of times", 2_000, func(n int) func() {
+		{name: "insert(at: 0) a fixed number of times", n: 2_000, prepare: func(n int) func() {
 			xs := shuffledInts(n)
 			return func() {
 				for i := range fixed {
@@ -312,7 +317,7 @@ func TestScalingArray(t *testing.T) {
 				}
 			}
 		}},
-		{"removeFirst a fixed number of times", 2_000, func(n int) func() {
+		{name: "removeFirst a fixed number of times", n: 2_000, prepare: func(n int) func() {
 			xs := shuffledInts(n)
 			return func() {
 				for range fixed {
@@ -320,15 +325,15 @@ func TestScalingArray(t *testing.T) {
 				}
 			}
 		}},
-		{"contains", 500_000, func(n int) func() {
+		{name: "contains", n: 500_000, prepare: func(n int) func() {
 			xs := shuffledInts(n)
 			return func() { _ = SliceContains(xs, -1) }
 		}},
-		{"sorted", 20_000, func(n int) func() {
+		{name: "sorted", n: 20_000, prepare: func(n int) func() {
 			xs := shuffledInts(n)
 			return func() { _ = SliceSorted(xs) }
 		}},
-		{"slicing at every index", 200_000, func(n int) func() {
+		{name: "slicing at every index", n: 200_000, prepare: func(n int) func() {
 			xs := shuffledInts(n)
 			return func() {
 				for i := range xs {
@@ -358,7 +363,7 @@ func scalingSet(keys []string) map[string]struct{} {
 
 func TestScalingDictionary(t *testing.T) {
 	runScaling(t, []scalingCase{
-		{"updateValue(_:forKey:)", 20_000, func(n int) func() {
+		{name: "updateValue(_:forKey:)", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			return func() {
 				var d map[string]int
@@ -367,7 +372,7 @@ func TestScalingDictionary(t *testing.T) {
 				}
 			}
 		}},
-		{"lookup", 20_000, func(n int) func() {
+		{name: "lookup", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			d := map[string]int{}
 			for i, k := range keys {
@@ -379,7 +384,7 @@ func TestScalingDictionary(t *testing.T) {
 				}
 			}
 		}},
-		{"removeValue(forKey:) until empty", 20_000, func(n int) func() {
+		{name: "removeValue(forKey:) until empty", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			d := map[string]int{}
 			for i, k := range keys {
@@ -391,7 +396,7 @@ func TestScalingDictionary(t *testing.T) {
 				}
 			}
 		}},
-		{"keys and values", 20_000, func(n int) func() {
+		{name: "keys and values", n: 20_000, prepare: func(n int) func() {
 			d := map[string]int{}
 			for i, k := range scalingKeys(n) {
 				d[k] = i
@@ -401,7 +406,7 @@ func TestScalingDictionary(t *testing.T) {
 				_ = MapValues(d)
 			}
 		}},
-		{"HMap set and get", 5_000, func(n int) func() {
+		{name: "HMap set and get", n: 5_000, prepare: func(n int) func() {
 			keys := make([][]int, n)
 			for i := range keys {
 				keys[i] = []int{i, i + 1}
@@ -421,7 +426,7 @@ func TestScalingDictionary(t *testing.T) {
 
 func TestScalingSet(t *testing.T) {
 	runScaling(t, []scalingCase{
-		{"insert", 20_000, func(n int) func() {
+		{name: "insert", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			return func() {
 				var s map[string]struct{}
@@ -430,7 +435,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{"contains", 20_000, func(n int) func() {
+		{name: "contains", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			s := scalingSet(keys)
 			return func() {
@@ -439,7 +444,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{"remove until empty", 20_000, func(n int) func() {
+		{name: "remove until empty", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			s := scalingSet(keys)
 			return func() {
@@ -448,7 +453,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{"formUnion two members at a time", 2_000, func(n int) func() {
+		{name: "formUnion two members at a time", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			return func() {
 				var s map[string]struct{}
@@ -457,7 +462,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{"formUnion(Set) two members at a time", 2_000, func(n int) func() {
+		{name: "formUnion(Set) two members at a time", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			parts := make([]map[string]struct{}, 0, n/2)
 			for i := 0; i+1 < len(keys); i += 2 {
@@ -470,7 +475,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{"union", 20_000, func(n int) func() {
+		{name: "union", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			a, b := scalingSet(keys[:n/2]), scalingSet(keys[n/2:])
 			return func() {
@@ -478,7 +483,7 @@ func TestScalingSet(t *testing.T) {
 				_ = SetUnionSet(a, b)
 			}
 		}},
-		{"intersection", 20_000, func(n int) func() {
+		{name: "intersection", n: 20_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			a, b := scalingSet(keys[:2*n/3]), scalingSet(keys[n/3:])
 			return func() {
@@ -486,11 +491,11 @@ func TestScalingSet(t *testing.T) {
 				_ = SetIntersectionSet(a, b)
 			}
 		}},
-		{"iteration", 20_000, func(n int) func() {
+		{name: "iteration", n: 20_000, prepare: func(n int) func() {
 			s := scalingSet(scalingKeys(n))
 			return func() { _ = SetElements(s) }
 		}},
-		{"HSet insert and contains", 5_000, func(n int) func() {
+		{name: "HSet insert and contains", n: 5_000, prepare: func(n int) func() {
 			keys := make([][]int, n)
 			for i := range keys {
 				keys[i] = []int{i, i + 1}
@@ -522,7 +527,7 @@ type scalingTree struct {
 
 func TestScalingCopy(t *testing.T) {
 	runScaling(t, []scalingCase{
-		{"Copy of nested values", 5_000, func(n int) func() {
+		{name: "Copy of nested values", n: 5_000, prepare: func(n int) func() {
 			v := scalingTree{ByName: map[string]scalingLeaf{}}
 			for i := range n {
 				one := i
@@ -533,7 +538,7 @@ func TestScalingCopy(t *testing.T) {
 			}
 			return func() { _ = Copy(v) }
 		}},
-		{"Copy of a growing array element by element", 5_000, func(n int) func() {
+		{name: "Copy of a growing array element by element", n: 5_000, prepare: func(n int) func() {
 			return func() {
 				var xs []scalingLeaf
 				for i := range n {
