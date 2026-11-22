@@ -31,6 +31,9 @@ type fileEmitter struct {
 	emittingFree  bool                    // the function being scoped is emitted as a free function
 	pendingOpens  int                     // scopes a statement opened that the enclosing block must close
 	lvSubst       map[string]string       // lvalue overrides by node identity while a parent chain is emitted
+	pinned        map[uintptr]bool        // operands to evaluate before a later operand's call, by node identity
+	exprSubst     map[uintptr]string      // expressions already evaluated into a temporary, by node identity
+	writes        map[uintptr]bool        // memoized mayWrite results, by node identity
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
