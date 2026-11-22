@@ -195,8 +195,13 @@ func SliceInitString[S ~[]Character](s string) S { return S(StringChars(s)) }
 // SliceInitRepeatingCount is Array(repeating:count:).
 func SliceInitRepeatingCount[S ~[]T, T any](v T, n int) S {
 	out := make(S, n)
+	p := planFor(reflect.TypeFor[T]())
 	for i := range out {
 		out[i] = v
+		if p.fix != nil {
+			// Each element is a value of its own.
+			out[i] = copyWithPlan(v, p)
+		}
 	}
 	return out
 }

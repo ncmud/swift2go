@@ -157,7 +157,7 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 				e.w("return\n")
 			}
 		} else {
-			e.w("return %s\n", e.expr(r))
+			e.w("return %s\n", e.owned(r, sinkStore))
 		}
 	case "if_stmt":
 		e.ifStmt(n)
@@ -349,7 +349,7 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 	}
 	savePost := e.post
 	e.post = nil
-	v := e.expr(r)
+	v := e.owned(r, sinkReturn)
 	if len(e.post) > 0 {
 		// Write-backs must run before leaving the function.
 		tmp := e.newTmp("res")
@@ -390,7 +390,11 @@ func (e *fileEmitter) bindPattern(p ast.Node, init ast.Node, declare bool) {
 			e.w("var %s %s\n", name, gt)
 			return
 		}
-		e.w("var %s %s = %s\n", name, gt, e.valueCopy(init))
+		s := sinkLet
+		if e.isVarPattern(p) {
+			s = sinkStore
+		}
+		e.w("var %s %s = %s\n", name, gt, e.owned(init, s))
 	case "pattern_typed", "pattern_binding", "pattern":
 		e.bindPattern(p.Child("sub_pattern"), init, declare)
 	case "pattern_any":
@@ -404,6 +408,7 @@ func (e *fileEmitter) bindPattern(p ast.Node, init ast.Node, declare bool) {
 			src = e.expr(init)
 		}
 		e.w("%s := %s\n", tmp, src)
+		e.bindOrigin = e.origin(init)
 		for i, el := range p.List("elements") {
 			e.bindFromExpr(el, tmp+".F"+itoa(i))
 		}
@@ -415,7 +420,7 @@ func (e *fileEmitter) bindPattern(p ast.Node, init ast.Node, declare bool) {
 func (e *fileEmitter) bindFromExpr(p ast.Node, src string) {
 	switch p.Kind() {
 	case "pattern_named":
-		e.w("%s := %s\n_ = %s\n", goSafe(p.Name()), src, goSafe(p.Name()))
+		e.w("%s := %s\n_ = %s\n", goSafe(p.Name()), e.bound(p, src), goSafe(p.Name()))
 	case "pattern_typed", "pattern_binding", "pattern":
 		e.bindFromExpr(p.Child("sub_pattern"), src)
 	case "pattern_any":
@@ -440,55 +445,103 @@ func (e *fileEmitter) bindFromExpr(p ast.Node, src string) {
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
-// valueCopy emits init, copying slices and maps so Swift value semantics hold on `var` binding.
-func (e *fileEmitter) valueCopy(init ast.Node) string {
-	s := e.expr(init)
-	t := e.m.typeOf(init.Type())
-	if isLvalueRead(init) && e.needsCopy(t) {
-		return "swiftrt.Copy(" + s + ")"
-	}
-	return s
+// needsCopy reports whether a value of type t has storage a Go assignment would share: a slice, a map,
+// a pointer to a value, or an interface that can hold one of those.
+func (e *fileEmitter) needsCopy(t *types.Type) bool {
+	return e.m.sharesStorage(t, map[string]bool{})
 }
 
-// needsCopy reports whether assigning a value of type t must copy it to keep Swift value semantics.
-func (e *fileEmitter) needsCopy(t *types.Type) bool {
+// sharesStorage is needsCopy; visiting holds the structs being examined, for recursive types.
+func (m *Module) sharesStorage(t *types.Type, visiting map[string]bool) bool {
 	if t == nil {
 		return false
 	}
 	switch t.Kind {
-	case types.Array, types.Dict, types.Tuple:
+	case types.Array, types.Dict, types.Generic, types.Unknown:
 		return true
-	case types.Optional:
-		return len(t.Args) == 1 && !e.m.isReferenceGo(t.Args[0], e.m.GoType(t.Args[0], e.generics)) && e.needsCopy(t.Args[0])
-	case types.Named:
-		switch t.Name {
-		case "Swift.Array", "Swift.Dictionary", "Swift.Set", "OrderedCollections.OrderedDictionary", "OrderedCollections.OrderedSet", "DequeModule.Deque", "HeapModule.Heap":
-			return true
-		}
-		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-			if mod.typeKinds[t.Name] == "struct_decl" {
+	case types.Tuple:
+		for _, a := range t.Args {
+			if m.sharesStorage(a, visiting) {
 				return true
 			}
 		}
-	}
-	return false
-}
-
-func isLvalueRead(n ast.Node) bool {
-	for n != nil {
-		switch n.Kind() {
-		case "load_expr", "paren_expr":
-			n = n.Child("sub_expr")
-		case "declref_expr", "member_ref_expr":
-			return true
-		default:
+		return false
+	case types.Optional:
+		if len(t.Args) != 1 {
 			return false
 		}
+		if isGenericParamType(t.Args[0]) || !m.isReferenceGo(t.Args[0], m.GoType(t.Args[0], nil)) {
+			// T? is a pointer to its own T.
+			return true
+		}
+		return m.sharesStorage(t.Args[0], visiting)
+	case types.Existential:
+		return t.Name != "Swift.AnyObject" && t.Name != "Swift.Error"
+	case types.Named:
+		switch t.Name {
+		case "Swift.Array", "Swift.Dictionary", "Swift.Set", "Swift.ArraySlice", "Swift.ContiguousArray", "Swift.Any",
+			"OrderedCollections.OrderedDictionary", "OrderedCollections.OrderedSet", "DequeModule.Deque", "HeapModule.Heap":
+			return true
+		}
+		if !m.isTranspiledType(t.Name) {
+			// A library type shares storage when its Go form is a slice, a map or a runtime collection.
+			gt := m.GoType(t, nil)
+			for _, shape := range []string{"[]", "map[", "swiftrt.HSet[", "swiftrt.HMap[", "swiftrt.Ordered", "swiftrt.Deque[", "swiftrt.Heap["} {
+				if strings.HasPrefix(gt, shape) {
+					return true
+				}
+			}
+			return false
+		}
+		if m.shares == nil {
+			m.shares = map[string]bool{}
+		}
+		if shares, ok := m.shares[t.Name]; ok {
+			return shares
+		}
+		if visiting[t.Name] {
+			return false
+		}
+		visiting[t.Name] = true
+		defer delete(visiting, t.Name)
+		shares := false
+		for _, mod := range append([]*Module{m}, m.Deps...) {
+			kind := mod.typeKinds[t.Name]
+			switch kind {
+			case "protocol":
+				shares = !m.classOnly(t.Name, map[string]bool{})
+			case "struct_decl", "enum_decl":
+				if len(t.Args) > 0 || len(mod.typeParamNames[t.Name]) > 0 {
+					shares = true
+					break
+				}
+				for _, d := range mod.decls {
+					if d.Owner != t.Name || d.Node == nil || shares {
+						continue
+					}
+					switch {
+					case d.Kind == "var_decl" && !d.Static && !d.Computed:
+						shares = m.sharesStorage(m.typeOf(d.Node.Str("interface_type")), visiting)
+					case d.Kind == "enum_element_decl":
+						for _, p := range d.Node.Child("params").List("params") {
+							shares = shares || m.sharesStorage(m.typeOf(p.Str("interface_type")), visiting)
+						}
+					}
+				}
+			}
+			if kind != "" {
+				break
+			}
+		}
+		if len(visiting) == 1 {
+			// Only a finished answer is kept: one reached inside a cycle may be too optimistic.
+			m.shares[t.Name] = shares
+		}
+		return shares
 	}
 	return false
 }
 
-// conds emits nested checks for an if/while condition list, then calls inner.
 func (e *fileEmitter) conds(cs []ast.Node, inner func()) {
 	if len(cs) == 0 {
 		inner()
@@ -521,9 +574,11 @@ func (e *fileEmitter) conds(cs []ast.Node, inner func()) {
 				it = t.Args[0]
 			}
 			e.w("if %s := %s; %s != nil && %s {\n", tmp, e.expr(init), tmp, e.patternTest(up, val, it))
+			e.bindOrigin = e.origin(init)
 			e.patternBind(up, val)
 		} else {
 			e.w("if %s := %s; %s != nil {\n", tmp, e.expr(init), tmp)
+			e.bindOrigin = e.origin(init)
 			e.bindFromExpr(sub, e.unwrap(tmp, init))
 		}
 		e.conds(rest, inner)
@@ -533,18 +588,22 @@ func (e *fileEmitter) conds(cs []ast.Node, inner func()) {
 			// `case let (a?, b?) = pair`: test the value once, then bind from it.
 			tmp := e.newTmp("subj")
 			e.w("{\n%s := %s\nif %s {\n", tmp, e.expr(init), e.patternTest(unwrapPatternKeepSome(p), tmp, e.m.typeOf(init.Type())))
+			e.bindOrigin = e.origin(init)
 			e.bindFromExpr(p, tmp)
 			e.conds(rest, inner)
 			e.w("}\n}\n")
 			break
 		}
 		e.w("{\n")
-		e.bindFromExpr(p, e.expr(init))
+		src := e.expr(init)
+		e.bindOrigin = e.origin(init)
+		e.bindFromExpr(p, src)
 		e.conds(rest, inner)
 		e.w("}\n")
 	case "pattern_enum_element", "pattern_expr", "pattern_bool":
 		tmp := e.newTmp("subj")
 		e.w("if %s := %s; %s {\n", tmp, e.expr(init), e.patternTest(p, tmp, e.m.typeOf(init.Type())))
+		e.bindOrigin = e.origin(init)
 		e.patternBind(p, tmp)
 		e.conds(rest, inner)
 		e.w("}\n")
@@ -705,20 +764,25 @@ func (e *fileEmitter) guardStmt(n ast.Node) {
 			tmp := e.newTmp("opt")
 			e.w("%s := %s\nif %s == nil ", tmp, e.expr(init), tmp)
 			elseBody()
+			e.bindOrigin = e.origin(init)
 			e.bindFromExpr(p.Child("sub_pattern"), e.unwrap(tmp, init))
 		case "pattern_binding", "pattern_named", "pattern_typed":
 			if refutable(p) {
 				tmp := e.newTmp("subj")
 				e.w("%s := %s\nif !(%s) ", tmp, e.expr(init), e.patternTest(unwrapPatternKeepSome(p), tmp, e.m.typeOf(init.Type())))
 				elseBody()
+				e.bindOrigin = e.origin(init)
 				e.bindFromExpr(p, tmp)
 				break
 			}
-			e.bindFromExpr(p, e.expr(init))
+			src := e.expr(init)
+			e.bindOrigin = e.origin(init)
+			e.bindFromExpr(p, src)
 		default:
 			tmp := e.newTmp("subj")
 			e.w("%s := %s\nif !(%s) ", tmp, e.expr(init), e.patternTest(p, tmp, e.m.typeOf(init.Type())))
 			elseBody()
+			e.bindOrigin = e.origin(init)
 			e.patternBind(p, tmp)
 		}
 		ast.Walk(p, func(x ast.Node) {
@@ -775,6 +839,17 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		return "_"
 	}
 	st := e.m.typeOf(seq.Type())
+	// Each iteration binds part of the value the loop iterates, which the loop keeps unchanged.
+	e.bindOrigin = originBorrowedLet
+	source := func(s ast.Node) string {
+		return e.loopSource(s, map[string]any(n.Child("body")), map[string]any(n.Child("where")))
+	}
+	// A `for var` element is the loop body's own copy.
+	ownElement := func(p ast.Node, nm string) {
+		if named := unwrapPattern(p); nm != "_" && named != nil && named.Kind() == "pattern_named" && e.isVarPattern(named) && e.needsCopy(e.m.typeOf(named.Type())) {
+			e.w("%s = swiftrt.Copy(%s)\n", nm, nm)
+		}
+	}
 	if containsKind(n.Child("desugared_loop"), "current_context_isolation_expr") {
 		et := e.m.GoType(e.m.typeOf(p.Type()), e.generics)
 		if et == "" {
@@ -793,7 +868,7 @@ func (e *fileEmitter) forEach(n ast.Node) {
 	}
 	if inner := unwrapPattern(p); inner != nil && (inner.Kind() == "pattern_is" || inner.Kind() == "pattern_enum_element" || inner.Kind() == "pattern_optional_some" || inner.Kind() == "pattern_expr") {
 		et := e.m.typeOf(p.Type())
-		src := e.expr(seq)
+		src := source(seq)
 		if e.m.Recv(st) != "Slice" {
 			src = "swiftrt.Iterate[" + e.m.GoType(et, e.generics) + "](" + src + ")"
 		}
@@ -807,7 +882,7 @@ func (e *fileEmitter) forEach(n ast.Node) {
 	}
 	// enumerated(): for (i, x) in xs.enumerated()
 	if call := callOf(seq); call != nil && call.method == "enumerated" {
-		base := e.expr(call.base)
+		base := source(call.base)
 		if e.m.Recv(e.m.typeOf(call.base.Type())) == "String" {
 			base = "swiftrt.StringChars(" + base + ")"
 		}
@@ -823,6 +898,7 @@ func (e *fileEmitter) forEach(n ast.Node) {
 				e.w("for range %s {\n", base)
 			} else {
 				e.w("for %s, %s := range %s {\n", a, b, base)
+				ownElement(els[1], b)
 			}
 		} else {
 			tmp := e.newTmp("en")
@@ -861,18 +937,19 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		inner := unwrapPattern(p)
 		if inner.Kind() == "pattern_tuple" {
 			els := inner.List("elements")
-			e.w("for %s, %s := range swiftrt.MapOrdered(%s) {\n", "_", "kv", e.expr(seq))
+			e.w("for %s, %s := range swiftrt.MapOrdered(%s) {\n", "_", "kv", source(seq))
 			e.w("%s, %s := kv.F0, kv.F1\n", name(els[0]), name(els[1]))
 			for _, el := range els[:2] {
 				if nm := name(el); nm != "_" {
 					e.w("_ = %s\n", nm)
 				}
 			}
+			ownElement(els[1], name(els[1]))
 		} else {
-			e.w("for _, %s := range swiftrt.MapOrdered(%s) {\n", name(p), e.expr(seq))
+			e.w("for _, %s := range swiftrt.MapOrdered(%s) {\n", name(p), source(seq))
 		}
 	case "Slice", "Set", "OrderedDictionary", "HMap", "OrderedSet", "Heap":
-		src := e.expr(seq)
+		src := source(seq)
 		if st.Kind == types.Named && st.Name == "Swift.DefaultIndices" {
 			src = "swiftrt.Iterate[int](" + src + ")"
 		}
@@ -891,6 +968,7 @@ func (e *fileEmitter) forEach(n ast.Node) {
 			e.bindFromExpr(inner, tmp)
 		} else {
 			e.w("for _, %s := range %s {\n", name(p), src)
+			ownElement(p, name(p))
 		}
 	default:
 		if src := e.expr(seq); e.m.mappedCall(src) {
@@ -906,11 +984,12 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		}
 		if inner := unwrapPattern(p); inner != nil && inner.Kind() == "pattern_tuple" {
 			tmp := e.newTmp("el")
-			e.w("for _, %s := range swiftrt.Iterate[%s](%s) {\n", tmp, e.m.GoType(e.m.typeOf(p.Type()), e.generics), e.expr(seq))
+			e.w("for _, %s := range swiftrt.Iterate[%s](%s) {\n", tmp, e.m.GoType(e.m.typeOf(p.Type()), e.generics), source(seq))
 			e.bindFromExpr(inner, tmp)
 			break
 		}
-		e.w("for _, %s := range swiftrt.Iterate[%s](%s) {\n", name(p), e.m.GoType(e.m.typeOf(p.Type()), e.generics), e.expr(seq))
+		e.w("for _, %s := range swiftrt.Iterate[%s](%s) {\n", name(p), e.m.GoType(e.m.typeOf(p.Type()), e.generics), source(seq))
+		ownElement(p, name(p))
 	}
 	body()
 	e.w("}\n")
@@ -987,6 +1066,8 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 			t := e.patternTest(p, tmp, st)
 			if g := whereExpr(item); g != nil {
 				bindPat = p
+				// The guard only reads its bindings.
+				e.bindOrigin = originFresh
 				t = "(" + t + ") && " + e.withBindings(p, tmp, e.expr(g))
 			}
 			tests = append(tests, "("+t+")")
@@ -1008,6 +1089,7 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 		}
 		first = false
 		if bindPat != nil {
+			e.bindOrigin = e.origin(subj)
 			e.patternBind(bindPat, tmp)
 		}
 		if goSwitch {
@@ -1229,7 +1311,7 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 	p = unwrapPatternKeepSome(p)
 	switch p.Kind() {
 	case "pattern_named":
-		e.w("%s := %s\n_ = %s\n", goSafe(p.Name()), subj, goSafe(p.Name()))
+		e.w("%s := %s\n_ = %s\n", goSafe(p.Name()), e.bound(p, subj), goSafe(p.Name()))
 	case "pattern_optional_some":
 		sub := p.Child("sub_pattern")
 		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind != types.Optional && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
@@ -1325,7 +1407,7 @@ func (e *fileEmitter) assign(n ast.Node) {
 			for base.Kind() == "inout_expr" {
 				base = base.Child("sub_expr")
 			}
-			e.w("%s.Set%s(%s)\n", e.lvalue(base), info.GoName, prefixCommaTail(strings.Join(ss, ", "), e.valueCopy(src)))
+			e.w("%s.Set%s(%s)\n", e.lvalue(base), info.GoName, prefixCommaTail(strings.Join(ss, ", "), e.owned(src, sinkStore)))
 			return
 		}
 		if s, ok := e.subscriptAssign(dest, src); ok {
@@ -1339,17 +1421,24 @@ func (e *fileEmitter) assign(n ast.Node) {
 		if t := e.m.typeOf(base.Type()); t != nil && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
 			recv = "swiftrt.Ref(" + e.expr(base) + ")"
 		}
-		e.w("%s.Set(%s, %s)\n", e.expr(d.Child("keypath")), recv, e.valueCopy(src))
+		e.w("%s.Set(%s, %s)\n", e.expr(d.Child("keypath")), recv, e.owned(src, sinkStore))
 		return
 	}
-	if call, ok := e.setterCall(dest, e.valueCopy(src)); ok {
+	setterSink := sinkStore
+	if d := stripLoads(dest); d.Kind() == "member_ref_expr" {
+		if info, _ := e.lookup(d.Child("decl").Str("decl_usr")); info != nil && info.Computed && info.Settable && !info.Observed {
+			// The setter's body copies what it keeps.
+			setterSink = sinkBorrow
+		}
+	}
+	if call, ok := e.setterCall(dest, e.owned(src, setterSink)); ok {
 		e.w("%s\n", call)
 		return
 	}
 	if dest.Kind() == "tuple_expr" {
 		var ls, rs []string
 		tmp := e.newTmp("t")
-		e.w("%s := %s\n", tmp, e.expr(src))
+		e.w("%s := %s\n", tmp, e.owned(src, sinkStore))
 		for i, d := range dest.List("elements") {
 			ls = append(ls, e.lvalue(d))
 			rs = append(rs, tmp+".F"+itoa(i))
@@ -1357,7 +1446,7 @@ func (e *fileEmitter) assign(n ast.Node) {
 		e.w("%s = %s\n", strings.Join(ls, ", "), strings.Join(rs, ", "))
 		return
 	}
-	e.w("%s = %s\n", e.lvalue(dest), e.valueCopy(src))
+	e.w("%s = %s\n", e.lvalue(dest), e.owned(src, sinkStore))
 }
 
 func (e *fileEmitter) doCatch(n ast.Node) {

@@ -210,3 +210,34 @@ func BenchmarkCopyStructWithOptional(b *testing.B) {
 		v = Copy(v)
 	}
 }
+
+func TestSliceInitRepeatingCountCopiesEachElement(t *testing.T) {
+	rows := SliceInitRepeatingCount[[][]int]([]int{0, 0}, 3)
+	rows[1][1] = 5
+	if want := [][]int{{0, 0}, {0, 5}, {0, 0}}; !reflect.DeepEqual(rows, want) {
+		t.Errorf("rows share storage: got %v, want %v", rows, want)
+	}
+	ref := &copyClass{n: 1}
+	refs := SliceInitRepeatingCount[[]*copyClass](ref, 2)
+	if refs[0] != ref || refs[1] != ref {
+		t.Error("a repeated class reference must keep its identity")
+	}
+}
+
+type copyBacking struct {
+	_values []int `swift:"_values"`
+	cache   []int
+}
+
+func TestCopyUnexportedSwiftProperty(t *testing.T) {
+	orig := copyBacking{_values: []int{1, 2}, cache: []int{3}}
+	c := Copy(orig)
+	c._values[0] = 9
+	c.cache[0] = 9
+	if orig._values[0] != 1 {
+		t.Error("a Swift property with an unexported Go name must be copied")
+	}
+	if orig.cache[0] != 9 {
+		t.Error("an unexported runtime field stays shared")
+	}
+}
