@@ -76,6 +76,12 @@ func (d *Demangler) Get(s string) string {
 	return s
 }
 
+// Lookup returns the demangled form and whether s was demangled.
+func (d *Demangler) Lookup(s string) (string, bool) {
+	v, ok := d.cache[s]
+	return v, ok
+}
+
 var localStart = regexp.MustCompile(`(\w+) #\d+ in (?:static )?(\w+)\.`)
 
 // normalizeLocal rewrites a type declared inside a function, "Foo #1 in static Mod.Type.fn(a: [Int]) -> [Bar]",

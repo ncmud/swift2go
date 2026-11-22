@@ -2656,6 +2656,10 @@ func (e *fileEmitter) storedGlobal(info *DeclInfo, goName, gt string, init ast.N
 		e.w("var %s %s = %s\n\n", goName, gt, val)
 		return
 	}
+	if gt == "" {
+		// A Void global runs its initializer once for the side effect.
+		gt, pre, val = "struct{}", pre+val+"\n", "struct{}{}"
+	}
 	e.w("var Lazy_%s swiftrt.Lazy[%s]\n\n", goName, gt)
 	e.w("func init() {\nLazy_%s.Init = func() %s {\n%sreturn %s\n}\n}\n\n", goName, gt, pre, val)
 	e.w("func %s() %s { return *Lazy_%s.Ptr() }\n\n", goName, gt, goName)
