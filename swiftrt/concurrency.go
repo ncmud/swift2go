@@ -212,6 +212,22 @@ type UnownedJob struct{ run func() }
 // UnownedJobInitExecutorJob is Swift `UnownedJob(_:)` from an ExecutorJob.
 func UnownedJobInitExecutorJob(job ExecutorJob) UnownedJob { return UnownedJob(job) }
 
+// UnownedTaskExecutor is Swift `UnownedTaskExecutor`: an unmanaged reference to a TaskExecutor.
+type UnownedTaskExecutor struct{ Executor any }
+
+// UnownedSerialExecutor is Swift `UnownedSerialExecutor`: an unmanaged reference to a SerialExecutor.
+type UnownedSerialExecutor struct{ Executor any }
+
+// TaskExecutorAsUnownedTaskExecutor is Swift `TaskExecutor.asUnownedTaskExecutor()`.
+func TaskExecutorAsUnownedTaskExecutor(executor any) UnownedTaskExecutor {
+	return UnownedTaskExecutor{executor}
+}
+
+// SerialExecutorAsUnownedSerialExecutor is Swift `SerialExecutor.asUnownedSerialExecutor()`.
+func SerialExecutorAsUnownedSerialExecutor(executor any) UnownedSerialExecutor {
+	return UnownedSerialExecutor{executor}
+}
+
 // UnownedJobRunSynchronouslyOn is Swift `UnownedJob.runSynchronously(on:)`: it runs the job on the
 // calling goroutine. job is the UnownedJob; the executor it runs on does not change what it does.
 func UnownedJobRunSynchronouslyOn(job any, _ any) {

@@ -210,3 +210,38 @@ func TestErrorLocalizedDescriptionAndProcessInfo(t *testing.T) {
 		t.Errorf("systemUptime %v then %v", a, b)
 	}
 }
+
+func TestTaskGroupTypedNextAndExecutorRefs(t *testing.T) {
+	got := WithThrowingTaskGroupOfBody(TypeOf[*int](), func(race *any) int {
+		ThrowingTaskGroupAddTaskOperation(race, func() *int {
+			v := 41
+			return &v
+		})
+		first := OptAnyAsRef[*int](ThrowingTaskGroupNext(race))
+		if OptAnyAsRef[*int](ThrowingTaskGroupNext(race)) != nil {
+			t.Error("drained group returned a result")
+		}
+		return *first + 1
+	})
+	if MustAs[int](got) != 42 {
+		t.Errorf("group result = %v", got)
+	}
+	WithTaskGroupOfBody(TypeOf[string](), func(group *any) {
+		TaskGroupAddTaskOperation(group, func() string { return "a" })
+		if s := OptAnyAs[string](TaskGroupNext(group)); s == nil || *s != "a" {
+			t.Errorf("TaskGroup.next() = %v", s)
+		}
+		if OptAnyAs[string](TaskGroupNext(group)) != nil {
+			t.Error("drained TaskGroup returned a result")
+		}
+		TaskGroupCancelAll(*group)
+	})
+	var nilChild any = (*int)(nil)
+	if OptAnyAsRef[*int](&nilChild) != nil {
+		t.Error("a child's nil result")
+	}
+	executor := &struct{ name string }{"serial"}
+	if TaskExecutorAsUnownedTaskExecutor(executor).Executor != executor || SerialExecutorAsUnownedSerialExecutor(executor).Executor != executor {
+		t.Error("unowned executor references")
+	}
+}

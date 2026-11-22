@@ -317,6 +317,8 @@ func (m *Module) Recv(t *types.Type) string {
 		return "Slice"
 	case "Swift.EnumeratedSequence":
 		return "Enumerated"
+	case "Swift.AsyncStream.Iterator":
+		return "AsyncStreamIterator"
 	}
 	if m.IsOptionSet(t.Name) && !foreignOptionSets[t.Name] {
 		return "OptionSet"
@@ -409,6 +411,9 @@ var foreignTypes = map[string]string{
 	"Foundation.Calendar.Component":           "swiftrt.CalendarComponent",
 	"Foundation.Calendar.Identifier":          "swiftrt.CalendarIdentifier",
 	"Foundation.JSONEncoder.OutputFormatting": "swiftrt.JSONEncoderOutputFormatting",
+	"Swift.AsyncStream":                       "swiftrt.AsyncStream[%s]",
+	"Swift.AsyncStream.Continuation":          "swiftrt.AsyncStreamContinuation[%s]",
+	"Swift.AsyncStream.Iterator":              "swiftrt.AsyncStreamIterator[%s]",
 }
 
 // goKeyable reports whether a Swift Hashable type's Go form can be a Go map key with the same
