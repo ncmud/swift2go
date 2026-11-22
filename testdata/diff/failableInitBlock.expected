@@ -1,0 +1,12 @@
+rejecting -1
+-1 -100
+2 2
+caught for 13
+13 -100
+box loop 0
+box loop 1
+box 1 -100
+box loop 0
+box loop 1
+box loop 2
+box 5 5
