@@ -597,9 +597,10 @@ func OS_dispatch_queueCFDispatch_syncExecute[R any](q *DispatchQueue, f func() R
 
 // ErrorLocalizedDescription is Foundation `Error.localizedDescription`: a LocalizedError's
 // `errorDescription` when it is non-nil, an NSError's message, and otherwise Linux Foundation's
-// "The operation could not be completed. (Module.Type error N.)". The generated Go type does not
-// record the Swift module or an enum case's error code, so that fallback names the bare type and
-// code 1, which is exact for structs and classes.
+// "The operation could not be completed. (Module.Type error N.)". A generated type names itself
+// with SwiftTypeName; one that does not is named by its bare Go type. N is the raw value of an enum
+// with integer raw values, the case index of another payload-free enum, and 1 for anything else.
+// A payload enum's case tags are not recorded, so its cases get 1 as well.
 func ErrorLocalizedDescription(err any) string {
 	v := err
 	if t, ok := v.(Thrown); ok {
@@ -624,7 +625,25 @@ func ErrorLocalizedDescription(err any) string {
 	if e, ok := v.(error); ok && (t == nil || !strings.Contains(t.PkgPath(), ".")) {
 		return "The operation could not be completed. " + e.Error()
 	}
+	if n, ok := v.(SwiftNamed); ok {
+		return "The operation could not be completed. (" + n.SwiftTypeName() + " error " + strconv.Itoa(swiftErrorCode(v)) + ".)"
+	}
 	return "The operation could not be completed. (" + typeName(t) + " error 1.)"
+}
+
+// swiftErrorCode is Swift's `Error._code` for a generated error value: an integer raw value, else
+// the case index a payload-free enum is stored as, else 1.
+func swiftErrorCode(v any) int {
+	rv := reflect.ValueOf(v)
+	if m := rv.MethodByName("RawValue"); m.IsValid() && m.Type().NumIn() == 0 && m.Type().NumOut() == 1 {
+		if raw := m.Call(nil)[0]; raw.CanInt() {
+			return int(raw.Int())
+		}
+	}
+	if rv.CanInt() {
+		return int(rv.Int())
+	}
+	return 1
 }
 
 // DataInitCapacity is Foundation `Data(capacity:)`: empty, with room for n bytes.

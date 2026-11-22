@@ -187,6 +187,20 @@ func (gaps7LocalizedError) ErrorDescription() *string { return Some("custom") }
 
 type gaps7PlainError struct{}
 
+type gaps7NamedError struct{}
+
+func (gaps7NamedError) SwiftTypeName() string { return "Cases.NamedError" }
+
+type gaps7CaseError int
+
+func (gaps7CaseError) SwiftTypeName() string { return "Cases.CaseError" }
+
+type gaps7RawError int
+
+func (gaps7RawError) SwiftTypeName() string { return "Cases.RawError" }
+
+func (e gaps7RawError) RawValue() int { return [...]int{5, 9}[e] }
+
 func TestErrorLocalizedDescriptionAndProcessInfo(t *testing.T) {
 	cases := []struct {
 		err  any
@@ -194,6 +208,9 @@ func TestErrorLocalizedDescriptionAndProcessInfo(t *testing.T) {
 	}{
 		{Throw(gaps7LocalizedError{}).Err, "custom"},
 		{Throw(gaps7PlainError{}).Err, "The operation could not be completed. (gaps7PlainError error 1.)"},
+		{Throw(gaps7NamedError{}).Err, "The operation could not be completed. (Cases.NamedError error 1.)"},
+		{Throw(gaps7CaseError(2)).Err, "The operation could not be completed. (Cases.CaseError error 2.)"},
+		{Throw(gaps7RawError(1)).Err, "The operation could not be completed. (Cases.RawError error 9.)"},
 		{CancellationErrorInit(), "The operation could not be completed. (Swift.CancellationError error 1.)"},
 		{NSError{Domain: "NSCocoaErrorDomain", Code: 260, Msg: "The operation could not be completed. The file doesn’t exist."}, "The operation could not be completed. The file doesn’t exist."},
 	}
