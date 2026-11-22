@@ -33,6 +33,7 @@ type fileEmitter struct {
 	extraDecls    strings.Builder         // package-level declarations hoisted out of function bodies
 	localGenerics map[string]localGeneric // generic local functions, by Swift name
 	renames       map[string]string       // local names that refer to another Go variable here
+	localGetters  map[string]bool         // local computed variables in scope, emitted as getter functions
 	emittingFree  bool                    // the function being scoped is emitted as a free function
 	metaValues    map[string]string       // generic parameter name -> the Go value that carries its metatype
 	pendingOpens  int                     // scopes a statement opened that the enclosing block must close
