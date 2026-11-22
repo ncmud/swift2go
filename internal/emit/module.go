@@ -303,8 +303,14 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 			}
 			m.index(n.List("members"), q, kind)
 		case "func_decl", "constructor_decl", "var_decl", "enum_element_decl", "subscript_decl":
-			if n.Kind() == "func_decl" || n.Kind() == "constructor_decl" {
+			switch n.Kind() {
+			case "func_decl", "constructor_decl":
 				m.indexLocalTypes(n.Child("body"))
+			case "var_decl", "subscript_decl":
+				// Types declared inside accessors.
+				for _, a := range n.List("accessors") {
+					m.indexLocalTypes(a.Child("body"))
+				}
 			}
 			info := &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind, Static: n.Bool("static")}
 			if ownerKind == "protocol_ext" {
