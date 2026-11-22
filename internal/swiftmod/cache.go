@@ -18,7 +18,7 @@ import (
 )
 
 // cacheFormat changes whenever what the cache stores, or how a fingerprint is computed, changes.
-const cacheFormat = "swift2go-ast-cache-1"
+const cacheFormat = "swift2go-ast-cache-2"
 
 // CachedDump is the typed AST of a target, one JSON document per source file in source order.
 type CachedDump struct {
