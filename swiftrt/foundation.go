@@ -413,6 +413,12 @@ var processStart = time.Now()
 // Duration is Swift `Duration`, in nanoseconds.
 type Duration int64
 
+// Description is Swift's `Duration.description`: the length in seconds as a Double, as in "0.05 seconds".
+func (d Duration) Description() string {
+	whole, frac := int64(d)/1e9, int64(d)%1e9
+	return formatDouble(float64(whole)+float64(frac)*1e-9) + " seconds"
+}
+
 // DurationZero is `Duration.zero`.
 const DurationZero Duration = 0
 
@@ -427,6 +433,12 @@ func DurationMillisecondsInt(ms int) Duration { return Duration(int64(ms) * 1e6)
 
 // DurationMilliseconds is `Duration.milliseconds(_:)`.
 func DurationMilliseconds[T Integer](ms T) Duration { return Duration(int64(ms) * 1e6) }
+
+// DurationMicroseconds is `Duration.microseconds(_:)`.
+func DurationMicroseconds[T Integer](us T) Duration { return Duration(int64(us) * 1e3) }
+
+// DurationNanoseconds is `Duration.nanoseconds(_:)`.
+func DurationNanoseconds[T Integer](ns T) Duration { return Duration(int64(ns)) }
 
 // StringInitFormatSlice is Foundation `String(format:_:)`.
 func StringInitFormatSlice(format string, args []any) string {
