@@ -56,6 +56,7 @@ type Module struct {
 	decls          map[string]*DeclInfo
 	typeKinds      map[string]string // qualified Swift type name → decl kind
 	protoReqs      map[string][]ast.Node
+	protoParents   map[string][]string // a local protocol's directly inherited protocols
 	conformers     map[string][]string // protocol qualified name → conforming local types
 	varInit        map[string]ast.Node // stored var usr → initializer expr
 	Unsupported    map[string]int
@@ -161,7 +162,7 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 	m := &Module{
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
-		protoReqs: map[string][]ast.Node{}, conformers: map[string][]string{},
+		protoReqs: map[string][]ast.Node{}, protoParents: map[string][]string{}, conformers: map[string][]string{},
 		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, localFuncs: map[string]ast.Node{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
 	}
 	var syms []string
@@ -318,11 +319,11 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 					m.conformers[pn] = append(m.conformers[pn], q)
 				}
 			}
-			for _, p := range n.Strings("inherits") {
-				_ = p
-			}
 			if n.Kind() == "protocol" {
 				m.protoReqs[q] = n.List("members")
+				for _, p := range n.Child("inherits").Strings("protocols") {
+					m.protoParents[q] = append(m.protoParents[q], m.demangle(p))
+				}
 			}
 			m.index(n.List("members"), q, n.Kind())
 		case "extension_decl":
@@ -875,6 +876,18 @@ func (m *Module) HasMutatingMethods(q string) bool {
 				}
 				if (d.Settable || d.Observed) && !d.FreeSelf() && !d.Static {
 					m.mutatingTypes[d.Owner] = true
+				}
+			}
+			// A conformer of a protocol with a mutating or settable requirement gets pointer-receiver
+			// setters and forwarders, so only a pointer to it satisfies the protocol.
+			for proto, reqs := range mod.protoReqs {
+				for _, r := range reqs {
+					if !r.Bool("static") && (r.Kind() == "func_decl" && r.Child("implicit_self_decl").Bool("inout") || r.Kind() == "var_decl" && r.Str("writeImpl") == "setter") {
+						for _, q := range mod.conformers[proto] {
+							m.mutatingTypes[q] = true
+						}
+						break
+					}
 				}
 			}
 			for q, k := range mod.typeKinds {
