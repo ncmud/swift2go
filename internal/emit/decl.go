@@ -303,6 +303,7 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	if n.Kind() == "class_decl" && e.m.HasSubclass(info.GoName) && e.m.Superclass(info.GoName) == "" {
 		e.w("\t// SwiftSub is the most-derived object when this value is embedded in a subclass.\n\tSwiftSub any\n")
 	}
+	keys := codingKeys(n)
 	for _, mem := range n.List("members") {
 		if mem.Kind() != "var_decl" {
 			continue
@@ -315,7 +316,15 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 			e.w("\t%s %s\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics))
 			continue
 		}
-		e.w("\t%s %s `swift:\"%s\"`\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics), mem.Name())
+		tag := "swift:\"" + mem.Name() + "\""
+		if keys != nil {
+			if key, ok := keys[mem.Name()]; !ok {
+				tag += " key:\"-\""
+			} else if key != mem.Name() {
+				tag += " key:\"" + key + "\""
+			}
+		}
+		e.w("\t%s %s `%s`\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics), tag)
 	}
 	e.w("}\n\n")
 	recvT := info.GoName + e.m.typeParamUse(q)
@@ -1906,6 +1915,36 @@ func (e *fileEmitter) usrOf(info *DeclInfo) string {
 		return ""
 	}
 	return info.Node.Str("usr")
+}
+
+// codingKeys maps each case of a type's own CodingKeys enum to the key it encodes as: its string raw
+// value, or else its name. It returns nil when the type declares no CodingKeys.
+func codingKeys(n ast.Node) map[string]string {
+	for _, mem := range n.List("members") {
+		if mem.Kind() != "enum_decl" || mem.Name() != "CodingKeys" {
+			continue
+		}
+		keys := map[string]string{}
+		add := func(c ast.Node) {
+			key := c.Name()
+			if v := c.Child("raw_value_expr"); v != nil && v.Kind() == "string_literal_expr" {
+				key = v.Str("value")
+			}
+			keys[c.Name()] = key
+		}
+		for _, m := range mem.List("members") {
+			switch m.Kind() {
+			case "enum_case_decl":
+				for _, el := range m.List("elements") {
+					add(el)
+				}
+			case "enum_element_decl":
+				add(m)
+			}
+		}
+		return keys
+	}
+	return nil
 }
 
 func conformsTo(n ast.Node, protocolUSR string) bool {
