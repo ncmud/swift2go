@@ -51,19 +51,21 @@ func payloadCasesFor(t reflect.Type) ([]PayloadCase, bool) {
 }
 
 func encodePayloadCase(c PayloadCase, rv reflect.Value) any {
-	inner := map[string]any{}
+	inner := newEncodedObject(len(c.Labels))
 	for i, label := range c.Labels {
 		fv := rv.Field(i)
 		if fv.Kind() == reflect.Pointer && fv.IsNil() {
 			continue
 		}
-		inner[label] = EncodeValue(fv.Interface())
+		inner.set(label, EncodeValue(fv.Interface()))
 	}
-	return map[string]any{c.Name: inner}
+	outer := newEncodedObject(1)
+	outer.set(c.Name, inner)
+	return outer
 }
 
 func decodePayloadEnum(dst reflect.Value, cases []PayloadCase, raw any, path []string) {
-	obj, ok := raw.(map[string]any)
+	obj, ok := treeObject(raw)
 	if !ok || len(obj) != 1 {
 		codingFail("typeMismatch: expected one case key at %s", strings.Join(path, "."))
 	}
@@ -72,7 +74,7 @@ func decodePayloadEnum(dst reflect.Value, cases []PayloadCase, raw any, path []s
 		if !ok {
 			continue
 		}
-		fields, _ := inner.(map[string]any)
+		fields, _ := treeObject(inner)
 		v := reflect.New(c.Type).Elem()
 		for i, label := range c.Labels {
 			fv, present := fields[label]

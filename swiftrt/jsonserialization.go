@@ -30,9 +30,10 @@ func jsonSerializationThrow(code int, msg string) {
 // NSJSONSerializationJsonObjectWith is Foundation `JSONSerialization.jsonObject(with:)`: it parses JSON
 // whose top level is an array or object into `[Any]`, `[String: Any]`, String, NSNumber (Bool,
 // Int64, UInt64, or Double for fractional and out-of-range values) and NSNull, throwing
-// NSCocoaErrorDomain 3840 on invalid input or a top-level fragment.
+// NSCocoaErrorDomain 3840 on invalid input or a top-level fragment. A leading byte-order mark is
+// skipped, and the first of duplicate keys wins.
 func NSJSONSerializationJsonObjectWith(data []byte) any {
-	v, err := parseJSONStrict(data)
+	v, err := parseJSON(data, jsonParseOptions{allowBOM: true})
 	if err != nil {
 		jsonSerializationThrow(3840, "The data couldn't be read because it isn't in the correct format.")
 	}
@@ -47,7 +48,8 @@ func NSJSONSerializationJsonObjectWith(data []byte) any {
 // NSJSONSerializationDataWithJSONObjectOptions is Foundation
 // `JSONSerialization.data(withJSONObject:options:)` as swift-corelibs-foundation writes it: `/`
 // escaped as `\/` unless `.withoutEscapingSlashes`, doubles by their Swift description with a
-// trailing ".0" dropped, and two-space indentation with `" : "` separators for `.prettyPrinted`.
+// trailing ".0" dropped, and two-space indentation with `" : "` separators and a blank line inside
+// empty containers for `.prettyPrinted`.
 // Keys are always written sorted, one of the orders an unsorted dictionary may produce. A top-level
 // value other than an array or dictionary needs `.fragmentsAllowed`; it, NaN, infinity, non-string
 // keys and non-JSON values throw NSCocoaErrorDomain 3851.

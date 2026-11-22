@@ -1,12 +1,10 @@
 package swiftrt
 
 import (
-	"bytes"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"reflect"
 	"strconv"
@@ -51,34 +49,63 @@ func keyString(k any) string {
 	return Str(k)
 }
 
+// encodedObject is a JSON object built by encoding. Each key keeps the position of its first write
+// and the value of its last, the order swift-yyjson writes an object in without `.sortedKeys`.
+type encodedObject struct {
+	keys []string
+	m    map[string]any
+}
+
+func newEncodedObject(n int) *encodedObject {
+	return &encodedObject{keys: make([]string, 0, n), m: make(map[string]any, n)}
+}
+
+func (o *encodedObject) set(k string, v any) {
+	if _, ok := o.m[k]; !ok {
+		o.keys = append(o.keys, k)
+	}
+	o.m[k] = v
+}
+
+// treeObject returns the members of a JSON object in a parsed or encoded tree.
+func treeObject(raw any) (map[string]any, bool) {
+	switch o := raw.(type) {
+	case map[string]any:
+		return o, true
+	case *encodedObject:
+		return o.m, true
+	}
+	return nil, false
+}
+
 // KeyedEncodingContainer is Swift `KeyedEncodingContainer`.
-type KeyedEncodingContainer struct{ M map[string]any }
+type KeyedEncodingContainer struct{ obj *encodedObject }
 
 // EncoderContainerKeyedBy is `encoder.container(keyedBy:)`.
 func EncoderContainerKeyedBy(e *Encoder, _ Type) KeyedEncodingContainer {
-	if m, ok := e.Value.(map[string]any); ok {
-		return KeyedEncodingContainer{m}
+	if o, ok := e.Value.(*encodedObject); ok {
+		return KeyedEncodingContainer{o}
 	}
-	m := map[string]any{}
-	e.Value = m
-	return KeyedEncodingContainer{m}
+	o := newEncodedObject(0)
+	e.Value = o
+	return KeyedEncodingContainer{o}
 }
 
 // KeyedEncodingContainerEncodeForKey is `container.encode(_:forKey:)`.
 func KeyedEncodingContainerEncodeForKey[T any](c *KeyedEncodingContainer, v T, key any) {
-	c.M[keyString(key)] = EncodeValue(v)
+	c.obj.set(keyString(key), EncodeValue(v))
 }
 
 // KeyedEncodingContainerEncodeIfPresentForKey is `container.encodeIfPresent(_:forKey:)`.
 func KeyedEncodingContainerEncodeIfPresentForKey[T any](c *KeyedEncodingContainer, v *T, key any) {
 	if v != nil {
-		c.M[keyString(key)] = EncodeValue(*v)
+		c.obj.set(keyString(key), EncodeValue(*v))
 	}
 }
 
 // KeyedEncodingContainerEncodeNilForKey is `container.encodeNil(forKey:)`.
 func KeyedEncodingContainerEncodeNilForKey(c *KeyedEncodingContainer, key any) {
-	c.M[keyString(key)] = nil
+	c.obj.set(keyString(key), nil)
 }
 
 // SingleValueEncodingContainer is Swift `SingleValueEncodingContainer`.
@@ -117,7 +144,7 @@ type KeyedDecodingContainer struct {
 
 // DecoderContainerKeyedBy is `decoder.container(keyedBy:)`.
 func DecoderContainerKeyedBy(d *Decoder, _ Type) KeyedDecodingContainer {
-	m, ok := d.Value.(map[string]any)
+	m, ok := treeObject(d.Value)
 	if !ok {
 		codingFail("expected a keyed container at %s, found %T", strings.Join(d.CodingPath, "."), d.Value)
 	}
@@ -261,13 +288,13 @@ func EncodeValue(v any) any {
 	case interface{ RawValue() string }:
 		return x.RawValue()
 	case interface{ RawValue() int }:
-		return json.Number(strconv.Itoa(x.RawValue()))
+		return jsonNumber(strconv.Itoa(x.RawValue()))
 	case UUID:
 		return UUIDUuidString(x)
 	case Date:
 		return float64(x) - 978307200
 	case Decimal:
-		return json.Number(x.Description())
+		return jsonNumber(x.Description())
 	case []byte:
 		return base64.StdEncoding.EncodeToString(x)
 	}
@@ -275,10 +302,12 @@ func EncodeValue(v any) any {
 	case reflect.Bool, reflect.String:
 		return rv.Interface()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return json.Number(strconv.FormatInt(rv.Int(), 10))
+		return jsonNumber(strconv.FormatInt(rv.Int(), 10))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return json.Number(strconv.FormatUint(rv.Uint(), 10))
-	case reflect.Float32, reflect.Float64:
+		return jsonNumber(strconv.FormatUint(rv.Uint(), 10))
+	case reflect.Float32:
+		return float32(rv.Float())
+	case reflect.Float64:
 		return rv.Float()
 	case reflect.Pointer:
 		if rv.IsNil() {
@@ -305,8 +334,8 @@ func EncodeValue(v any) any {
 		}
 		return out
 	case reflect.Struct:
-		out := map[string]any{}
 		t := rv.Type()
+		out := newEncodedObject(t.NumField())
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			if !f.IsExported() {
@@ -320,7 +349,7 @@ func EncodeValue(v any) any {
 			if fv.Kind() == reflect.Pointer && fv.IsNil() {
 				continue
 			}
-			out[name] = EncodeValue(fv.Interface())
+			out.set(name, EncodeValue(fv.Interface()))
 		}
 		return out
 	}
@@ -453,7 +482,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 			dst.Set(out)
 			return
 		}
-		m, ok := raw.(map[string]any)
+		m, ok := treeObject(raw)
 		if !ok {
 			codingFail("expected a dictionary at %s", strings.Join(path, "."))
 		}
@@ -467,7 +496,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		}
 		dst.Set(out)
 	case reflect.Struct:
-		m, ok := raw.(map[string]any)
+		m, ok := treeObject(raw)
 		if !ok {
 			codingFail("expected a keyed container at %s", strings.Join(path, "."))
 		}
@@ -487,8 +516,11 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 			decodeInto(dst.Field(i), x, append(path, name))
 		}
 	default:
-		b, _ := json.Marshal(raw)
-		if err := json.Unmarshal(b, dst.Addr().Interface()); err != nil {
+		b, err := json.Marshal(raw)
+		if err == nil {
+			err = json.Unmarshal(b, dst.Addr().Interface())
+		}
+		if err != nil {
 			codingFail("cannot decode %s at %s: %v", t, strings.Join(path, "."), err)
 		}
 	}
@@ -549,20 +581,22 @@ var OutputFormattingPrettyPrinted = JSONEncoderOutputFormatting{1}
 // JSONEncoderInit is `JSONEncoder()`.
 func JSONEncoderInit() *JSONEncoder { return &JSONEncoder{} }
 
-// JSONEncoderEncode is `JSONEncoder.encode(_:)`.
+// JSONEncoderEncode is `JSONEncoder.encode(_:)`: numbers as Swift's `description` without a
+// trailing ".0", `/` escaped as `\/` unless `.withoutEscapingSlashes`, and for `.prettyPrinted`
+// two-space indentation, `" : "` separators and empty containers written as `[\n\n]`. Keys are
+// always sorted, one of the orders Foundation's unsorted output may take. NaN and infinity throw.
 func JSONEncoderEncode[T any](e *JSONEncoder, v T) []byte {
 	tree := EncodeValue(v)
-	var b []byte
-	var err error
-	if e.OutputFormatting.RawValue&1 != 0 {
-		b, err = json.MarshalIndent(tree, "", "  ")
-	} else {
-		b, err = json.Marshal(tree)
+	w := &yyjsonWriter{
+		pretty:        e.OutputFormatting.RawValue&OutputFormattingPrettyPrinted.RawValue != 0,
+		escapeSlashes: e.OutputFormatting.RawValue&OutputFormattingWithoutEscapingSlashes.RawValue == 0,
+		sortKeys:      true,
+		foundation:    true,
 	}
-	if err != nil {
-		codingFail("%v", err)
+	if err := Catch(func() { w.value(tree, 0) }); err != nil {
+		codingFail("Unable to encode the given value to JSON: %v", err)
 	}
-	return b
+	return []byte(w.b.String())
 }
 
 // JSONDecoder is Foundation `JSONDecoder`.
@@ -571,16 +605,12 @@ type JSONDecoder struct{ UserInfo map[string]any }
 // JSONDecoderInit is `JSONDecoder()`.
 func JSONDecoderInit() *JSONDecoder { return &JSONDecoder{} }
 
-// JSONDecoderDecodeFrom is `JSONDecoder.decode(_:from:)`.
+// JSONDecoderDecodeFrom is `JSONDecoder.decode(_:from:)`: strict UTF-8 JSON after an optional
+// byte-order mark, where the first of duplicate keys wins.
 func JSONDecoderDecodeFrom[T any](d *JSONDecoder, _ TypeT[T], data []byte) T {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var tree any
-	if err := dec.Decode(&tree); err != nil {
+	tree, err := parseJSON(data, jsonParseOptions{allowBOM: true})
+	if err != nil {
 		codingFail("The data couldn't be read because it isn't in the correct format: %v", err)
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		codingFail("The data couldn't be read because it isn't in the correct format: unexpected content at the end of the document")
 	}
 	return DecodeValue[T](tree, nil)
 }
@@ -593,10 +623,12 @@ func isSetType(t reflect.Type) bool {
 // rawNumberText returns the literal text of a JSON number in a Codable tree.
 func rawNumberText(raw any) (string, bool) {
 	switch n := raw.(type) {
-	case json.Number:
+	case jsonNumber:
 		return string(n), true
 	case float64:
 		return strconv.FormatFloat(n, 'g', -1, 64), true
+	case float32:
+		return strconv.FormatFloat(float64(n), 'g', -1, 32), true
 	}
 	return "", false
 }
@@ -611,20 +643,21 @@ func rawKind(raw any) string {
 		return "a bool"
 	case []any:
 		return "an array"
-	case map[string]any:
+	case map[string]any, *encodedObject:
 		return "a dictionary"
 	}
 	return "a number"
 }
 
-// rawFloat reads a JSON number as a Double.
+// rawFloat reads a JSON number as a Double. A number beyond Double's range fails, as in both
+// Foundation and swift-yyjson; one that underflows reads as zero, as swift-yyjson reads it.
 func rawFloat(raw any) (float64, bool) {
 	text, ok := rawNumberText(raw)
 	if !ok {
 		return 0, false
 	}
 	f, err := strconv.ParseFloat(text, 64)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
+	if err != nil && (!errors.Is(err, strconv.ErrRange) || math.IsInf(f, 0)) {
 		return 0, false
 	}
 	return f, true

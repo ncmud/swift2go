@@ -2,12 +2,12 @@ package swiftrt
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"io"
 	"math"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -203,21 +203,91 @@ func YYJSONErrorDescription(e YYJSONError) string { return e.Msg }
 
 func yyjsonThrow(msg string) { panic(Throw(YYJSONError{msg})) }
 
-// parseJSONStrict parses one RFC 8259 JSON document, numbers kept as text.
-func parseJSONStrict(data []byte) (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
+// jsonNumber is a JSON number in a parsed or encoded tree, kept as its literal text so that integers
+// beyond Double's precision and Decimal values survive.
+type jsonNumber string
+
+// MarshalJSON writes the number's literal text.
+func (n jsonNumber) MarshalJSON() ([]byte, error) { return []byte(n), nil }
+
+// jsonParseOptions are the differences between the parsers the runtime stands in for. All of them
+// reject invalid UTF-8, unpaired surrogate escapes, control characters in strings, comments,
+// trailing commas and content after the document.
+type jsonParseOptions struct {
+	// keepLastDuplicate keeps the last value of a repeated object key, as YYJSONSerialization
+	// does; Foundation and YYJSONDecoder keep the first.
+	keepLastDuplicate bool
+	// allowBOM skips a leading UTF-8 byte-order mark, as Foundation does and yyjson does not.
+	allowBOM bool
+}
+
+var errTrailingContent = errors.New("unexpected content at the end of the document")
+
+// parseJSON parses one RFC 8259 JSON document into a tree of nil, bool, string, jsonNumber, []any
+// and map[string]any.
+func parseJSON(data []byte, opts jsonParseOptions) (any, error) {
+	if opts.allowBOM {
+		data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	}
+	dec := jsontext.NewDecoder(bytes.NewReader(data), jsontext.AllowDuplicateNames(true))
+	v, err := readJSONTree(dec, opts.keepLastDuplicate)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return nil, errors.New("unexpected content at the end of the document")
+	if _, err := dec.ReadToken(); err != io.EOF {
+		return nil, errTrailingContent
 	}
 	return v, nil
 }
 
-func jsonNumberObject(n json.Number) NSNumber {
+func readJSONTree(dec *jsontext.Decoder, keepLast bool) (any, error) {
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return nil, err
+	}
+	switch tok.Kind() {
+	case 'n':
+		return nil, nil
+	case 't', 'f':
+		return tok.Bool(), nil
+	case '"':
+		return tok.String(), nil
+	case '0':
+		return jsonNumber(tok.String()), nil
+	case '[':
+		out := []any{}
+		for dec.PeekKind() != ']' {
+			v, err := readJSONTree(dec, keepLast)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		_, err := dec.ReadToken()
+		return out, err
+	case '{':
+		out := map[string]any{}
+		for dec.PeekKind() != '}' {
+			name, err := dec.ReadToken()
+			if err != nil {
+				return nil, err
+			}
+			k := name.String()
+			v, err := readJSONTree(dec, keepLast)
+			if err != nil {
+				return nil, err
+			}
+			if _, seen := out[k]; !seen || keepLast {
+				out[k] = v
+			}
+		}
+		_, err := dec.ReadToken()
+		return out, err
+	}
+	return nil, errors.New("unexpected token " + tok.String())
+}
+
+func jsonNumberObject(n jsonNumber) NSNumber {
 	s := string(n)
 	if !strings.ContainsAny(s, ".eE") {
 		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
@@ -235,7 +305,7 @@ func foundationObject(v any) any {
 	switch x := v.(type) {
 	case nil:
 		return NSNull{}
-	case json.Number:
+	case jsonNumber:
 		return jsonNumberObject(x)
 	case bool:
 		return NSNumberBool(x)
@@ -258,7 +328,7 @@ func foundationObject(v any) any {
 // (Bool, Int64, UInt64, or Double for fractional and out-of-range values) and NSNull, throwing
 // YYJSONError on invalid input.
 func YYJSONSerializationJsonObjectWith(data []byte) any {
-	v, err := parseJSONStrict(data)
+	v, err := parseJSON(data, jsonParseOptions{keepLastDuplicate: true})
 	if err != nil {
 		yyjsonThrow(err.Error())
 	}
@@ -310,9 +380,12 @@ type yyjsonWriter struct {
 	escapeSlashes bool
 	// fourSpaces indents pretty output by four spaces per level instead of two.
 	fourSpaces bool
-	// foundation writes as Foundation's JSONSerialization does: doubles by their Swift description
-	// without a trailing ".0", control characters as lowercase `\u` escapes, and `" : "` between
-	// keys and values when pretty-printing.
+	// sortKeys writes encoded objects' keys sorted instead of in encoding order. Dictionary keys
+	// are always sorted.
+	sortKeys bool
+	// foundation writes as Foundation does: numbers by their Swift description without a trailing
+	// ".0", control characters as lowercase `\u` escapes, and when pretty-printing `" : "` between
+	// keys and values and a blank line inside empty containers.
 	foundation bool
 }
 
@@ -366,15 +439,59 @@ func (w *yyjsonWriter) indent(level int) {
 	}
 }
 
-func (w *yyjsonWriter) double(f float64) {
+// double writes a Double, or a Float when bitSize is 32. yyjson widens a Float to Double first.
+func (w *yyjsonWriter) double(f float64, bitSize int) {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		yyjsonThrow("NaN or Infinity not allowed in JSON")
 	}
 	if w.foundation {
-		w.b.WriteString(strings.TrimSuffix(swiftFloatDescription(f, 64), ".0"))
+		w.b.WriteString(strings.TrimSuffix(swiftFloatDescription(f, bitSize), ".0"))
 		return
 	}
 	w.b.WriteString(yyjsonDouble(f))
+}
+
+// empty writes an empty array or object.
+func (w *yyjsonWriter) empty(open, close byte, level int) {
+	w.b.WriteByte(open)
+	if w.pretty && w.foundation {
+		w.b.WriteByte('\n')
+		w.indent(level)
+	}
+	w.b.WriteByte(close)
+}
+
+func (w *yyjsonWriter) member(k string, v any, first bool, level int) {
+	if !first {
+		w.b.WriteByte(',')
+	}
+	w.indent(level + 1)
+	w.str(k)
+	if w.pretty && w.foundation {
+		w.b.WriteByte(' ')
+	}
+	w.b.WriteByte(':')
+	if w.pretty {
+		w.b.WriteByte(' ')
+	}
+	w.value(v, level+1)
+}
+
+func (w *yyjsonWriter) object(o *encodedObject, level int) {
+	if len(o.keys) == 0 {
+		w.empty('{', '}', level)
+		return
+	}
+	keys := o.keys
+	if w.sortKeys {
+		keys = slices.Sorted(slices.Values(keys))
+	}
+	w.b.WriteByte('{')
+	for i, k := range keys {
+		w.member(k, o.m[k], i == 0, level)
+	}
+	w.indent(level)
+	w.b.WriteByte('}')
 }
 
 func (w *yyjsonWriter) value(v any, level int) {
@@ -391,8 +508,14 @@ func (w *yyjsonWriter) value(v any, level int) {
 	case bool:
 		w.b.WriteString(strconv.FormatBool(x))
 		return
-	case json.Number:
+	case jsonNumber:
 		w.b.WriteString(string(x))
+		return
+	case *encodedObject:
+		w.object(x, level)
+		return
+	case float32:
+		w.double(float64(x), 32)
 		return
 	case NSNumber:
 		switch x.kind {
@@ -403,7 +526,7 @@ func (w *yyjsonWriter) value(v any, level int) {
 		case 'u':
 			w.b.WriteString(strconv.FormatUint(x.u, 10))
 		default:
-			w.double(x.f)
+			w.double(x.f, 64)
 		}
 		return
 	}
@@ -413,8 +536,10 @@ func (w *yyjsonWriter) value(v any, level int) {
 		w.b.WriteString(strconv.FormatInt(rv.Int(), 10))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		w.b.WriteString(strconv.FormatUint(rv.Uint(), 10))
-	case reflect.Float32, reflect.Float64:
-		w.double(rv.Float())
+	case reflect.Float32:
+		w.double(rv.Float(), 32)
+	case reflect.Float64:
+		w.double(rv.Float(), 64)
 	case reflect.Pointer, reflect.Interface:
 		if rv.IsNil() {
 			w.b.WriteString("null")
@@ -423,7 +548,7 @@ func (w *yyjsonWriter) value(v any, level int) {
 		}
 	case reflect.Slice, reflect.Array:
 		if rv.Len() == 0 {
-			w.b.WriteString("[]")
+			w.empty('[', ']', level)
 			return
 		}
 		w.b.WriteByte('[')
@@ -441,26 +566,14 @@ func (w *yyjsonWriter) value(v any, level int) {
 			yyjsonThrow("Dictionary keys must be strings")
 		}
 		if rv.Len() == 0 {
-			w.b.WriteString("{}")
+			w.empty('{', '}', level)
 			return
 		}
 		keys := rv.MapKeys()
-		sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+		slices.SortFunc(keys, func(a, b reflect.Value) int { return strings.Compare(a.String(), b.String()) })
 		w.b.WriteByte('{')
 		for i, k := range keys {
-			if i > 0 {
-				w.b.WriteByte(',')
-			}
-			w.indent(level + 1)
-			w.str(k.String())
-			if w.pretty && w.foundation {
-				w.b.WriteByte(' ')
-			}
-			w.b.WriteByte(':')
-			if w.pretty {
-				w.b.WriteByte(' ')
-			}
-			w.value(rv.MapIndex(k).Interface(), level+1)
+			w.member(k.String(), rv.MapIndex(k).Interface(), i == 0, level)
 		}
 		w.indent(level)
 		w.b.WriteByte('}')
@@ -505,7 +618,7 @@ func YYJSONSerializationJsonObjectWithOptions(data []byte, options YYJSONSeriali
 	if options.RawValue&ReadingOptionsFragmentsAllowed.RawValue == 0 {
 		return YYJSONSerializationJsonObjectWith(data)
 	}
-	v, err := parseJSONStrict(data)
+	v, err := parseJSON(data, jsonParseOptions{keepLastDuplicate: true})
 	if err != nil {
 		yyjsonThrow(err.Error())
 	}
@@ -610,8 +723,9 @@ func YYJSONEncoderInit() YYJSONEncoder { return YYJSONEncoder{} }
 
 // YYJSONEncoderEncode is swift-yyjson `YYJSONEncoder.encode(_:)`. `.prettyPrinted` indents by four
 // spaces, or two with `.indentationTwoSpaces` (which alone also pretty-prints); `/` is escaped only
-// with `.escapeSlashes`; `.newlineAtEnd` appends a newline. Object keys are always sorted, because
-// the Codable tree does not keep the encoding order. NaN and infinity throw YYJSONError.
+// with `.escapeSlashes`; `.newlineAtEnd` appends a newline. Keys are written in encoding order, or
+// sorted with `.sortedKeys`; a Dictionary's keys are always sorted, one of the orders its hash order
+// may take. NaN and infinity throw YYJSONError.
 func YYJSONEncoderEncode[T any](e YYJSONEncoder, value T) []byte {
 	has := func(o YYJSONWriteOptions) bool { return e.WriteOptions.RawValue&o.RawValue != 0 }
 	tree := EncodeValue(value)
@@ -619,6 +733,7 @@ func YYJSONEncoderEncode[T any](e YYJSONEncoder, value T) []byte {
 		pretty:        has(YYJSONWriteOptionsPrettyPrinted) || has(YYJSONWriteOptionsIndentationTwoSpaces),
 		fourSpaces:    !has(YYJSONWriteOptionsIndentationTwoSpaces),
 		escapeSlashes: has(YYJSONWriteOptionsEscapeSlashes),
+		sortKeys:      has(YYJSONWriteOptionsSortedKeys),
 	}
 	w.value(tree, 0)
 	if has(YYJSONWriteOptionsNewlineAtEnd) {
@@ -633,16 +748,18 @@ type YYJSONDecoder struct{}
 // YYJSONDecoderInit is swift-yyjson `YYJSONDecoder()`.
 func YYJSONDecoderInit() YYJSONDecoder { return YYJSONDecoder{} }
 
-// YYJSONDecoderDecodeFrom is swift-yyjson `YYJSONDecoder.decode(_:from:)`: strict JSON decoded with
-// Codable semantics, throwing YYJSONError on malformed input.
-func YYJSONDecoderDecodeFrom[T any](_ YYJSONDecoder, t TypeT[T], data []byte) T {
+// YYJSONDecoderDecodeFrom is swift-yyjson `YYJSONDecoder.decode(_:from:)`: strict JSON without a
+// byte-order mark, where the first of duplicate keys wins, decoded with Codable semantics. Malformed
+// input throws YYJSONError.
+func YYJSONDecoderDecodeFrom[T any](_ YYJSONDecoder, _ TypeT[T], data []byte) T {
 	if len(data) == 0 {
 		yyjsonThrow("Empty content")
 	}
-	if _, err := parseJSONStrict(data); err != nil {
+	tree, err := parseJSON(data, jsonParseOptions{})
+	if err != nil {
 		yyjsonThrow(err.Error())
 	}
-	return JSONDecoderDecodeFrom(JSONDecoderInit(), t, data)
+	return DecodeValue[T](tree, nil)
 }
 
 // NSNumberDoubleValue is Foundation `NSNumber.doubleValue`.
