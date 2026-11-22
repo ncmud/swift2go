@@ -260,6 +260,10 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 			}
 			return
 		}
+		if n.Kind() == "typealias" {
+			// A local type alias only names a type, which each use already resolved.
+			return
+		}
 		e.w("_ = %s\n", e.m.Unsup("stmt:"+n.Kind(), e.where, ""))
 	}
 }
@@ -350,6 +354,12 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 	savePost := e.post
 	e.post = nil
 	v := e.owned(r, sinkReturn)
+	if e.resultType == "*struct{}" && strings.HasPrefix(v, "func() {") && strings.HasSuffix(v, "}()") {
+		// An optional chain ending in a Void call (`x?.f()`) returned as `()?`: run it, then return
+		// a value. Whether the chain reached the call is not kept.
+		e.w("%s\n", v)
+		v = "&struct{}{}"
+	}
 	if len(e.post) > 0 {
 		// Write-backs must run before leaving the function.
 		tmp := e.newTmp("res")
@@ -1157,6 +1167,10 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			if st != nil && e.m.Recv(st) == "Substring" && e.m.Recv(lt) == "String" {
 				return derefParen(subj) + ".String() == " + e.expr(lit)
 			}
+			if lg := e.m.GoType(lt, e.generics); st != nil && e.m.GoType(st, e.generics) == "error" && lg != "error" && lg != "" {
+				// A caught error matched against a value of a concrete error type (`catch E.empty`).
+				return "func() bool { v := swiftrt.As[" + lg + "](" + subj + "); return v != nil && *v == " + e.expr(lit) + " }()"
+			}
 			return subj + " == " + e.expr(lit)
 		}
 		return e.m.Unsup("pattern_expr-shape", e.where, "bool")
@@ -1192,6 +1206,13 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 					test = andJoin([]string{test, inner})
 				}
 				return test
+			}
+			if pt != nil && pt.Kind == types.Named && p.Child("sub_pattern") == nil && len(pt.Args) == 0 {
+				// A case without a payload of an enum the runtime models: its constant, named as
+				// an expression naming the case is.
+				if gt := e.m.GoType(pt, e.generics); strings.HasPrefix(gt, "swiftrt.") && !strings.ContainsAny(gt, "[* /") {
+					return subj + " == " + gt + capitalize(p.Child("element").Child("base_name").Str("name"))
+				}
 			}
 			return e.m.Unsup("enum-pattern-foreign", e.where, "bool")
 		}
@@ -1383,12 +1404,16 @@ func (e *fileEmitter) foreignPayloadCase(p ast.Node, st *types.Type) (string, bo
 	if st == nil || st.Kind != types.Named || len(st.Args) > 0 {
 		return "", false
 	}
-	gt := e.m.GoType(st, e.generics)
-	if !strings.HasPrefix(gt, "swiftrt.") || strings.ContainsAny(gt, "[* /") {
-		return "", false
-	}
 	name := p.Child("element").Child("base_name").Str("name")
 	if name == "" {
+		return "", false
+	}
+	if mp := e.m.mappedTypeModule(st.Name); mp != nil {
+		// A mapped package declares the same shape: one struct per payload case, fields F0, F1, ….
+		return mp.Alias() + "." + mappedOwner(st.Name) + capitalize(name), true
+	}
+	gt := e.m.GoType(st, e.generics)
+	if !strings.HasPrefix(gt, "swiftrt.") || strings.ContainsAny(gt, "[* /") {
 		return "", false
 	}
 	return gt + capitalize(name), true
@@ -1500,7 +1525,12 @@ func (e *fileEmitter) doCatch(n ast.Node) {
 						break
 					}
 				}
-				t, b = e.patternTest(up, "err", e.m.typeOf(p.Type())), up
+				subj := "err"
+				if up.Kind() == "pattern_enum_element" {
+					// The caught error holds the thrown enum value, which need not be a Go error itself.
+					subj = "swiftrt.Dynamic(err)"
+				}
+				t, b = e.patternTest(up, subj, e.m.typeOf(p.Type())), up
 			default:
 				t = e.m.Unsup("catch-pattern:"+up.Kind(), e.where, "bool")
 			}

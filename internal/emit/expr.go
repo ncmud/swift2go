@@ -103,6 +103,11 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.upcastClass(n)
 	case "erasure_expr":
 		sub := n.Child("sub_expr")
+		if nt, st := e.m.typeOf(n.Type()), e.m.typeOf(sub.Type()); nt != nil && st != nil && nt.Kind == types.Meta && st.Kind == types.Meta && len(st.Args) == 1 && st.Args[0].Kind == types.Generic &&
+			!strings.Contains(st.Args[0].Name, ".") && e.m.protocolGoName(e.m.GoType(st.Args[0], e.generics)) {
+			// `Self.self` in a protocol extension, stored as `any P.Type`: the receiver carries the type.
+			return e.metaReceiver(sub)
+		}
 		if nt, st := e.m.typeOf(n.Type()), e.m.typeOf(sub.Type()); nt != nil && st != nil && nt.Kind == types.Meta && st.Kind == types.Meta && len(st.Args) == 1 && st.Args[0].Kind == types.Named {
 			// A concrete metatype stored as `any P.Type` becomes the type's zero value, which carries P's static requirements.
 			if e.m.isLocalProtocol(st.Args[0].Name) {
@@ -117,6 +122,10 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		}
 		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind == types.Named && e.m.HasMutatingMethods(t.Name) {
 			return "swiftrt.Ref(" + e.expr(sub) + ")"
+		}
+		if e.exprGoType(n) == "error" && e.exprGoType(sub) != "error" {
+			// A Swift error value need not implement Go's error; the runtime carries it as one.
+			return "swiftrt.ErrorOf(" + e.expr(sub) + ")"
 		}
 		return e.expr(sub)
 	case "dot_syntax_base_ignored":
@@ -390,10 +399,19 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			return "swiftrt.HMapOf([]" + kt + "{" + strings.Join(keys, ", ") + "}, []" + vt + "{" + strings.Join(vals, ", ") + "})"
 		}
 		var parts []string
+		pair := ": "
+		if t := e.m.typeOf(n.Type()); t != nil && t.Name == "Swift.KeyValuePairs" {
+			// KeyValuePairs keeps its literal's order: a slice of key-value tuples.
+			pair = ", "
+		}
 		for _, el := range n.List("elements") {
 			kv := el.List("elements")
 			if len(kv) == 2 {
-				parts = append(parts, e.part(kv[0], *elemSink)+": "+e.part(kv[1], *elemSink))
+				part := e.part(kv[0], *elemSink) + pair + e.part(kv[1], *elemSink)
+				if pair == ", " {
+					part = "{" + part + "}"
+				}
+				parts = append(parts, part)
 			}
 		}
 		return "(" + gt + "{" + strings.Join(parts, ", ") + "})"
@@ -411,7 +429,14 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if t.Kind == types.Optional {
 			inner := e.m.GoType(t.Args[0], e.generics)
 			if inner == "" {
-				return e.expr(sub)
+				// Void wrapped in an Optional is a non-nil pointer to the empty struct.
+				if sub.Kind() == "tuple_expr" && len(sub.List("elements")) == 0 {
+					return "&struct{}{}"
+				}
+				if v := e.expr(sub); v != "struct{}{}" {
+					return "func() *struct{} { " + v + "; return &struct{}{} }()"
+				}
+				return "&struct{}{}"
 			}
 			if e.m.isReferenceGo(t.Args[0], inner) {
 				return e.expr(sub)
@@ -455,8 +480,13 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return "func() struct{} {\n" + strings.TrimSpace(s) + "\nreturn struct{}{}\n}()"
 	case "try_expr", "force_try_expr", "optional_try_expr":
 		return e.tryExpr(n)
-	case "is_expr":
-		return "swiftrt.Is[" + e.m.GoType(e.m.typeOf(n.Str("cast_to")), e.generics) + "](" + e.expr(n.Child("sub_expr")) + ")"
+	case "is_expr", "is_subtype_expr":
+		// `x is T`; is_subtype_expr is the form the compiler uses when T is a subclass of x's class.
+		to := n.Str("cast_to")
+		if to == "" {
+			to = n.Str("written_type")
+		}
+		return "swiftrt.Is[" + e.m.GoType(e.m.typeOf(to), e.generics) + "](" + e.expr(n.Child("sub_expr")) + ")"
 	case "conditional_checked_cast_expr":
 		return "swiftrt.As[" + e.castTarget(n) + "](" + e.expr(n.Child("sub_expr")) + ")"
 	case "forced_checked_cast_expr":
@@ -464,6 +494,10 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	case "type_expr":
 		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
 			inner := e.m.GoType(t.Args[0], e.generics)
+			if v, ok := e.metaValues[t.Args[0].Name]; ok && t.Args[0].Kind == types.Generic {
+				// A type known only as its protocol: the parameter that carries its metatype.
+				return v
+			}
 			if inner == "" {
 				inner = "struct{}"
 			}
@@ -476,8 +510,11 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.keyPath(n)
 	case "keypath_application_expr":
 		kp := n.Child("keypath")
-		if strings.HasPrefix(e.exprGoType(kp), "swiftrt.WritableKeyPath[") {
-			return e.expr(kp) + ".Get(" + e.expr(n.Child("base")) + ")"
+		// A writable key path read through its KeyPath superclass is still the runtime's struct.
+		for inner := kp; inner != nil; inner = inner.Child("sub_expr") {
+			if strings.HasPrefix(e.exprGoType(inner), "swiftrt.WritableKeyPath[") {
+				return e.expr(kp) + ".Get(" + e.expr(n.Child("base")) + ")"
+			}
 		}
 		return e.expr(kp) + "(" + e.expr(n.Child("base")) + ")"
 	case "open_existential_expr":
@@ -489,6 +526,32 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return e.captureList(n)
 	case "macro_expansion_expr":
 		return e.macro(n)
+	}
+	switch n.Kind() {
+	case "make_temporarily_escapable_expr":
+		// withoutActuallyEscaping: the body sees the closure under the placeholder; Go closures
+		// have no escape rule to satisfy.
+		e.opaque[n.Child("opaque_value").Str("identity")] = e.expr(n.Child("nonescaping_closure_value"))
+		return e.expr(n.Child("sub_expr"))
+	case "metatype_expr":
+		// `type(of: value)`.
+		if base := n.Child("base"); base != nil {
+			return "swiftrt.TypeOfValue(" + e.expr(base) + ")"
+		}
+	case "enum_is_case_expr":
+		// `optional is .some`, as the compiler writes `x is T?`-style checks: a nil test.
+		if name := n.Child("name").Child("base_name").Str("name"); name == "some" || name == "none" {
+			op := " != nil"
+			if name == "none" {
+				op = " == nil"
+			}
+			return "(" + e.expr(n.Child("sub_expr")) + op + ")"
+		}
+	}
+	if n.Kind() == "bridge_to_objc_expr" {
+		// A Swift value passed where Objective-C's counterpart is expected (a String as a `%@`
+		// format argument): the runtime takes the Swift value.
+		return e.expr(n.Child("sub_expr"))
 	}
 	return e.m.Unsup("expr:"+n.Kind(), e.where, e.exprGoType(n))
 }
@@ -634,6 +697,28 @@ func (e *fileEmitter) lookup(usr string) (*DeclInfo, string) {
 func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 	usr := d.Str("decl_usr")
 	name := d.Str("base_name")
+	localKey := usr
+	if localKey == "" {
+		localKey = "local:" + name
+	}
+	if fn, ok := e.m.localFuncs[localKey]; ok && n != nil && n.Child("function_ref").Str("apply_level") == "unapplied" && len(fn.Child("generic_signature").Strings("generic_params")) > 0 {
+		// A local generic function used as a value at one specialization: Go's closure takes the
+		// protocol's interface, so a function of the specialized type forwards to it.
+		if ft := e.m.typeOf(n.Type()); ft != nil && ft.Kind == types.Func {
+			var params, names []string
+			for i, a := range ft.Args {
+				params = append(params, "p"+itoa(i)+" "+e.m.GoType(a, e.generics))
+				names = append(names, "p"+itoa(i))
+			}
+			res, ret := "", ""
+			if ft.Result != nil {
+				if res = e.m.GoType(ft.Result, e.generics); res != "" {
+					ret = "return "
+				}
+			}
+			return "func(" + strings.Join(params, ", ") + ") " + res + " { " + ret + goSafe(name) + "(" + strings.Join(names, ", ") + ") }"
+		}
+	}
 	if usr == "" {
 		if name == "self" {
 			if e.inoutParams["self"] {
@@ -662,6 +747,16 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 		}
 	}
 	info, pfx := e.lookup(usr)
+	if info == nil && usr == "s:Sq4noneyxSgABmlF" {
+		// `Optional.none` written out, as in `x == .none`: a nil of the Optional's Go type.
+		t := e.m.typeOf(n.Type())
+		if t != nil && t.Kind == types.Func && t.Result != nil {
+			t = t.Result
+		}
+		if gt := e.m.GoType(t, e.generics); gt != "" && gt != "any" {
+			return "(" + gt + ")(nil)"
+		}
+	}
 	if info == nil {
 		dem := e.m.demangle(usr)
 		if strings.Contains(dem, "(in ") || strings.HasPrefix(usr, "s:") && strings.Contains(usr, "L_") {
@@ -719,6 +814,20 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 	d := n.Child("decl")
 	base := n.Child("base")
 	usr := d.Str("decl_usr")
+	if sub := stripLoads(base); d.Str("base_name") == "indices" && sub != nil && sub.Kind() == "subscript_expr" {
+		// `text.unicodeScalars[from...].indices`: String indices, one per scalar.
+		if str := e.scalarViewOf(sub.Child("base")); str != nil {
+			if as := sub.Child("args").List("args"); len(as) == 1 && strings.HasPrefix(e.m.demangle(as[0].Child("expr").Type()), "Swift.PartialRangeFrom<Swift.String.Index>") {
+				return "swiftrt.StringScalarIndicesFrom(" + e.expr(str) + ", " + e.expr(as[0].Child("expr")) + ")"
+			}
+		}
+	}
+	if bt := e.m.typeOf(base.Type()); d.Str("base_name") == "pointee" && bt != nil && len(bt.Args) == 1 && (e.m.Recv(bt) == "UnsafeMutablePointer" || e.m.Recv(bt) == "UnsafePointer") {
+		// A pointer to anything but C characters is a Go pointer, read by dereferencing it.
+		if el := e.m.GoType(bt.Args[0], e.generics); el != "int8" && el != "uint8" && el != "" && el != "any" {
+			return "(*" + e.expr(base) + ")"
+		}
+	}
 	info, pfx := e.lookup(usr)
 	if info != nil && info.Kind == "var_decl" {
 		if info.Computed {
@@ -879,6 +988,15 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 	case "member_ref_expr":
 		info, pfx := e.lookup(n.Child("decl").Str("decl_usr"))
 		if info != nil && info.Kind == "var_decl" && !info.Computed && info.Observed && !info.Static && !e.initializing(info) && !n.Bool("direct_to_storage") {
+			if simpleDidSet(info.Node) {
+				// A didSet that does not read oldValue observes an in-place modification (SE-0268):
+				// the storage is mutated where it is, and the observer runs afterwards.
+				stored := e.lvalue(n.Child("base")) + "." + info.GoName
+				if call, ok := e.setterCall(n, stored); ok {
+					e.post = append(e.post, call)
+					return stored
+				}
+			}
 			// Mutating part of an observed property runs its observers: mutate a copy, then set it.
 			tmp := e.newTmp("wb")
 			e.w("%s := swiftrt.Copy(%s)\n", tmp, e.expr(n))
@@ -957,7 +1075,9 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		if len(args) == 1 && e.m.Recv(bt) == "Map" {
 			return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "]"
 		}
-		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" && isZeroLiteral(args[1].Child("expr")) {
+		// A missing key reads as Go's zero value, which serves for a zero default, except that a nil
+		// map (an empty dictionary or set) cannot be written into.
+		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" && isZeroLiteral(args[1].Child("expr")) && !strings.HasPrefix(e.exprGoType(n), "map[") {
 			return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "]"
 		}
 		if len(args) == 2 && e.m.Recv(bt) == "Map" && args[1].Str("label") == "default" {
@@ -979,6 +1099,17 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 			e.w("%s := %s\n%s := %sGet(%s, %s)\n", k, e.expr(args[0].Child("expr")), tmp, fn, d, k)
 			e.post = append(e.post, fn+"Set(&"+d+", "+k+", "+tmp+")")
 			return "(*" + tmp + ")"
+		}
+		if e.m.Recv(bt) == "UnsafeMutablePointer" && len(args) == 1 {
+			// An element of C memory: read it, let the statement change the copy, then store the copy.
+			p, k, tmp := e.newTmp("ptr"), e.newTmp("key"), e.newTmp("elem")
+			fn := "swiftrt.UnsafeMutablePointer"
+			if pointsToPointer(bt) {
+				fn += "Pointer"
+			}
+			e.w("%s := %s\n%s := %s\n%s := %sSubscriptInt(%s, %s)\n", p, e.expr(n.Child("base")), k, e.expr(args[0].Child("expr")), tmp, fn, p, k)
+			e.post = append(e.post, fn+"SetSubscriptInt("+p+", "+k+", "+tmp+")")
+			return tmp
 		}
 		var labels []string
 		for _, a := range args {
@@ -1068,16 +1199,33 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 	}
 	args := n.Child("args").List("args")
 	d := n.Child("decl")
-	if info, _ := e.lookup(d.Str("decl_usr")); info != nil {
+	if info, pfx := e.lookup(d.Str("decl_usr")); info != nil {
 		if info.Kind == "subscript_decl" && !info.FreeSelf() && !info.Static {
 			defer e.lendReceiver(base, info)()
 			ss, _ := e.argStrings(e.args(n.Child("args")), false)
 			return e.recvExpr(base) + "." + info.GoName + "(" + strings.Join(ss, ", ") + ")"
 		}
+		if info.Kind == "subscript_decl" && info.FreeSelf() && !info.Static {
+			// A subscript emitted as a free function, as on a generic struct: self comes first.
+			defer e.lendReceiver(base, info)()
+			ss, _ := e.argStrings(e.args(n.Child("args")), false)
+			return pfx + info.GoName + "(" + strings.Join(append([]string{e.recvArg(base)}, ss...), ", ") + ")"
+		}
 		return e.m.Unsup("user-subscript", e.where, e.exprGoType(n))
 	}
 	if mp := e.m.mappedDecl(d.Str("decl_usr")); mp != nil {
 		return e.mappedCallExpr(mp, d, e.expr(base), e.args(n.Child("args")), false, false)
+	}
+	if str := e.scalarViewOf(base); str != nil && len(args) == 1 {
+		// A String's unicodeScalars share the String's indices, which are byte offsets here, so they
+		// are read from the string and not from a slice of its scalars.
+		a := args[0].Child("expr")
+		switch at := e.m.demangle(a.Type()); {
+		case at == "Swift.String.Index":
+			return "swiftrt.StringScalarAt(" + e.expr(str) + ", " + e.expr(a) + ")"
+		case strings.HasPrefix(at, "Swift.PartialRangeFrom<Swift.String.Index>"):
+			return "swiftrt.StringScalarsFrom(" + e.expr(str) + ", " + e.expr(a) + ")"
+		}
 	}
 	bt := e.m.typeOf(base.Type())
 	recv := e.m.Recv(bt)
@@ -1091,6 +1239,14 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 	at := e.m.Recv(e.m.typeOf(a.Type()))
 	if at == "Func" || strings.Contains(e.m.demangle(a.Type()), "UnboundedRange") {
 		return "swiftrt." + recv + "SubscriptAll(" + e.expr(base) + ")"
+	}
+	if (recv == "UnsafePointer" || recv == "UnsafeMutablePointer") && at == "Int" && pointsToPointer(bt) {
+		// An array of C pointers, such as argv: each element is a pointer, not a C character.
+		return "swiftrt.UnsafeMutablePointerPointerSubscriptInt(" + e.expr(base) + ", " + e.expr(a) + ")"
+	}
+	if (recv == "UnsafePointer" || recv == "UnsafeMutablePointer") && at == "Int" && len(bt.Args) == 1 && bt.Args[0].Name == "Swift.UInt8" {
+		// C memory holds C characters; a pointer rebound to UInt8 reads the same bits unsigned.
+		return "uint8(swiftrt." + recv + "SubscriptInt(" + e.expr(base) + ", " + e.expr(a) + "))"
 	}
 	if recv == "Slice" && at == "Int" {
 		if lo := e.sliceOffset(base); lo != "" {
@@ -1382,7 +1538,8 @@ func (e *fileEmitter) keyPath(n ast.Node) string {
 	root := e.m.GoType(t.Args[0], e.generics)
 	val := e.m.GoType(t.Args[1], e.generics)
 	acc := "root"
-	for _, c := range n.List("components") {
+	pre := ""
+	for i, c := range n.List("components") {
 		switch c.Kind() {
 		case "tuple_element":
 			acc = derefParen(acc) + ".F" + c.Str("index")
@@ -1392,6 +1549,28 @@ func (e *fileEmitter) keyPath(n ast.Node) string {
 		case "optional_force":
 			acc = "(*" + acc + ")"
 			continue
+		case "optional_chain":
+			// `\.a?.b`: the path ends in nil when a is nil, and goes on from a's value otherwise.
+			tmp := "opt" + itoa(i)
+			pre += tmp + " := " + acc + "\nif " + tmp + " == nil {\nreturn nil\n}\n"
+			acc = "(*" + tmp + ")"
+			if ct := e.m.typeOf(c.Type()); ct != nil && e.m.isReferenceGo(ct, e.m.GoType(ct, e.generics)) {
+				acc = tmp
+			}
+			continue
+		case "optional_wrap":
+			if ct := e.m.typeOf(c.Type()); ct != nil && ct.Kind == types.Optional && len(ct.Args) == 1 {
+				if inner := e.m.GoType(ct.Args[0], e.generics); !e.m.isReferenceGo(ct.Args[0], inner) {
+					acc = "swiftrt.Some[" + inner + "](" + acc + ")"
+				}
+			}
+			continue
+		case "subscript":
+			// An array element by index: `\.words[0]`.
+			if args := c.Child("args").List("args"); c.Child("decl").Str("decl_usr") == "s:SayxSicip" && len(args) == 1 {
+				acc = acc + "[" + e.expr(args[0].Child("expr")) + "]"
+				continue
+			}
 		}
 		if c.Kind() != "member" {
 			return e.m.Unsup("keypath-component:"+c.Kind(), e.where, "func("+root+") "+val)
@@ -1417,7 +1596,10 @@ func (e *fileEmitter) keyPath(n ast.Node) string {
 			acc = acc + "." + info.GoName
 		}
 	}
-	get := "func(root " + root + ") " + val + " { return " + acc + " }"
+	get := "func(root " + root + ") " + val + " {\n" + pre + "return " + acc + "\n}"
+	if pre == "" {
+		get = "func(root " + root + ") " + val + " { return " + acc + " }"
+	}
 	if !strings.HasPrefix(e.exprGoType(n), "swiftrt.WritableKeyPath[") {
 		return get
 	}
@@ -1437,7 +1619,7 @@ func (e *fileEmitter) keyPathSetter(n ast.Node, root, val string) string {
 		if c.Kind() != "member" {
 			return e.m.Unsup("keypath-setter:"+c.Kind(), e.where, "func(*"+root+", "+val+")")
 		}
-		info, pfx := e.lookup(c.Child("decl").Str("decl_usr"))
+		info, _ := e.lookup(c.Child("decl").Str("decl_usr"))
 		if info == nil || info.Kind != "var_decl" || info.FreeSelf() {
 			return e.m.Unsup("keypath-setter-member", e.where, "func(*"+root+", "+val+")")
 		}
@@ -1451,7 +1633,7 @@ func (e *fileEmitter) keyPathSetter(n ast.Node, root, val string) string {
 			}
 			acc += "." + info.GoName + "()"
 		default:
-			acc += "." + pfx + info.GoName
+			acc += "." + info.GoName
 		}
 	}
 	return "func(root *" + root + ", v " + val + ") { " + acc + " = v }"
@@ -1474,7 +1656,12 @@ func (e *fileEmitter) autoclosureFunc(n ast.Node, ps []ast.Node) string {
 	if ft.Kind == types.Func {
 		res = e.m.GoType(ft.Result, e.generics)
 	}
-	body := e.expr(n.Child("single_expr_body"))
+	inner := n.Child("single_expr_body")
+	body := e.expr(inner)
+	if inner.Kind() == "autoclosure_expr" && len(ps) > 0 && len(inner.Child("params").List("params")) == 0 {
+		// A curry thunk of a method without parameters: applying it to self yields a function.
+		body = e.autoclosureFunc(inner, nil)
+	}
 	if res == "" {
 		return "func(" + strings.Join(params, ", ") + ") { " + body + " }"
 	}
@@ -1521,6 +1708,10 @@ func (e *fileEmitter) defaultArg(n ast.Node) string {
 		if ex := params[idx].Child("expression"); ex != nil {
 			if s, ok := emptyAtCallSite(ex); ok {
 				return s
+			}
+			if body := ex.Child("single_expr_body"); ex.Kind() == "autoclosure_expr" && len(ex.Child("params").List("params")) == 0 && body.Kind() == "call_expr" && body.Implicit() {
+				// A function named as the default (`= Type.method`) arrives as a thunk that calls it.
+				return e.autoclosureFunc(ex, nil)
 			}
 			return e.expr(ex)
 		}
@@ -1701,9 +1892,29 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 		if i < len(params) && !foreign && callee != nil && callee.Node != nil {
 			// [Concrete] passed for [S] where S: LocalProtocol, which is a slice of the protocol's interface.
 			if pt := e.m.typeOf(params[i].Str("interface_type")); pt != nil && pt.Kind == types.Array && len(pt.Args) == 1 && isGenericParam(pt.Args[0]) {
-				if iface := protocolBoundOf(e.m, callee.Node, pt.Args[0]); iface != "" {
+				// A static or free function keeps S as a type parameter, so the slice fits as it is.
+				keeps := (callee.Static || callee.Owner == "" || callee.FreeSelf()) && callee.Node.Kind() == "func_decl" && !callee.Node.Bool("local") && nestedInParamTypes(e.m, callee.Node, pt.Args[0].Name)
+				if iface := protocolBoundOf(e.m, callee.Node, pt.Args[0]); iface != "" && !keeps {
 					if at := e.exprGoType(a.node); strings.HasPrefix(at, "[]") && at != "[]"+iface {
 						s = "swiftrt.SliceMap(" + s + ", func(v " + at[2:] + ") " + iface + " { return v })"
+					}
+				}
+			}
+			// A metatype passed for `C.Type` where the callee knows C only as its protocol: the value
+			// that stands for the type.
+			if pt := e.m.typeOf(params[i].Str("interface_type")); pt != nil && pt.Kind == types.Meta && len(pt.Args) == 1 && pt.Args[0].Kind == types.Generic && erasesMetaGeneric(e.m, callee.Node, pt.Args[0].Name) {
+				if at := e.m.typeOf(a.node.Type()); at != nil && at.Kind == types.Meta && len(at.Args) == 1 {
+					inner := at.Args[0]
+					gt := e.m.GoType(inner, e.generics)
+					switch {
+					case inner.Kind == types.Named && !e.m.isLocalProtocol(inner.Name) && e.m.HasMutatingMethods(inner.Name):
+						s = "new(" + gt + ")"
+					case inner.Kind == types.Named && !e.m.isLocalProtocol(inner.Name):
+						s = "*new(" + gt + ")"
+					case inner.Kind == types.Generic && slices.Contains(e.typeParams, gt):
+						s = "*new(" + gt + ")"
+					default:
+						s = e.metaReceiver(a.node)
 					}
 				}
 			}
@@ -1907,6 +2118,10 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 	if isOperatorName(d.Str("base_name")) && len(as) == 2 {
 		return e.binaryWith(n, d, as)
 	}
+	if str := e.scalarViewOf(base); str != nil && d.Str("base_name") == "index" && len(as) == 1 && as[0].label == "after" {
+		// The scalar view's indices are the String's.
+		return "swiftrt.StringScalarIndexAfter(" + e.expr(str) + ", " + e.expr(as[0].node) + ")"
+	}
 	info, pfx := e.lookup(usr)
 	if info != nil {
 		defer e.lendReceiver(base, info)()
@@ -1928,7 +2143,7 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 		case info.Static && info.ProtoExt:
 			return pfx + info.GoName + "(" + strings.Join(append([]string{e.metaReceiver(base)}, ss...), ", ") + ")"
 		case info.Static || info.Owner == "":
-			return pfx + info.GoName + "(" + strings.Join(ss, ", ") + ")"
+			return pfx + info.GoName + e.uninferableTypeArgs(info, d) + "(" + strings.Join(ss, ", ") + ")"
 		case info.FreeSelf():
 			recv := e.recvArg(base)
 			if info.ProtoExt {
@@ -2000,7 +2215,7 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		}
 		return e.mappedCallExpr(mp, d, e.recvArg(base), as, sig.static, false)
 	}
-	if b := d.Str("base_name"); strings.HasPrefix(b, "withLock") || strings.HasPrefix(b, "withValue") || b == "sync" || b == "withCriticalRegion" {
+	if b := d.Str("base_name"); strings.HasPrefix(b, "withLock") || strings.HasPrefix(b, "withValue") || b == "sync" || b == "withCriticalRegion" || b == "withCString" || strings.HasPrefix(b, "withUnsafe") {
 		e.unitCallee = true
 	}
 	if d.Str("base_name") == "joined" && len(as) == 0 && base != nil {
@@ -2023,6 +2238,10 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		if ft := e.m.typeOf(as[0].node.Type()); ft != nil && ft.Kind == types.Func && (ft.Result == nil || isVoidGo(e.m.GoType(ft.Result, e.generics))) {
 			// optional.map { sideEffect($0) } runs the closure for its effect.
 			ss, _ := e.argStrings(as, false)
+			if len(bt.Args) == 1 && e.m.isReferenceGo(bt.Args[0], e.m.GoType(bt.Args[0], e.generics)) {
+				// A reference's Optional is the reference itself.
+				return "swiftrt.OptDoRef(" + e.expr(base) + ", " + ss[0] + ")"
+			}
 			return "swiftrt.OptDo(" + e.expr(base) + ", " + ss[0] + ")"
 		}
 	}
@@ -2041,6 +2260,12 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 	if bt := e.m.typeOf(base.Type()); base != nil && len(as) == 0 && (d.Str("base_name") == "max" || d.Str("base_name") == "min") && bt != nil && len(bt.Args) == 1 && (e.m.Recv(bt) == "Slice" || e.m.Recv(bt) == "Set") {
 		if less := e.lessFunc(bt.Args[0]); less != "" {
 			return "swiftrt.Slice" + capitalize(d.Str("base_name")) + "By(swiftrt.Iterate[" + e.m.GoType(bt.Args[0], e.generics) + "](" + e.expr(base) + "), " + less + ")"
+		}
+	}
+	if bt := e.m.typeOf(base.Type()); base != nil && len(as) == 0 && d.Str("base_name") == "sorted" && bt != nil && len(bt.Args) == 1 && (e.m.Recv(bt) == "Slice" || e.m.Recv(bt) == "Set") {
+		// sorted() orders by the element type's own `<`.
+		if less := e.lessFunc(bt.Args[0]); less != "" && less != "swiftrt.Int128Less" {
+			return "swiftrt.SliceSortedBy(swiftrt.Iterate[" + e.m.GoType(bt.Args[0], e.generics) + "](" + e.expr(base) + "), " + less + ")"
 		}
 	}
 	if base != nil && e.m.Recv(e.m.typeOf(base.Type())) == "Set" && len(as) == 1 && as[0].label == "" && e.m.Recv(e.m.typeOf(as[0].node.Type())) == "Set" {
@@ -2230,6 +2455,14 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 			return "func() *" + made + " {\n" + obj + " := &" + made + "{}\n" + obj + ".SwiftSub = " + obj + "\n" + call + "\nreturn " + obj + "\n}()"
 		}
 	}
+	if info != nil && info.OwnerKind == "protocol" {
+		// An initializer requirement called on a metatype known only as the protocol.
+		if fn := stripConv(n.Child("fn")); fn != nil && fn.Kind() == "constructor_ref_call_expr" && len(fn.Child("args").List("args")) > 0 {
+			e.callee = info
+			ss, _ := e.argStrings(as, false)
+			return e.metaReceiver(fn.Child("args").List("args")[0].Child("expr")) + "." + staticInitName(info.Node) + "(" + strings.Join(ss, ", ") + ")"
+		}
+	}
 	if info != nil {
 		e.callee = info
 		if memberwise(info) {
@@ -2248,6 +2481,16 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 	}
 	if mp := e.m.mappedDecl(usr); mp != nil {
 		return e.mappedCtor(mp, n, d, as)
+	}
+	if rt := e.m.typeOf(n.Type()); (usr == "s:SqyxSgxcfC" || usr == "s:SqsRi_zRi0_zrlEyxSgxcfc") && len(as) == 1 && rt != nil && rt.Kind == types.Optional && len(rt.Args) == 1 {
+		// `Optional(x)`: the value wrapped, which for a reference is the reference itself.
+		inner := e.m.GoType(rt.Args[0], e.generics)
+		if e.m.isReferenceGo(rt.Args[0], inner) {
+			return e.expr(as[0].node)
+		}
+		if inner != "" {
+			return "swiftrt.Some[" + inner + "](" + e.expr(as[0].node) + ")"
+		}
 	}
 	sig := parseDeclSig(e.m.demangle(usr))
 	ss, kept := e.argStrings(as, true)
@@ -2301,8 +2544,12 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return "swiftrt." + fn + "[" + gt + "](" + strings.Join(ss, ", ") + ")"
 	}
-	if recv == "TaskLocal" || recv == "Mutex" {
+	if recv == "TaskLocal" || recv == "Mutex" || recv == "Atomic" {
 		if t := e.m.typeOf(n.Type()); t != nil && len(t.Args) == 1 {
+			if recv == "Atomic" {
+				// The literal's kind does not tell the element type: Atomic<UInt32>(0).
+				return "swiftrt.AtomicInit[" + e.m.GoType(t.Args[0], e.generics) + "](" + strings.Join(ss, ", ") + ")"
+			}
 			if recv == "Mutex" {
 				return "swiftrt.MutexInit[" + e.m.GoType(t.Args[0], e.generics) + "](" + strings.Join(ss, ", ") + ")"
 			}
@@ -2345,6 +2592,12 @@ func (e *fileEmitter) unappliedDot(n ast.Node) string {
 		}
 	}
 	d := stripConv(n.Child("fn")).Child("decl")
+	if d.Str("decl_usr") == "s:Sq4noneyxSgABmlF" {
+		// `Optional.none` written out, as in `x == .none`: a nil of the Optional's Go type.
+		if gt := e.exprGoType(n); gt != "" && gt != "any" {
+			return "(" + gt + ")(nil)"
+		}
+	}
 	info, pfx := e.lookup(d.Str("decl_usr"))
 	if info != nil && info.Kind == "enum_element_decl" {
 		if e.isPayloadCase(info) {
@@ -2523,6 +2776,14 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "+", "-", "*":
+		if rl := e.m.Recv(lt); (op == "+" || op == "-") && (rl == "UnsafeMutablePointer" || rl == "UnsafePointer") {
+			// Pointer arithmetic moves a pointer into C memory by a number of elements.
+			by := e.expr(r)
+			if op == "-" {
+				by = "-(" + by + ")"
+			}
+			return "swiftrt.PointerAdvanced(" + e.expr(l) + ", " + by + ")"
+		}
 		if op == "-" && e.m.GoType(lt, e.generics) == "swiftrt.ContinuousClockInstant" {
 			return "swiftrt.InstantSub(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
@@ -2538,7 +2799,12 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
 		if op == "+" && (lt.Kind == types.Array || e.m.Recv(lt) == "Slice") {
-			return "swiftrt.Concat(" + e.expr(l) + ", " + e.expr(r) + ")"
+			rs := e.expr(r)
+			if lg, rg := e.m.GoType(lt, e.generics), e.exprGoType(r); strings.HasPrefix(lg, "[]") && !strings.HasPrefix(rg, "[]") {
+				// `array + sequence`: the other sequence (a lazy one, a Set) is read into a slice.
+				rs = "swiftrt.Iterate[" + lg[2:] + "](" + rs + ")"
+			}
+			return "swiftrt.Concat(" + e.expr(l) + ", " + rs + ")"
 		}
 		return e.floatOperands(lt, e.expr(l), e.expr(r), op)
 	case "===", "!==":
@@ -2599,6 +2865,10 @@ func (e *fileEmitter) compoundAssign(n ast.Node) (string, bool) {
 	as := e.args(n.Child("args"))
 	if len(as) != 2 {
 		return "", false
+	}
+	if mp := e.m.mappedDecl(d.Str("decl_usr")); mp != nil {
+		// A mapped module's compound operator is a call that takes its left side by pointer.
+		return e.mappedCallExpr(mp, d, "", as, false, false), true
 	}
 	l := as[0].node
 	if l.Kind() == "inout_expr" {
@@ -2815,7 +3085,7 @@ func stripGenerics(s string) string {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
-		case c == '<' && !(i > 0 && (s[i-1] == '.' || s[i-1] == ' ' || s[i-1] == '-')) || c == '<' && i+1 < len(s) && s[i+1] == ' ':
+		case c == '<' && !(i > 0 && (s[i-1] == '.' || s[i-1] == ' ' || s[i-1] == '-')) || c == '<' && i+1 < len(s) && s[i+1] == ' ' && !strings.HasPrefix(s[i:], "< infix"):
 			depth++
 			continue
 		case c == '>' && depth > 0 && !(i > 0 && s[i-1] == '-'):
@@ -3113,7 +3383,16 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 	if base.Kind() == "declref_expr" && base.Child("decl").Str("decl_usr") == "" && base.Child("decl").Str("base_name") == "self" {
 		return "self"
 	}
+	if t := e.m.typeOf(base.Type()); base.Kind() == "declref_expr" && base.Child("decl").Str("decl_usr") == "" && t != nil && t.Kind == types.Meta && len(t.Args) == 1 && t.Args[0].Kind == types.Generic && e.m.protocolGoName(e.m.GoType(t.Args[0], e.generics)) {
+		// A parameter or local that holds the metatype of a type known only as its protocol.
+		return e.expr(base)
+	}
 	t := e.m.typeOf(base.Type())
+	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 && t.Args[0].Kind == types.Generic && base.Kind() == "type_expr" {
+		if v, ok := e.metaValues[t.Args[0].Name]; ok {
+			return v
+		}
+	}
 	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 && (t.Args[0].Kind == types.Existential || t.Args[0].Kind == types.Named && e.m.isLocalProtocol(t.Args[0].Name)) {
 		// `any P.Type` values are carried as a zero value of the concrete type, typed as P.
 		return e.expr(base)
@@ -3121,7 +3400,7 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 	if t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
 		inner := t.Args[0]
 		gt := e.m.GoType(inner, e.generics)
-		if inner.Kind == types.Generic && (strings.HasPrefix(gt, "any") || e.m.isLocalProtocol(e.m.Name+"."+gt)) {
+		if inner.Kind == types.Generic && (strings.HasPrefix(gt, "any") || e.m.isLocalProtocol(e.m.Name+"."+gt) || e.m.protocolGoName(gt) && !strings.Contains(inner.Name, ".")) {
 			// Self in a protocol extension: the receiver carries the dynamic type.
 			return "self"
 		}
@@ -3307,7 +3586,7 @@ func (e *fileEmitter) elementCompare(t *types.Type, op, a, b string) (string, bo
 	if less := e.lessFunc(t); less != "" {
 		return lessOp(less, op, a, b), true
 	}
-	if goOrdered[gt] {
+	if goOrdered[gt] || e.caseOrderedEnum(t) {
 		return a + " " + op + " " + b, true
 	}
 	return "", false
@@ -3567,6 +3846,9 @@ func isOperatorRef(n ast.Node) bool {
 func (e *fileEmitter) paramConversion(n ast.Node) (string, bool) {
 	sub := n.Child("sub_expr")
 	from, to := e.m.typeOf(sub.Type()), e.m.typeOf(n.Type())
+	if f, ok := e.resultConversion(sub, from, to); ok {
+		return f, true
+	}
 	if from == nil || to == nil || from.Kind != types.Func || to.Kind != types.Func || len(from.Args) != 1 || len(to.Args) != 1 {
 		return "", false
 	}
@@ -3644,4 +3926,206 @@ func (e *fileEmitter) foreignStaticTypeArgs(info *DeclInfo, base ast.Node) strin
 		return ""
 	}
 	return "[" + strings.Join(args, ", ") + "]"
+}
+
+// resultConversion wraps a function value passed where a function with the same parameters and a
+// protocol result is expected (`() -> Concrete` as `() -> any P`): Go function types are
+// invariant, so the wrapper returns the concrete result as the protocol's interface.
+func (e *fileEmitter) resultConversion(sub ast.Node, from, to *types.Type) (string, bool) {
+	if from == nil || to == nil || from.Kind != types.Func || to.Kind != types.Func || len(from.Args) != len(to.Args) || from.Result == nil || to.Result == nil {
+		return "", false
+	}
+	fr, tr := e.m.GoType(from.Result, e.generics), e.m.GoType(to.Result, e.generics)
+	upcast := fr != tr && strings.HasPrefix(fr, "*") && strings.HasPrefix(tr, "*") && e.m.IsAncestor(tr[1:], fr[1:])
+	if fr == tr || fr == "" || tr == "" || from.Result.Kind != types.Named || !(upcast || to.Result.Kind == types.Existential || to.Result.Kind == types.Named && (e.m.isLocalProtocol(to.Result.Name) || e.m.mappedKind(to.Result.Name) == types.KindProtocol)) {
+		return "", false
+	}
+	var params, names []string
+	for i := range from.Args {
+		fg, tg := e.m.GoType(from.Args[i], e.generics), e.m.GoType(to.Args[i], e.generics)
+		if fg != tg || i < len(from.Inout) && from.Inout[i] || i < len(to.Inout) && to.Inout[i] {
+			return "", false
+		}
+		params = append(params, "p"+itoa(i)+" "+tg)
+		names = append(names, "p"+itoa(i))
+	}
+	ret := "f(" + strings.Join(names, ", ") + ")"
+	if e.m.HasMutatingMethods(from.Result.Name) && !strings.HasPrefix(fr, "*") {
+		// Only a pointer to a struct with mutating methods satisfies the interface.
+		ret = "swiftrt.Ref(" + ret + ")"
+	}
+	if upcast {
+		// A function returning a subclass, where one returning its superclass is expected.
+		ret += "." + upcastMethod(tr[1:]) + "()"
+	}
+	return "func(f func(" + strings.Join(tparams(params), ", ") + ") " + fr + ") func(" + strings.Join(params, ", ") + ") " + tr +
+		" { return func(" + strings.Join(params, ", ") + ") " + tr + " { return " + ret + " } }(" + e.expr(sub) + ")", true
+}
+
+// tparams strips the names from "name type" parameters.
+func tparams(params []string) []string {
+	out := make([]string, len(params))
+	for i, p := range params {
+		_, out[i], _ = strings.Cut(p, " ")
+	}
+	return out
+}
+
+// pointsToPointer reports a pointer type whose elements are themselves pointers, optional or not.
+func pointsToPointer(t *types.Type) bool {
+	if t == nil || len(t.Args) != 1 {
+		return false
+	}
+	el := t.Args[0]
+	if el.Kind == types.Optional && len(el.Args) == 1 {
+		el = el.Args[0]
+	}
+	return el.Kind == types.Named && (el.Name == "Swift.UnsafeMutablePointer" || el.Name == "Swift.UnsafePointer")
+}
+
+// caseOrderedEnum reports an enum without payloads, which is a Go integer: its synthesized
+// Comparable orders the cases as declared, as the integers do.
+func (e *fileEmitter) caseOrderedEnum(t *types.Type) bool {
+	if t == nil || t.Kind != types.Named || e.m.IsPayloadEnum(t.Name) {
+		return false
+	}
+	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
+		if mod.typeKinds[t.Name] == "enum_decl" && !mod.IsPayloadEnum(t.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// uninferableTypeArgs renders explicit type arguments for a call of a local generic function when
+// one of its type parameters occurs in no parameter type, so Go could not infer it (`Failure` in
+// `func f<Failure>(…) -> Outcome<Failure>`). It applies to functions whose parameters all stay Go
+// type parameters: a non-generic owner and no constraint that erases or reshapes one.
+func (e *fileEmitter) uninferableTypeArgs(info *DeclInfo, d ast.Node) string {
+	if info.Node == nil || len(e.m.TypeParams(info.Owner)) > 0 {
+		return ""
+	}
+	sig := info.Node.Child("generic_signature")
+	var names []string
+	for _, gp := range sig.Strings("generic_params") {
+		names = append(names, e.m.demangle(gp))
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	for _, r := range sig.List("generic_reqs") {
+		proto := e.m.demangle(r.Str("protocol"))
+		if r.Str("kind") != "conforms_to" || e.m.isLocalProtocol(proto) || strings.HasPrefix(proto, "Swift.") && proto != "Swift.Error" && proto != "Swift.Sendable" {
+			return ""
+		}
+	}
+	// Look for each parameter in the Go types, which can drop it (a Result's failure type).
+	marks := map[string]string{}
+	for _, name := range names {
+		marks[name] = "T_" + name + "_T"
+	}
+	needed := false
+	for _, name := range names {
+		used := false
+		for _, p := range info.Node.Child("params").List("params") {
+			if strings.Contains(e.m.GoType(e.m.typeOf(p.Str("interface_type")), marks), marks[name]) {
+				used = true
+			}
+		}
+		if !used {
+			if !strings.Contains(e.m.GoType(e.m.typeOf(info.Node.Str("result")), marks), marks[name]) {
+				// In neither a parameter nor the result: the declaration drops the parameter.
+				return ""
+			}
+			needed = true
+		}
+	}
+	if !needed {
+		return ""
+	}
+	subs := map[string]string{}
+	for _, sub := range d.Child("substitutions").List("substitutions") {
+		subs[e.m.demangle(sub.Str("generic_param"))] = sub.Str("replacement_type")
+	}
+	var args []string
+	for _, name := range names {
+		r, ok := subs[name]
+		if !ok {
+			return ""
+		}
+		gt := e.m.GoType(e.m.typeOf(r), e.generics)
+		if gt == "" {
+			gt = "struct{}"
+		}
+		args = append(args, gt)
+	}
+	return "[" + strings.Join(args, ", ") + "]"
+}
+
+// erasesMetaGeneric reports whether fn's generic parameter is known to its Go form only as its
+// protocol's interface because the function takes the type itself, as `C.Type`, and mentions C
+// nowhere else: the metatype parameter is then a value of the conforming type, which also serves
+// a caller that holds the type only as an existential metatype.
+func erasesMetaGeneric(m *Module, fn ast.Node, param string) bool {
+	if fn == nil || strings.Contains(param, ".") {
+		return false
+	}
+	constrained := false
+	for _, r := range fn.Child("generic_signature").List("generic_reqs") {
+		if r.Str("kind") == "conforms_to" && m.demangle(r.Str("first_type")) == param && m.isLocalProtocol(m.demangle(r.Str("protocol"))) {
+			constrained = true
+		}
+	}
+	if !constrained {
+		return false
+	}
+	re := regexp.MustCompile(`(^|[^\w.])` + regexp.QuoteMeta(param) + `($|[^\w])`)
+	meta := false
+	for _, p := range fn.Child("params").List("params") {
+		dem := m.demangle(p.Str("interface_type"))
+		switch {
+		case dem == param+".Type":
+			meta = true
+		case re.MatchString(dem):
+			return false
+		}
+	}
+	return meta && !re.MatchString(m.demangle(fn.Str("result")))
+}
+
+// simpleDidSet reports a stored property whose only observer is a didSet that never reads
+// oldValue, which Swift runs after modifying the property in place.
+func simpleDidSet(v ast.Node) bool {
+	var did ast.Node
+	for _, a := range v.List("accessors") {
+		switch {
+		case a.Bool("willSet"):
+			return false
+		case a.Bool("didSet"):
+			did = a
+		}
+	}
+	if did == nil {
+		return false
+	}
+	reads := false
+	ast.Walk(map[string]any(did), func(n ast.Node) {
+		if n.Kind() == "declref_expr" && n.Child("decl").Str("base_name") == "oldValue" {
+			reads = true
+		}
+	})
+	return !reads
+}
+
+// scalarViewOf returns the String expression s when n is `s.unicodeScalars`.
+func (e *fileEmitter) scalarViewOf(n ast.Node) ast.Node {
+	n = stripLoads(n)
+	if n == nil || n.Kind() != "member_ref_expr" || n.Child("decl").Str("base_name") != "unicodeScalars" {
+		return nil
+	}
+	str := n.Child("base")
+	if r := e.m.Recv(e.m.typeOf(str.Type())); r != "String" {
+		return nil
+	}
+	return str
 }

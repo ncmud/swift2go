@@ -105,6 +105,10 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
     call site with a class for `T` flattens it to the class pointer, as for runtime generics.
   - An array or dictionary literal of one of its types calls `<Type>InitArrayLiteral(elems...)` or
     `<Type>InitDictionaryLiteral(swiftrt.KV[K, V]{…}...)`.
+  - An instance property whose name matches a type nested in its owner (`value.storage` beside
+    `DatabaseValue.Storage`) is read with `<Owner><Prop>Of(recv)`, since the two would share a name.
+  - An enum case with a payload is a struct type `<Enum><Case>` with fields `F0`, `F1`, …, which `case`
+    patterns match by type and bind from.
   - Its classes are pointers (`*grdb.Database`) and its protocols interfaces, nil for none.
   - A local type or extension that conforms to its protocols registers in `init()`:
     `grdb.RegisterConformance[T](swiftrt.Conformance{Type, Protocols, Witnesses})`. Witnesses map each
@@ -172,6 +176,9 @@ replaces the Swift file of the same name, which is then not translated: `socket_
 | `async`/`await`, `Task`, `AsyncStream`, `for await` | goroutines and channels in `swiftrt` |
 | swift-testing `@Test`, `#expect`, `#require`, `arguments:` | `func TestX(t *testing.T)` and subtests |
 | freestanding expression macros | the compiler's recorded expansion |
+| `main.swift` top-level code | `func main` in `package main`, its variables package variables assigned in source order |
+| `any P.Type`, `C.Type` with C known only as P | a value of the conforming type; `init` requirements are `StaticInit…` methods |
+| `extension DependencyType: LocalProtocol` | methods written into the dependency's package (`retroactive_<module>.go`), calling hooks this module sets |
 
 The runtime also covers the parts of Foundation, Dispatch, Synchronization, swift-collections,
 swift-log, CryptoKit and a few C library calls that the driving codebase uses.
@@ -202,7 +209,9 @@ option.
   lent across an `await` is not copied.
 - A nested function that outlives its parent sees the parent's constants as they are when it runs, not as
   they were when it was made. Closures copy them.
-- Pointers and C interop cover what the code needs (`gettimeofday`, `clock_gettime`, C strings), not `UnsafePointer` in general.
+- Pointers and C interop cover what the code needs (`gettimeofday`, `clock_gettime`, C strings, pointer arithmetic over C characters, `argv`), not `UnsafePointer` in general. A pointer to C characters cannot move backwards.
+- A class cannot subclass a class of another package (an `open class` of a dependency).
+- A generic function that takes `swiftrt.TypeT[T]` for a protocol with static requirements cannot be called with a metatype known only at run time (`Self.self` in a protocol extension, an associated type's metatype); the call compiles and traps if it runs.
 - Every untranslated construct is reported, never silently dropped. `swift2go stats` and the
   per-target report list them by kind.
 

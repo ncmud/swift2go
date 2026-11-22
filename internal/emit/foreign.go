@@ -217,11 +217,13 @@ func (e *fileEmitter) mappedCallExpr(mp *Mapping, d ast.Node, recv string, as []
 // Go function returns struct{}.
 func (e *fileEmitter) returnsVoidTypeParam(d ast.Node, sig declSig, a arg) bool {
 	ft := e.m.typeOf(a.node.Type())
-	if ft == nil || ft.Kind != types.Func || ft.Result != nil && !isVoidGo(e.m.GoType(ft.Result, e.generics)) {
+	// Void itself, not `()?`: a closure returning an Optional of Void returns a value.
+	void := func(gt string) bool { return gt == "" || gt == "struct{}" }
+	if ft == nil || ft.Kind != types.Func || ft.Result != nil && !void(e.m.GoType(ft.Result, e.generics)) {
 		return false
 	}
 	for _, s := range d.Child("substitutions").List("substitutions") {
-		if r := e.m.GoType(e.m.typeOf(s.Str("replacement_type")), e.generics); !isVoidGo(r) {
+		if r := e.m.GoType(e.m.typeOf(s.Str("replacement_type")), e.generics); !void(r) {
 			continue
 		}
 		p := e.m.demangle(s.Str("generic_param"))
@@ -241,7 +243,8 @@ func (e *fileEmitter) mappedCtor(mp *Mapping, n, d ast.Node, as []arg) string {
 	ss, kept := e.argStrings(as, true)
 	targs := e.m.mappedTypeArgs(e.m.typeOf(n.Type()), e.generics)
 	if targs == "" {
-		targs = e.mappedTypeArgs(d, dem, false)
+		// An initializer a protocol declares builds the conforming type, as its static members do.
+		targs = e.mappedTypeArgs(d, dem, e.m.mappedKind(sig.owner) == types.KindProtocol)
 	}
 	// Initializers keep the runtime's suffix: labels, and the argument kind for each unlabeled argument.
 	suffix := ""
@@ -262,6 +265,11 @@ func (e *fileEmitter) mappedMember(mp *Mapping, n, d, base ast.Node) string {
 	dem := e.m.demangle(d.Str("decl_usr"))
 	sig := parseDeclSig(dem)
 	name := e.mappedName(mp, sig, nil, false)
+	if e.m.mappedKind(sig.owner+"."+capitalize(sig.base)) != 0 {
+		// The property shares its flattened name with a type nested in its owner (`value.storage`
+		// and `DatabaseValue.Storage`): the property's function takes the suffix Of.
+		name += "Of"
+	}
 	if bt := e.m.typeOf(base.Type()); base.Kind() == "type_expr" || bt.Kind == types.Meta {
 		if e.m.mappedKind(sig.owner) == types.KindProtocol {
 			return name + e.mappedTypeArgs(d, dem, true) + "()"

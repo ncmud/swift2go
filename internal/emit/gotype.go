@@ -84,6 +84,11 @@ func (m *Module) GoType(t *types.Type, generics map[string]string) string {
 			}
 		}
 		if len(t.Args) == 1 && t.Args[0].Kind == types.Generic {
+			if g, ok := generics[t.Args[0].Name]; ok && m.protocolGoName(g) {
+				// The metatype of a parameter erased to its protocol is a value of the conforming
+				// type, as an existential metatype is.
+				return g
+			}
 			if g, ok := generics[t.Args[0].Name]; ok && g != "any" {
 				return "swiftrt.TypeT[" + g + "]"
 			}
@@ -127,6 +132,11 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 		}
 	case "Swift.Optional":
 		return m.GoType(&types.Type{Kind: types.Optional, Args: args}, generics)
+	case "Swift.KeyValuePairs":
+		// An ordered list of key-value tuples.
+		if len(args) == 2 {
+			return "[]" + m.GoType(&types.Type{Kind: types.Tuple, Args: args}, generics)
+		}
 	case "Swift.Dictionary":
 		if len(args) == 2 && !m.goKeyable(args[0], map[string]bool{}) {
 			return "swiftrt.HMap[" + arg(0) + ", " + arg(1) + "]"
@@ -271,6 +281,11 @@ func (m *Module) isProtocol(q string) bool {
 }
 
 func (m *Module) isReferenceGo(t *types.Type, goType string) bool {
+	if t != nil && t.Kind == types.Optional && len(t.Args) == 1 && !isGenericParamType(t.Args[0]) {
+		// An Optional is a reference only when what it wraps is one: `Int??` is a pointer to the
+		// pointer that is `Int?`.
+		return m.isReferenceGo(t.Args[0], m.GoType(t.Args[0], nil))
+	}
 	if strings.HasPrefix(goType, "*") || strings.HasPrefix(goType, "func(") || goType == "error" || goType == "any" {
 		return true
 	}
@@ -314,7 +329,7 @@ func (m *Module) Recv(t *types.Type) string {
 		return "String"
 	case "Swift.Substring":
 		return "Substring"
-	case "Swift.Array", "Swift.ArraySlice", "Swift.ContiguousArray", "Swift.String.UnicodeScalarView", "Swift.String.UTF8View", "Swift.Substring.UnicodeScalarView":
+	case "Swift.Array", "Swift.ArraySlice", "Swift.ContiguousArray", "Swift.String.UnicodeScalarView", "Swift.String.UTF8View", "Swift.Substring.UnicodeScalarView", "Swift.KeyValuePairs":
 		return "Slice"
 	case "Swift.Dictionary":
 		if len(t.Args) == 2 && !m.goKeyable(t.Args[0], map[string]bool{}) {
@@ -401,6 +416,12 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 		if strings.HasPrefix(t.Name, m.Name+".") && m.typeKinds[t.Name] == "struct_decl" {
 			return false
 		}
+		for _, d := range m.Deps {
+			// A dependency's struct may hold slices or maps, as a local one may.
+			if d.typeKinds[t.Name] == "struct_decl" {
+				return false
+			}
+		}
 		if gt := m.GoType(t, nil); strings.HasPrefix(gt, "[]") || strings.HasPrefix(gt, "map[") {
 			return false
 		}
@@ -435,6 +456,7 @@ var foreignTypes = map[string]string{
 	"Foundation.TimeInterval":                 "float64",
 	"Foundation.NSRange":                      "swiftrt.Range[int]",
 	"__C.NSComparisonResult":                  "int",
+	"__C._NSRange":                            "swiftrt.Range[int]",
 	"__C.NSDateFormatter":                     "*swiftrt.DateFormatter",
 	"__C.NSISO8601DateFormatter":              "*swiftrt.ISO8601DateFormatter",
 	"__C.NSLock":                              "*swiftrt.Lock",

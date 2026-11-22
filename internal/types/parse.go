@@ -139,10 +139,10 @@ func (p *parser) parseType() *Type {
 		switch {
 		case p.eat("?"), p.eat("!"):
 			t = &Type{Kind: Optional, Args: []*Type{t}}
-		case strings.HasPrefix(p.rest(), ".Type"):
+		case p.metaSuffix(".Type"):
 			p.pos += len(".Type")
 			t = &Type{Kind: Meta, Args: []*Type{t}}
-		case strings.HasPrefix(p.rest(), ".Protocol"):
+		case p.metaSuffix(".Protocol"):
 			p.pos += len(".Protocol")
 			t = &Type{Kind: Meta, Args: []*Type{t}}
 		case p.eat(" & "):
@@ -281,7 +281,7 @@ func (p *parser) qualifiedName() (string, []*Type) {
 			}
 		}
 		parts = append(parts, id)
-		if strings.HasPrefix(p.rest(), ".Type") || strings.HasPrefix(p.rest(), ".Protocol") {
+		if p.metaSuffix(".Type") || p.metaSuffix(".Protocol") {
 			break
 		}
 		if p.peek() == '.' {
@@ -291,4 +291,18 @@ func (p *parser) qualifiedName() (string, []*Type) {
 		break
 	}
 	return strings.Join(parts, "."), args
+}
+
+// metaSuffix reports whether the input continues with the metatype suffix word, ".Type" or
+// ".Protocol", and not with a member whose name merely starts with it (".ProtocolCommand").
+func (p *parser) metaSuffix(word string) bool {
+	rest, ok := strings.CutPrefix(p.rest(), word)
+	if !ok {
+		return false
+	}
+	if rest == "" {
+		return true
+	}
+	c := rest[0]
+	return !(c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z')
 }
