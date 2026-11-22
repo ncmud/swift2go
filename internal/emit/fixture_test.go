@@ -12,6 +12,7 @@ import (
 
 	"github.com/ncmud/swift2go/internal/ast"
 	"github.com/ncmud/swift2go/internal/swiftmod"
+	"github.com/ncmud/swift2go/internal/swifttest"
 )
 
 const (
@@ -34,9 +35,7 @@ func transpileMapped(t *testing.T, fixture string, mapped map[string]string, tar
 	if testing.Short() {
 		t.Skip("transpiles a Swift package")
 	}
-	if _, err := exec.LookPath("xcrun"); err != nil {
-		t.Skip("needs the Xcode Swift toolchain (swiftc, swift-demangle and swift-testing through xcrun)")
-	}
+	swifttest.Require(t, "xcrun", "swift", "swiftc")
 	pkgDir, err := filepath.Abs(filepath.Join("testdata", fixture))
 	if err != nil {
 		t.Fatal(err)

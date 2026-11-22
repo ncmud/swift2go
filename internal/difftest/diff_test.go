@@ -16,11 +16,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 	"unicode"
+
+	"github.com/ncmud/swift2go/internal/swifttest"
 )
 
 var update = flag.Bool("update", false, "record expected output by running the Swift cases")
@@ -37,9 +38,7 @@ let package = Package(
 `
 
 func TestDiff(t *testing.T) {
-	if _, err := exec.LookPath("xcrun"); err != nil || runtime.GOOS != "darwin" {
-		t.Skip("swift2go needs the Swift toolchain on macOS")
-	}
+	swifttest.Require(t, "xcrun", "swift", "swiftc")
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
