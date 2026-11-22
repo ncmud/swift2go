@@ -52,3 +52,14 @@ func TestHMap(t *testing.T) {
 		t.Fatal("a literal should collapse equal keys, the last value winning")
 	}
 }
+
+func TestHMapRemoveAllKeepingCapacityLeavesCopies(t *testing.T) {
+	var d HMap[[]int, string]
+	v := "a"
+	HMapSet(&d, []int{1, 2}, &v)
+	c := Copy(d)
+	HMapRemoveAllKeepingCapacity(&d, true)
+	if HMapCount(d) != 0 || HMapCount(c) != 1 {
+		t.Fatalf("after removeAll: original %d entries, copy %d; want 0 and 1", HMapCount(d), HMapCount(c))
+	}
+}
