@@ -22,17 +22,28 @@ func Copy[T any](v T) T {
 	return copyWithPlan(v, p)
 }
 
-// copyWithPlan runs p on a copy of v. It is separate from Copy so that only values needing a fix
-// move to the heap.
+// copyWithPlan runs p on a copy of v. The fix runs on a reused buffer from p's pool rather than on
+// v itself, which would have to move to the heap because the fix is called indirectly.
 func copyWithPlan[T any](v T, p *copyPlan) T {
-	p.fix(unsafe.Pointer(&v)) //nolint:gosec // the plan writes through field offsets of T's own layout
-	return v
+	buf, _ := p.scratch.Get().(*T)
+	if buf == nil {
+		buf = new(T)
+	}
+	*buf = v
+	p.fix(unsafe.Pointer(buf)) //nolint:gosec // the plan writes through field offsets of T's own layout
+	out := *buf
+	var zero T
+	*buf = zero
+	p.scratch.Put(buf)
+	return out
 }
 
 // copyPlan unshares the value of one type in place. A nil fix means Go assignment alone copies the
-// value as Swift would: it holds no slice, map, interface or non-class pointer.
+// value as Swift would: it holds no slice, map, interface or non-class pointer. scratch holds
+// buffers of the type for copyWithPlan.
 type copyPlan struct {
-	fix func(unsafe.Pointer)
+	fix     func(unsafe.Pointer)
+	scratch sync.Pool
 }
 
 var (
