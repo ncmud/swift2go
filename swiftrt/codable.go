@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,24 +137,64 @@ func UnkeyedEncodingContainerEncode[T any](c *UnkeyedEncodingContainer, v T) {
 	c.e.Value = append(c.e.Value.([]any), EncodeValue(v))
 }
 
+// RawDecodable is a decoding source that decodes values itself instead of being read as a JSON-shaped
+// tree. A package that decodes Codable types from its own storage passes such a value as the raw value of
+// a [Decoder] or to [DecodeValue].
+type RawDecodable interface {
+	// SwiftDecodeInto sets dst, a settable value of the Go type being decoded, and reports whether it
+	// did. On false the value is decoded by the default rules, which treat it as a JSON-shaped value.
+	// It reports a failure by panicking with [Throw], as a Swift decoder throws.
+	SwiftDecodeInto(dst reflect.Value, path []string) bool
+}
+
+// RawKeyed is a keyed decoding source other than a map[string]any: a keyed container and the fields of a
+// synthesized decoder read their values through Lookup.
+type RawKeyed interface {
+	// Lookup returns the raw value for a key, and whether the key is present. A present nil decodes as nil.
+	Lookup(key string) (any, bool)
+	// Keys lists the keys present, for `allKeys`.
+	Keys() []string
+}
+
 // KeyedDecodingContainer is Swift `KeyedDecodingContainer`.
 type KeyedDecodingContainer struct {
 	M    map[string]any
+	src  RawKeyed
 	path []string
+}
+
+func (c KeyedDecodingContainer) lookup(key string) (any, bool) {
+	if c.src != nil {
+		return c.src.Lookup(key)
+	}
+	v, ok := c.M[key]
+	return v, ok
+}
+
+func (c KeyedDecodingContainer) keys() []string {
+	if c.src != nil {
+		keys := slices.Clone(c.src.Keys())
+		slices.Sort(keys)
+		return keys
+	}
+	return MapKeys(c.M)
 }
 
 // DecoderContainerKeyedBy is `decoder.container(keyedBy:)`.
 func DecoderContainerKeyedBy(d *Decoder, _ Type) KeyedDecodingContainer {
+	if src, ok := d.Value.(RawKeyed); ok {
+		return KeyedDecodingContainer{src: src, path: d.CodingPath}
+	}
 	m, ok := treeObject(d.Value)
 	if !ok {
 		codingFail("expected a keyed container at %s, found %T", strings.Join(d.CodingPath, "."), d.Value)
 	}
-	return KeyedDecodingContainer{m, d.CodingPath}
+	return KeyedDecodingContainer{M: m, path: d.CodingPath}
 }
 
 // KeyedDecodingContainerContains is `container.contains(_:)`.
 func KeyedDecodingContainerContains(c KeyedDecodingContainer, key any) bool {
-	_, ok := c.M[keyString(key)]
+	_, ok := c.lookup(keyString(key))
 	return ok
 }
 
@@ -161,7 +202,7 @@ func KeyedDecodingContainerContains(c KeyedDecodingContainer, key any) bool {
 // `init?(stringValue:)` accepts, in sorted order.
 func KeyedDecodingContainerAllKeys[K any](c KeyedDecodingContainer, key func(string) *K) []K {
 	out := []K{}
-	for _, s := range MapKeys(c.M) {
+	for _, s := range c.keys() {
 		if k := key(s); k != nil {
 			out = append(out, *k)
 		}
@@ -172,7 +213,7 @@ func KeyedDecodingContainerAllKeys[K any](c KeyedDecodingContainer, key func(str
 // KeyedDecodingContainerDecodeForKey is `container.decode(_:forKey:)`.
 func KeyedDecodingContainerDecodeForKey[T any](c KeyedDecodingContainer, _ TypeT[T], key any) T {
 	k := keyString(key)
-	raw, ok := c.M[k]
+	raw, ok := c.lookup(k)
 	if !ok {
 		codingFail("key %q not found at %s", k, strings.Join(c.path, "."))
 	}
@@ -182,7 +223,7 @@ func KeyedDecodingContainerDecodeForKey[T any](c KeyedDecodingContainer, _ TypeT
 // KeyedDecodingContainerDecodeIfPresentForKey is `container.decodeIfPresent(_:forKey:)`.
 func KeyedDecodingContainerDecodeIfPresentForKey[T any](c KeyedDecodingContainer, _ TypeT[T], key any) *T {
 	k := keyString(key)
-	raw, ok := c.M[k]
+	raw, ok := c.lookup(k)
 	if !ok || raw == nil {
 		return nil
 	}
@@ -192,7 +233,7 @@ func KeyedDecodingContainerDecodeIfPresentForKey[T any](c KeyedDecodingContainer
 
 // KeyedDecodingContainerDecodeNilForKey is `container.decodeNil(forKey:)`.
 func KeyedDecodingContainerDecodeNilForKey(c KeyedDecodingContainer, key any) bool {
-	raw, ok := c.M[keyString(key)]
+	raw, ok := c.lookup(keyString(key))
 	return !ok || raw == nil
 }
 
@@ -372,6 +413,9 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		dst.Set(reflect.ValueOf(f(&Decoder{Value: raw, CodingPath: path})))
 		return
 	}
+	if r, ok := raw.(RawDecodable); ok && r.SwiftDecodeInto(dst, path) {
+		return
+	}
 	if cases, ok := payloadCasesFor(t); ok {
 		decodePayloadEnum(dst, cases, raw, path)
 		return
@@ -496,8 +540,12 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		}
 		dst.Set(out)
 	case reflect.Struct:
-		m, ok := treeObject(raw)
-		if !ok {
+		var c KeyedDecodingContainer
+		if src, ok := raw.(RawKeyed); ok {
+			c.src = src
+		} else if m, ok := treeObject(raw); ok {
+			c.M = m
+		} else {
 			codingFail("expected a keyed container at %s", strings.Join(path, "."))
 		}
 		for i := 0; i < t.NumField(); i++ {
@@ -506,7 +554,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 			if name == "" || name == "-" || !fd.IsExported() {
 				continue
 			}
-			x, ok := m[name]
+			x, ok := c.lookup(name)
 			if !ok {
 				if fd.Type.Kind() == reflect.Pointer {
 					continue
