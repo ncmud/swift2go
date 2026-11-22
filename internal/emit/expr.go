@@ -246,6 +246,13 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		return "swiftrt.CStringOf(" + e.expr(n.Child("sub_expr")) + ")"
 	case "inout_to_pointer":
 		return "&" + e.lvalue(stripLoads(n.Child("sub_expr")))
+	case "array_to_pointer":
+		// An array passed for a C pointer parameter: `&array` passes the array itself, which the
+		// callee may write through; a plain `array` passes its elements to read.
+		if sub := n.Child("sub_expr"); sub.Kind() == "inout_expr" {
+			return "&" + e.lvalue(stripLoads(sub.Child("sub_expr")))
+		}
+		return e.expr(n.Child("sub_expr"))
 	case "member_ref_expr":
 		if usr := n.Child("decl").Str("decl_usr"); strings.HasPrefix(usr, "c:@S@") && strings.Contains(usr, "@FI@") {
 			// A C struct field is a Go field of the runtime struct.
@@ -646,6 +653,10 @@ func (e *fileEmitter) stdFuncValue(dem string, n ast.Node) string {
 	sig := parseDeclSig(dem)
 	if sig.owner == "Swift" || sig.owner == "" {
 		return "swiftrt." + capitalize(sig.base)
+	}
+	if sig.base == "errno" && (sig.owner == "Darwin" || sig.owner == "Glibc" || sig.owner == "Musl") {
+		// The C library's errno is a computed global in each platform's overlay.
+		return "swiftrt.CErrno()"
 	}
 	return e.m.Unsup("std-func-value:"+sig.owner+"."+sig.base, e.where, e.exprGoType(n))
 }
