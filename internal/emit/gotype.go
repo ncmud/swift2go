@@ -234,7 +234,7 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	}
 	parts := strings.SplitN(name, ".", 2)
 	if len(parts) == 2 {
-		return strings.ToLower(parts[0]) + "." + strings.ReplaceAll(parts[1], ".", "")
+		return strings.ToLower(parts[0]) + "." + strings.ReplaceAll(parts[1], ".", "") + m.mappedTypeArgs(&types.Type{Kind: types.Named, Name: name, Args: args}, generics)
 	}
 	return "any"
 }

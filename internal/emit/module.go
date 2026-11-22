@@ -63,6 +63,7 @@ type Module struct {
 	UnsupportedAt  map[string][]string
 	Deps           []*Module
 	ImportPath     string
+	Mappings       []Mapping // hand-written Go packages standing in for modules not transpiled in this run
 	importPkgs     map[string]string
 	typeCache      map[string]*types.Type
 	payloadEnums   map[string]bool
@@ -738,7 +739,6 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 			suffix = "_test.go"
 		}
 		out := filepath.Join(dir, toSnake(base)+suffix)
-		src = sanitizeRuntimeNames(src)
 		src = strings.ReplaceAll(src, "for _, _ := range ", "for range ")
 		formatted, err := format.Source([]byte(src))
 		if err != nil {

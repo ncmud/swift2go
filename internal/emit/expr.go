@@ -606,6 +606,9 @@ func (e *fileEmitter) declRef(d ast.Node, n ast.Node) string {
 		if strings.Contains(dem, "(in ") || strings.HasPrefix(usr, "s:") && strings.Contains(usr, "L_") {
 			return goSafe(name)
 		}
+		if name := e.m.foreignValueName(usr, name, parseDeclSig(dem)); name != "" {
+			return "swiftrt." + name
+		}
 		return e.stdFuncValue(dem, n)
 	}
 	switch info.Kind {
@@ -1659,7 +1662,8 @@ func (e *fileEmitter) call(n ast.Node) string {
 				}
 			}
 		}
-		call := "swiftrt." + capitalize(sig.base) + e.suffix(sig, kept, true) + "(" + strings.Join(ss, ", ") + ")"
+		fn := capitalize(sig.base) + e.suffix(sig, kept, true)
+		call := "swiftrt." + fn + e.mappedResultTypeArg(fn, dem, n, true) + "(" + strings.Join(ss, ", ") + ")"
 		switch sig.base {
 		case "withCheckedThrowingContinuation", "withCheckedContinuation", "withThrowingTaskGroup", "withTaskGroup":
 			// The runtime's continuation and task group carry any; the call's Swift type says what it
@@ -1892,7 +1896,8 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 				owner = e.m.Recv(bt.Args[0])
 			}
 		}
-		return "swiftrt." + lastComponent(owner) + capitalize(sig.base) + e.suffix(sig, kept, false) + "(" + strings.Join(ss, ", ") + ")"
+		fn := lastComponent(owner) + capitalize(sig.base) + e.suffix(sig, kept, false)
+		return "swiftrt." + fn + e.mappedResultTypeArg(fn, dem, n, true) + "(" + strings.Join(ss, ", ") + ")"
 	}
 	bt := e.m.typeOf(base.Type())
 	recv := e.recvOf(bt)
@@ -1916,7 +1921,8 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 			}
 		}
 	}
-	return "swiftrt." + recv + capitalize(sig.base) + e.suffix(sig, kept, false) + refSuffix + "(" + strings.Join(append([]string{e.recvArg(base)}, ss...), ", ") + ")"
+	fn := recv + capitalize(sig.base) + e.suffix(sig, kept, false) + refSuffix
+	return "swiftrt." + fn + e.mappedResultTypeArg(fn, dem, n, false) + "(" + strings.Join(append([]string{e.recvArg(base)}, ss...), ", ") + ")"
 }
 
 func lastComponent(s string) string {
@@ -2030,7 +2036,7 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 	if recv == "Slice" || recv == "Map" || recv == "Range" || recv == "ClosedRange" || recv == "Int" || recv == "Float" || recv == "IntOpt" || recv == "FloatOpt" || recv == "Set" || recv == "OptionSet" || recv == "Heap" {
 		return "swiftrt." + recv + "Init" + suffix + "[" + gt + "](" + strings.Join(ss, ", ") + ")"
 	}
-	return "swiftrt." + recv + "Init" + suffix + "(" + strings.Join(ss, ", ") + ")"
+	return "swiftrt." + recv + "Init" + suffix + e.m.mappedTypeArgs(e.m.typeOf(n.Type()), e.generics) + "(" + strings.Join(ss, ", ") + ")"
 }
 
 // suffix disambiguates stdlib overloads: labels, plus the argument kind where the parameter is concrete.
