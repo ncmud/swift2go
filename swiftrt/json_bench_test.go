@@ -67,3 +67,13 @@ func BenchmarkJSONDecoderDecode(b *testing.B) {
 		_ = JSONDecoderDecodeFrom(JSONDecoderInit(), TypeT[benchRecord]{}, data)
 	}
 }
+
+// BenchmarkDecodeValueStruct decodes a struct from an already-parsed tree, the step that follows
+// parsing in JSONDecoder and that a package's RawKeyed source goes through.
+func BenchmarkDecodeValueStruct(b *testing.B) {
+	tree := EncodeValue(newBenchRecord())
+	b.ReportAllocs()
+	for b.Loop() {
+		DecodeValue[benchRecord](tree, nil)
+	}
+}
