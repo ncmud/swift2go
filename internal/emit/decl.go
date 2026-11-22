@@ -400,7 +400,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 			if pm.Pkg != e.m.Pkg {
 				pfx = pm.Pkg + "."
 			}
-			e.propertyGetters(n, nil, q, proto, pm, pfx)
+			e.propertyGetters(n, nil, q, proto, conformed, pm, pfx)
 			e.staticForwarders(q, proto, conformed, pm, pfx)
 			e.initForwarders(q, proto, pm, pfx)
 			for _, info := range pm.sortedDecls() {
@@ -2009,7 +2009,7 @@ func (e *fileEmitter) foreignCtor(n ast.Node, info, self *DeclInfo) {
 }
 
 // propertyGetters emits GetX methods so a conformer satisfies a protocol's property requirements.
-func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto string, pm *Module, pfx string) {
+func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto string, conformed []string, pm *Module, pfx string) {
 	if e.m.IsPayloadEnum(q) {
 		return
 	}
@@ -2030,13 +2030,19 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 		res := e.m.GoType(e.m.typeOf(r.Str("interface_type")), nil)
 		body := ""
 		stored := ""
+		isDefault, from := false, ""
 		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-			for _, d := range mod.decls {
+			mpfx := ""
+			if mod.Pkg != e.m.Pkg {
+				mpfx = mod.Pkg + "."
+			}
+			for _, d := range mod.sortedDecls() {
 				if d.Kind != "var_decl" || d.Node == nil || d.Node.Name() != name || d.NotWitness {
 					continue
 				}
 				switch {
 				case d.Owner == q && !d.Static && !d.FreeSelf():
+					isDefault = false
 					if d.Computed {
 						body = "self." + d.GoName + "()"
 					} else {
@@ -2045,10 +2051,13 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 							stored = "self." + d.GoName
 						}
 					}
-				case d.Owner == q && d.FreeSelf() && body == "":
-					body = d.GoName + "(self)"
+				case d.Owner == q && d.FreeSelf() && (body == "" || isDefault):
+					body, isDefault = d.GoName+"(self)", false
 				case d.ProtoExt && d.Owner == proto && body == "":
-					body = pfx + d.GoName + "(" + selfArg + ")"
+					body, isDefault, from = pfx+d.GoName+"("+selfArg+")", true, proto
+				case d.ProtoExt && e.moreRefinedDefault(d, body, isDefault, from, q, proto, conformed, mod):
+					// A protocol that refines this one, and that the type conforms to, supplies the default.
+					body, isDefault, from = mpfx+d.GoName+"("+selfArg+")", true, d.Owner
 				case body == "" && !d.Static && !d.FreeSelf() && mod == e.m && e.m.IsAncestor(e.m.LocalTypeName(d.Owner), e.m.LocalTypeName(q)):
 					// Inherited from a superclass: the embedded base promotes it.
 					if d.Computed {
@@ -2243,6 +2252,20 @@ func (e *fileEmitter) initForwarders(q, proto string, pm *Module, pfx string) {
 	}
 }
 
+// moreRefinedDefault reports whether d, a default from a protocol extension, should replace the
+// default chosen so far for one of proto's requirements on q: d's protocol must refine proto, q must
+// conform to it and the extension must apply to q, and the default so far must be missing or come from
+// a protocol d's refines. Swift picks the most refined default the same way.
+func (e *fileEmitter) moreRefinedDefault(d *DeclInfo, chosen string, isDefault bool, from, q, proto string, conformed []string, mod *Module) bool {
+	if chosen != "" && (!isDefault || d.Owner == from || !e.m.refines(d.Owner, from)) {
+		return false
+	}
+	// conformed lists only this declaration's conformances; another extension, such as one a macro
+	// adds, may declare the rest.
+	conforms := e.m.conformsTo(q, d.Owner) || slices.ContainsFunc(conformed, func(c string) bool { return c == d.Owner || e.m.refines(c, d.Owner) })
+	return conforms && e.m.refines(d.Owner, proto) && e.m.extensionApplies(d.Node, q, d.Owner, mod)
+}
+
 // staticForwarders gives a conformer methods for its protocol's static requirements, so generic code
 // can reach them through a type parameter's zero value.
 func (e *fileEmitter) staticForwarders(q, proto string, conformed []string, pm *Module, pfx string) {
@@ -2266,7 +2289,7 @@ func (e *fileEmitter) staticForwarders(q, proto string, conformed []string, pm *
 		} else {
 			res = e.m.GoType(e.m.typeOf(r.Str("interface_type")), nil)
 		}
-		target, isDefault := "", false
+		target, isDefault, from := "", false, ""
 		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
 			mpfx := ""
 			if mod.Pkg != e.m.Pkg {
@@ -2285,11 +2308,11 @@ func (e *fileEmitter) staticForwarders(q, proto string, conformed []string, pm *
 						target += "(" + args + ")"
 					}
 				case d.ProtoExt && d.Owner == proto && target == "":
-					target, isDefault = mpfx+d.GoName+"("+selfArg+prefixComma(args)+")", true
-				case d.ProtoExt && target == "" && slices.Contains(conformed, d.Owner) && e.m.refines(d.Owner, proto) &&
-					(d.Kind != "func_decl" || funcSignatureKey(d.Node) == funcSignatureKey(r)) && e.m.extensionApplies(d.Node, q, d.Owner, mod):
+					target, isDefault, from = mpfx+d.GoName+"("+selfArg+prefixComma(args)+")", true, proto
+				case d.ProtoExt && e.moreRefinedDefault(d, target, isDefault, from, q, proto, conformed, mod) &&
+					(d.Kind != "func_decl" || funcSignatureKey(d.Node) == funcSignatureKey(r)):
 					// A protocol that refines this one, and that the type conforms to, supplies the default.
-					target, isDefault = mpfx+d.GoName+"("+selfArg+prefixComma(args)+")", true
+					target, isDefault, from = mpfx+d.GoName+"("+selfArg+prefixComma(args)+")", true, d.Owner
 				}
 			}
 		}

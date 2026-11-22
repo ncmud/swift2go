@@ -1,0 +1,8 @@
+base | hello from base
+refined | hello from refined
+more refined | hello from refined
+own | hello from refined
+refined | hello from refined
+base refined more refined own refined
+["base label", "refined label", "refined label", "refined label", "refined label"]
+["refined tag"] refined tag
