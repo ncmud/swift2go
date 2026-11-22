@@ -1177,6 +1177,12 @@ func (e *fileEmitter) closure(n ast.Node) string {
 	for _, p := range n.Child("params").List("params") {
 		e.paramNames[goSafe(p.Name())] = true
 	}
+	saveTop := e.topLevel
+	e.topLevel = map[uintptr]bool{}
+	for _, st := range body.List("elements") {
+		e.topLevel[nodeKey(st)] = true
+	}
+	defer func() { e.topLevel = saveTop }()
 	e.stmts(body.List("elements"))
 	if res != "" && !endsWithReturn(body) {
 		e.w("panic(\"unreachable\")\n")
@@ -1648,8 +1654,10 @@ func (e *fileEmitter) call(n ast.Node) string {
 			}
 		}
 		call := "swiftrt." + capitalize(sig.base) + e.suffix(sig, kept, true) + "(" + strings.Join(ss, ", ") + ")"
-		if sig.base == "withCheckedThrowingContinuation" || sig.base == "withCheckedContinuation" {
-			// The runtime's continuation carries any; the call's Swift type says what it resumes with.
+		switch sig.base {
+		case "withCheckedThrowingContinuation", "withCheckedContinuation", "withThrowingTaskGroup", "withTaskGroup":
+			// The runtime's continuation and task group carry any; the call's Swift type says what it
+			// produces.
 			if gt := e.exprGoType(n); gt != "" && gt != "any" && gt != "struct{}" {
 				return "swiftrt.MustAs[" + gt + "](" + call + ")"
 			}
@@ -1880,9 +1888,27 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		}
 		return "swiftrt." + lastComponent(owner) + capitalize(sig.base) + e.suffix(sig, kept, false) + "(" + strings.Join(ss, ", ") + ")"
 	}
-	recv := e.recvOf(e.m.typeOf(base.Type()))
+	bt := e.m.typeOf(base.Type())
+	recv := e.recvOf(bt)
+	if bt != nil && bt.Kind == types.Named && e.m.isTranspiledType(bt.Name) && recv == lastComponent(bt.Name) && sig.owner != "" && !e.m.isTranspiledType(sig.owner) {
+		// A stdlib protocol extension method on a transpiled conforming type is the runtime's
+		// function for the protocol (`executor.asUnownedTaskExecutor()` is TaskExecutor's).
+		recv = lastComponent(sig.owner)
+	}
 	if s, ok := e.nativeMethod(recv, sig.base, base, kept, ss); ok {
 		return s
+	}
+	if (recv == "TaskGroup" || recv == "ThrowingTaskGroup") && sig.base == "next" {
+		// The runtime's group carries child results as any; the call's Swift type says what they are.
+		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 {
+			if inner := e.m.GoType(t.Args[0], e.generics); inner != "" && inner != "any" && inner != "struct{}" {
+				call := "swiftrt." + recv + "Next(" + e.recvArg(base) + ")"
+				if e.m.isReferenceGo(t.Args[0], inner) {
+					return "swiftrt.OptAnyAsRef[" + inner + "](" + call + ")"
+				}
+				return "swiftrt.OptAnyAs[" + inner + "](" + call + ")"
+			}
+		}
 	}
 	return "swiftrt." + recv + capitalize(sig.base) + e.suffix(sig, kept, false) + refSuffix + "(" + strings.Join(append([]string{e.recvArg(base)}, ss...), ", ") + ")"
 }

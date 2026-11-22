@@ -313,3 +313,29 @@ func WithTaskGroupOfBody(_ Type, body any) any { return withTaskGroup(body) }
 
 // TaskGroupAddTaskOperation is `TaskGroup.addTask(operation:)`.
 func TaskGroupAddTaskOperation(group *any, op any) { taskGroupAdd(group, op) }
+
+// TaskGroupNext is `TaskGroup.next()`; see ThrowingTaskGroupNext.
+func TaskGroupNext(group *any) *any { return taskGroupNext(group) }
+
+// TaskGroupCancelAll is `TaskGroup.cancelAll()`.
+func TaskGroupCancelAll(group any) { group.(*taskGroup).scope.cancel() }
+
+// OptAnyAs converts a task group's child result, as ThrowingTaskGroupNext and TaskGroupNext return
+// it, to the child task's result type T: nil when no child tasks remain.
+func OptAnyAs[T any](p *any) *T {
+	if p == nil {
+		return nil
+	}
+	v := MustAs[T](*p)
+	return &v
+}
+
+// OptAnyAsRef is OptAnyAs for a child result type whose Optional is T itself (a reference, or an
+// Optional that the runtime does not nest): nil when no child tasks remain or the child returned nil.
+func OptAnyAsRef[T any](p *any) T {
+	var zero T
+	if p == nil || *p == nil {
+		return zero
+	}
+	return MustAs[T](*p)
+}

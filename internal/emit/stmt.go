@@ -767,6 +767,9 @@ func (e *fileEmitter) forEach(n ast.Node) {
 	st := e.m.typeOf(seq.Type())
 	if containsKind(n.Child("desugared_loop"), "current_context_isolation_expr") {
 		et := e.m.GoType(e.m.typeOf(p.Type()), e.generics)
+		if et == "" {
+			et = "struct{}"
+		}
 		next, tmp := e.newTmp("next"), e.newTmp("el")
 		e.w("%s := swiftrt.AsyncIter[%s](%s)\nfor {\n%s := %s()\nif %s == nil {\nbreak\n}\n", next, et, e.expr(seq), tmp, next, tmp)
 		if inner := unwrapPattern(p); inner != nil && inner.Kind() == "pattern_tuple" {
@@ -1057,6 +1060,18 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 			if t, ok := e.resultCase(p, subj); ok {
 				return t
 			}
+			pt := st
+			if pt == nil {
+				pt = e.m.typeOf(p.Type())
+			}
+			if caseT, ok := e.foreignPayloadCase(p, pt); ok {
+				test := "func() bool { _, ok := " + assertable(subj) + ".(" + caseT + "); return ok }()"
+				val := "func() " + caseT + " { v, _ := " + assertable(subj) + ".(" + caseT + "); return v }()"
+				if inner := e.payloadSubTests(p.Child("sub_pattern"), val, nil); inner != "true" {
+					test = andJoin([]string{test, inner})
+				}
+				return test
+			}
 			return e.m.Unsup("enum-pattern-foreign", e.where, "bool")
 		}
 		if e.isPayloadCase(el) || e.m.IsPayloadEnum(el.Owner) {
@@ -1206,6 +1221,10 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 		if el == nil && sub != nil && patternBinds(sub) {
 			if val, ok := e.resultPayload(p, subj); ok {
 				e.patternBind(unwrapSinglePattern(sub), val)
+			} else if caseT, ok := e.foreignPayloadCase(p, e.m.typeOf(p.Type())); ok {
+				v := e.newTmp("payload")
+				e.w("%s, _ := %s.(%s)\n", v, assertable(subj), caseT)
+				e.payloadBind(sub, v)
 			}
 			return
 		}
@@ -1214,15 +1233,44 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 		}
 		v := e.newTmp("payload")
 		e.w("%s, _ := %s.(%s)\n", v, assertable(subj), el.GoName+e.enumTypeArgs(el, e.m.typeOf(p.Type())))
-		sub = unwrapPatternKeepSome(sub)
-		if sub.Kind() == "pattern_tuple" {
-			for i, s := range sub.List("elements") {
-				e.patternBind(s, v+".F"+itoa(i))
-			}
-		} else {
-			e.patternBind(sub, v+".F0")
-		}
+		e.payloadBind(sub, v)
 	}
+}
+
+// payloadBind declares the variables an enum payload pattern binds from the case struct v.
+func (e *fileEmitter) payloadBind(sub ast.Node, v string) {
+	sub = unwrapPatternKeepSome(sub)
+	if sub.Kind() == "pattern_tuple" {
+		for i, s := range sub.List("elements") {
+			e.patternBind(s, v+".F"+itoa(i))
+		}
+	} else {
+		e.patternBind(sub, v+".F0")
+	}
+}
+
+// foreignPayloadCase is the runtime case struct for a payload pattern on an enum from another Swift
+// module, which swiftrt models as an interface implemented by one struct per case, named after the
+// enum and the case (`WebSocketMessage.text(_:)` is swiftrt.WebSocketMessageText).
+func (e *fileEmitter) foreignPayloadCase(p ast.Node, st *types.Type) (string, bool) {
+	if p.Child("sub_pattern") == nil {
+		return "", false
+	}
+	for st != nil && st.Kind == types.Optional && len(st.Args) == 1 {
+		st = st.Args[0]
+	}
+	if st == nil || st.Kind != types.Named || len(st.Args) > 0 {
+		return "", false
+	}
+	gt := e.m.GoType(st, e.generics)
+	if !strings.HasPrefix(gt, "swiftrt.") || strings.ContainsAny(gt, "[* /") {
+		return "", false
+	}
+	name := p.Child("element").Child("base_name").Str("name")
+	if name == "" {
+		return "", false
+	}
+	return gt + capitalize(name), true
 }
 
 func (e *fileEmitter) assign(n ast.Node) {

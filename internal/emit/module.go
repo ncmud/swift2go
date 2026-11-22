@@ -912,6 +912,16 @@ func (m *Module) isLocalProtocol(q string) bool {
 	return false
 }
 
+// isTranspiledType reports a type declared in this module or a transpiled dependency.
+func (m *Module) isTranspiledType(q string) bool {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[q] != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // TypeParams returns a local generic type's Go type parameter names, looking through dependencies.
 func (m *Module) TypeParams(q string) []string {
 	for _, mod := range append([]*Module{m}, m.Deps...) {
