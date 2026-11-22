@@ -394,7 +394,7 @@ func EncodeValue(v any) any {
 			if !f.IsExported() {
 				continue
 			}
-			name := f.Tag.Get("swift")
+			name := codingKey(f)
 			if name == "" || name == "-" {
 				continue
 			}
@@ -407,6 +407,15 @@ func EncodeValue(v any) any {
 		return out
 	}
 	return Str(v)
+}
+
+// codingKey is the key a stored property encodes under: its CodingKeys case's string value (the `key`
+// tag, "-" when CodingKeys leaves the property out), or else the property's name.
+func codingKey(f reflect.StructField) string {
+	if key, ok := f.Tag.Lookup("key"); ok {
+		return key
+	}
+	return f.Tag.Get("swift")
 }
 
 // DecodeValue builds a T from a JSON-shaped tree.
@@ -590,7 +599,7 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		}
 		for i := 0; i < t.NumField(); i++ {
 			fd := t.Field(i)
-			name := fd.Tag.Get("swift")
+			name := codingKey(fd)
 			if name == "" || name == "-" || !fd.IsExported() {
 				continue
 			}
