@@ -2992,9 +2992,20 @@ func (e *fileEmitter) returnsGenericOptional(call ast.Node) bool {
 	if fn.Kind() == "dot_syntax_call_expr" {
 		fn = stripConv(fn.Child("fn"))
 	}
-	info, _ := e.lookup(fn.Child("decl").Str("decl_usr"))
+	usr := fn.Child("decl").Str("decl_usr")
+	info, _ := e.lookup(usr)
 	if info == nil || info.Node == nil {
-		return false
+		// A mapped module's generic function takes its type parameter as a type argument and returns *T.
+		if e.m.mappedDecl(usr) == nil {
+			return false
+		}
+		dem := e.m.demangle(usr)
+		arrow := strings.LastIndex(dem, " -> ")
+		if arrow < 0 {
+			return false
+		}
+		result := strings.TrimSuffix(dem[arrow+4:], "?")
+		return result != dem[arrow+4:] && slices.Contains(ownGenericParams(strings.TrimPrefix(dem, "static ")), result)
 	}
 	rt := e.m.typeOf(info.Node.Str("result"))
 	return rt != nil && rt.Kind == types.Optional && len(rt.Args) == 1 && isGenericParam(rt.Args[0])

@@ -18,5 +18,6 @@ public func report(name: String) -> String {
     case .light:
         mood = "light"
     }
-    return "\(greeting(for: name)): \(tally.doubled()) \(unbox(box)) \(mood)"
+    let tag = firstOf([Tag("tagged")])
+    return "\(greeting(for: name)): \(tally.doubled()) \(unbox(box)) \(mood) \(tag?.name ?? "none")"
 }
