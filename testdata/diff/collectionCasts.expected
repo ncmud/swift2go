@@ -1,0 +1,27 @@
+dictInt: dictAny=2 dictInt=["a", "b"] anyHashable=2 is[String:Any]
+dictMixed: dictAny=2 anyHashable=2 is[String:Any]
+dictEmpty: dictAny=0 dictInt=[] dictString=0 anyHashable=0 dictOfArr=0 is[String:Any]
+arrInt: arrAny=3 arrInt=[3, 1, 2] arrOptInt=3 is[Any]
+arrMixed: arrAny=2 is[Any]
+arrAnyInts: arrAny=2 arrInt=[5, 6] arrOptInt=2 is[Any]
+arrOpt: arrAny=3 arrOptInt=3 is[Any]
+arrOptFull: arrAny=2 arrInt=[1, 2] arrOptInt=2 is[Any]
+arrEmpty: arrAny=0 arrInt=[] arrOptInt=0 arrString=[] arrShape=[] arrNode=[] nested=0 is[Any]
+arrString: arrAny=2 arrString=["x", "y"] is[Any]
+arrSquare: arrAny=2 arrShape=[4, 4] is[Any]
+arrNode: arrAny=2 arrNode=[1, 2] is[Any]
+arrNodeAsAny: arrAny=1 arrNode=[7] is[Any]
+nested: arrAny=2 nested=2 is[Any]
+dictOfArr: dictAny=1 anyHashable=1 dictOfArr=1 is[String:Any]
+dictOfArrAny: dictAny=1 anyHashable=1 dictOfArr=1 is[String:Any]
+setInt: setAnyHashable=2 setInt=[1, 3]
+setSquare: setAnyHashable=1 setSquare=1
+intDict: anyHashable=1
+string: none
+int: none
+arrKeyed: arrKeyedAny=2 arrKeyedInt=[[1], [2, 3]]
+arrKeyedAny: arrKeyedAny=1 arrKeyedString=1
+setOfArr: setOfArr=2
+arrInt: none
+forced 9
+forcedArr 6
