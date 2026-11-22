@@ -20,6 +20,7 @@ func main() {
 	pkgDir := flag.String("pkg", ".", "SwiftPM package directory")
 	outDir := flag.String("out", "out", "output directory")
 	modules := flag.String("modules", "", "directory of built .swiftmodule files for dependencies")
+	buildDir := flag.String("build", "", "SwiftPM build directory with the package's built dependencies (default: the package's .build)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: swift2go [flags] dump|transpile|stats <Target> [<TestTarget>]")
 		flag.PrintDefaults()
@@ -29,13 +30,16 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, *modules); err != nil {
+	if *buildDir == "" {
+		*buildDir = swiftmod.BuildDir(*pkgDir)
+	}
+	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules); err != nil {
 		fmt.Fprintln(os.Stderr, "swift2go:", err)
 		os.Exit(1)
 	}
 }
 
-func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
+func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string) error {
 	pkgDir = absPath(pkgDir)
 	targets, err := swiftmod.Describe(pkgDir)
 	if err != nil {
@@ -45,39 +49,61 @@ func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 	if err != nil && cmd == "transpile" {
 		return err
 	}
-	prebuilt := swiftmod.PrebuiltFlags(pkgDir)
-	clang, err := swiftmod.ClangModuleFlags(targets, pkgDir, absPath(filepath.Join(outDir, "modules", "clang")))
+	mods := absPath(filepath.Join(outDir, "modules"))
+	cflags, err := swiftmod.CModuleFlags(targets, buildDir, absPath(filepath.Join(outDir, "modulemaps")))
 	if err != nil {
 		return err
 	}
-	prebuilt = append(prebuilt, clang...)
-	load := func(name string) ([]ast.File, error) {
-		t, ok := targets[name]
-		if !ok {
-			return nil, fmt.Errorf("no target %q", name)
+	extra := append(append(swiftmod.TestingFlags(), swiftmod.PrebuiltFlags(buildDir)...), cflags...)
+	searchDirs := []string{mods, filepath.Join(buildDir, "out", "Products", "Debug")}
+	emitted := map[string]bool{}
+	load := func(t swiftmod.Target) ([]ast.File, error) {
+		if err := swiftmod.AddGenerated(&t, buildDir, absPath(filepath.Join(outDir, "derived"))); err != nil {
+			return nil, err
 		}
-		cache := filepath.Join(outDir, "ast", name+".json")
-		mods := filepath.Join(outDir, "modules")
-		extra := append(swiftmod.TestingFlags(), prebuilt...)
+		if err := swiftmod.StaleModule(t, targets, emitted, searchDirs); err != nil {
+			return nil, err
+		}
 		if t.Type != "test" {
-			if err := swiftmod.EmitModule(t, absPath(mods), extra...); err != nil {
+			if err := swiftmod.EmitModule(t, mods, extra...); err != nil {
 				return nil, err
 			}
+			emitted[t.Name] = true
 		}
-		data, err := swiftmod.DumpAST(t, absPath(mods), extra...)
+		data, err := swiftmod.DumpAST(t, mods, extra...)
 		if err != nil {
 			return nil, err
 		}
+		cache := filepath.Join(outDir, "ast", t.Name+".json")
 		_ = os.MkdirAll(filepath.Dir(cache), 0o755)
 		_ = os.WriteFile(cache, data, 0o644)
 		return ast.Load(data)
 	}
 	var done []*emit.Module
 	byName := map[string]*emit.Module{}
+	failed := map[string]string{}
+	var failures []string
+	fail := func(name string, err error) {
+		failed[name] = name
+		failures = append(failures, name)
+		fmt.Fprintf(os.Stderr, "swift2go: %s failed: %v\n", name, err)
+	}
 	for _, name := range names {
-		files, err := load(name)
+		t, ok := targets[name]
+		if !ok {
+			fail(name, fmt.Errorf("no target %q", name))
+			continue
+		}
+		if dep := failedDep(t, targets, failed); dep != "" {
+			failed[name] = failed[dep]
+			failures = append(failures, name)
+			fmt.Fprintf(os.Stderr, "swift2go: skipping %s: it depends on %s, which failed\n", name, failed[dep])
+			continue
+		}
+		files, err := load(t)
 		if err != nil {
-			return err
+			fail(name, err)
+			continue
 		}
 		if cmd == "dump" {
 			fmt.Printf("%s: %d files\n", name, len(files))
@@ -85,14 +111,15 @@ func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 		}
 		m, err := emit.New(name, files, rtPath)
 		if err != nil {
-			return err
+			fail(name, err)
+			continue
 		}
 		m.Deps = done
-		t := targets[name]
 		pkgOut := filepath.Join(outDir, strings.ToLower(name))
 		if t.Type == "test" {
 			if len(t.Deps) == 0 || byName[t.Deps[0]] == nil {
-				return fmt.Errorf("%s: transpile its target %v first", name, t.Deps)
+				fail(name, fmt.Errorf("transpile its target %v first", t.Deps))
+				continue
 			}
 			under := byName[t.Deps[0]]
 			m.SetTarget(under)
@@ -100,7 +127,8 @@ func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 		}
 		m.ImportPath = path.Join(goModule, filepath.ToSlash(pkgOut))
 		if _, err := m.WriteGo(pkgOut); err != nil {
-			return err
+			fail(name, err)
+			continue
 		}
 		fmt.Print(m.Report())
 		if t.Type != "test" {
@@ -108,7 +136,34 @@ func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 			byName[name] = m
 		}
 	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%d of %d targets not transpiled: %s", len(failures), len(names), strings.Join(failures, ", "))
+	}
 	return nil
+}
+
+// failedDep returns a dependency of t, direct or not, that has failed in this run.
+func failedDep(t swiftmod.Target, targets map[string]swiftmod.Target, failed map[string]string) string {
+	seen := map[string]bool{}
+	var visit func(names []string) string
+	visit = func(names []string) string {
+		for _, n := range names {
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			if _, ok := failed[n]; ok {
+				return n
+			}
+			if d, ok := targets[n]; ok {
+				if f := visit(d.AllDeps()); f != "" {
+					return f
+				}
+			}
+		}
+		return ""
+	}
+	return visit(t.AllDeps())
 }
 
 func absPath(p string) string {
