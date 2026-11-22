@@ -116,7 +116,7 @@ func StringContainsString(s, sub string) bool { return strings.Contains(s, sub) 
 
 // StringHasPrefix is String.hasPrefix(_:).
 func StringHasPrefix[P ~string | Substring](s string, p P) bool {
-	return strings.HasPrefix(s, stringOf(p))
+	return hasPrefixChars(s, stringOf(p))
 }
 
 // stringOf is a String or Substring argument as a Go string.
@@ -128,13 +128,13 @@ func stringOf[P ~string | Substring](p P) string {
 }
 
 // StringHasSuffix is String.hasSuffix(_:).
-func StringHasSuffix(s, p string) bool { return strings.HasSuffix(s, p) }
+func StringHasSuffix(s, p string) bool { return hasSuffixChars(s, p) }
 
 // StringUppercased is String.uppercased().
-func StringUppercased(s string) string { return strings.ToUpper(s) }
+func StringUppercased(s string) string { return mapCase(s, upperSpecial, unicode.ToUpper) }
 
 // StringLowercased is String.lowercased().
-func StringLowercased(s string) string { return strings.ToLower(s) }
+func StringLowercased(s string) string { return mapCase(s, lowerSpecial, unicode.ToLower) }
 
 // StringReserveCapacity is String.reserveCapacity(_:); a no-op.
 func StringReserveCapacityInt(s *string, n int) {}
@@ -343,10 +343,10 @@ func CharacterIsLowercase(c Character) bool { return unicode.IsLower(firstRune(c
 func ScalarValue(r rune) uint32 { return uint32(r) }
 
 // StringHasPrefixString is String.hasPrefix(_:).
-func StringHasPrefixString(s, p string) bool { return strings.HasPrefix(s, p) }
+func StringHasPrefixString(s, p string) bool { return hasPrefixChars(s, p) }
 
 // StringHasSuffixString is String.hasSuffix(_:).
-func StringHasSuffixString(s, p string) bool { return strings.HasSuffix(s, p) }
+func StringHasSuffixString(s, p string) bool { return hasSuffixChars(s, p) }
 
 // StringDropFirstInt is String.dropFirst(_:).
 func StringDropFirstInt(s string, n int) Substring { return StringDropFirst(s, n) }

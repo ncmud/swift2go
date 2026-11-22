@@ -66,7 +66,7 @@ func SubstringIndexBefore(s Substring, i int) int {
 		Trap("String index is out of bounds")
 	}
 	_, n := lastGrapheme(s.Base[s.Lo:i])
-	return i - n
+	return s.Lo + n
 }
 
 // StringDistanceFromTo is Swift `String.distance(from:to:)` in grapheme clusters.
@@ -150,22 +150,22 @@ func SubstringInitSubstring(s Substring) Substring { return s }
 func SubstringInitString(s string) Substring { return sub(s) }
 
 // SubstringHasPrefix is Swift `Substring.hasPrefix`.
-func SubstringHasPrefix(s Substring, p string) bool { return strings.HasPrefix(s.String(), p) }
+func SubstringHasPrefix(s Substring, p string) bool { return hasPrefixChars(s.String(), p) }
 
 // SubstringHasSuffix is Swift `Substring.hasSuffix`.
-func SubstringHasSuffix(s Substring, p string) bool { return strings.HasSuffix(s.String(), p) }
+func SubstringHasSuffix(s Substring, p string) bool { return hasSuffixChars(s.String(), p) }
 
 // SubstringUppercased is Swift `Substring.uppercased()`.
-func SubstringUppercased(s Substring) string { return strings.ToUpper(s.String()) }
+func SubstringUppercased(s Substring) string { return StringUppercased(s.String()) }
 
 // SubstringLowercased is Swift `Substring.lowercased()`.
-func SubstringLowercased(s Substring) string { return strings.ToLower(s.String()) }
+func SubstringLowercased(s Substring) string { return StringLowercased(s.String()) }
 
 // CharacterLowercased is Swift `Character.lowercased()`.
-func CharacterLowercased(c Character) string { return strings.ToLower(c) }
+func CharacterLowercased(c Character) string { return StringLowercased(c) }
 
 // CharacterUppercased is Swift `Character.uppercased()`.
-func CharacterUppercased(c Character) string { return strings.ToUpper(c) }
+func CharacterUppercased(c Character) string { return StringUppercased(c) }
 
 // SubstringFirst is Swift `Substring.first`.
 func SubstringFirst(s Substring) *Character { return StringFirst(s.String()) }
