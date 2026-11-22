@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -290,5 +291,47 @@ func TestLocaltimeAndStrftime(t *testing.T) {
 	early := **CFLocaltime(&january)
 	if got := strftime("%G-W%V-%u %U %W", &early); got != "2020-W53-7 01 00" {
 		t.Errorf("week numbers = %q", got)
+	}
+}
+
+type fakeHandoff struct {
+	fakeDescriptors
+	prepared, aborted int
+}
+
+func (f *fakeHandoff) PrepareExec() ([]string, error) {
+	f.prepared++
+	return []string{"HANDOFF_PROBE=handles 7 and 9"}, nil
+}
+
+func (f *fakeHandoff) AbortExec() { f.aborted++ }
+
+// TestExecvHandsOffDescriptorIO re-runs the test binary as a child that installs an ExecHandoff and
+// execs a shell, which prints what the handoff added to its environment.
+func TestExecvHandsOffDescriptorIO(t *testing.T) {
+	if os.Getenv("SWIFTRT_EXEC_HANDOFF_CHILD") != "" {
+		SetDescriptorIO(&fakeHandoff{fakeDescriptors: fakeDescriptors{base: 1 << 20, data: map[int32][]byte{}}})
+		argv := []*any{CStringOf("sh"), CStringOf("-c"), CStringOf(`printf %s "$HANDOFF_PROBE"`), nil}
+		CFExecv(CStringOf("/bin/sh"), argv)
+		t.Fatalf("execv failed: errno %d", CErrno())
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestExecvHandsOffDescriptorIO$")
+	cmd.Env = append(os.Environ(), "SWIFTRT_EXEC_HANDOFF_CHILD=1")
+	out, err := cmd.Output()
+	if err != nil || string(out) != "handles 7 and 9" {
+		t.Fatalf("child printed %q, err %v", out, err)
+	}
+}
+
+func TestFailedExecvReturnsDescriptorsToTheHandoff(t *testing.T) {
+	fake := &fakeHandoff{fakeDescriptors: fakeDescriptors{base: 1 << 20, data: map[int32][]byte{}}}
+	SetDescriptorIO(fake)
+	t.Cleanup(func() { SetDescriptorIO(nil) })
+	missing := filepath.Join(t.TempDir(), "nope")
+	if rc := CFExecv(CStringOf(missing), []*any{CStringOf("nope"), nil}); rc != -1 || CErrno() != CMacroENOENT {
+		t.Fatalf("execv = %d, errno %d", rc, CErrno())
+	}
+	if fake.prepared != 1 || fake.aborted != 1 {
+		t.Fatalf("prepared %d, aborted %d; want 1 and 1", fake.prepared, fake.aborted)
 	}
 }

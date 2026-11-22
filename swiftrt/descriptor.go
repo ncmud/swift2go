@@ -32,6 +32,17 @@ type DescriptorIO interface {
 	Poll(fds []CPollfd, timeout time.Duration) int
 }
 
+// ExecHandoff is a DescriptorIO whose descriptors outlive execv, as kernel descriptors without
+// FD_CLOEXEC do. CFExecv calls PrepareExec just before it replaces the process and AbortExec when
+// the replacement fails.
+type ExecHandoff interface {
+	// PrepareExec readies every descriptor to pass to the replacement program and returns the
+	// NAME=value entries to add to its environment so that it can take them back.
+	PrepareExec() ([]string, error)
+	// AbortExec returns the descriptors to service in this process after a failed execv.
+	AbortExec()
+}
+
 var descriptorIO atomic.Pointer[DescriptorIO]
 
 // SetDescriptorIO installs io for the descriptors it owns, or removes the current one when io is nil.
