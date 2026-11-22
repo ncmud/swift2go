@@ -149,13 +149,31 @@ func skipBalanced(s string, i int) int {
 // localWrappers restores the optionals and metatype around a type declared in a function, which
 // the demangler prints ambiguously ("Foo #1 in f() -> Swift.Int?" for Foo?): it reads them from the
 // mangled suffix that follows the local type ("…L_VSgD" is Foo?, "…L_VmD" is Foo.Type).
+//
+// A local type nested in another type, such as the result of a closure type ("() throws -> Foo #1 in f() -> ()?"
+// for `() throws -> Foo?`), gets the optionals that directly follow it in the mangling.
 func localWrappers(mangled, raw, norm string) string {
-	if loc := localStart.FindStringIndex(raw); loc == nil || loc[0] != 0 || !strings.HasSuffix(mangled, "D") {
+	loc := localStart.FindStringSubmatchIndex(raw)
+	if loc == nil || !strings.HasSuffix(mangled, "D") {
 		return norm
 	}
 	i := strings.LastIndex(mangled, "L_")
 	if i < 0 || i+3 > len(mangled) || !strings.ContainsRune("VCO", rune(mangled[i+2])) {
 		return norm
+	}
+	if loc[0] != 0 {
+		if len(localStart.FindAllStringIndex(raw, -1)) != 1 || strings.Count(mangled, "L_") != 1 {
+			return norm
+		}
+		at := loc[0] + len(raw[loc[4]:loc[5]]) + 1 + len(raw[loc[2]:loc[3]])
+		if !strings.HasPrefix(norm[loc[0]:], raw[loc[4]:loc[5]]+"."+raw[loc[2]:loc[3]]) {
+			return norm
+		}
+		opt := ""
+		for rest := mangled[i+3:]; strings.HasPrefix(rest, "Sg"); rest = rest[2:] {
+			opt += "?"
+		}
+		return norm[:at] + opt + norm[at:]
 	}
 	end := 0
 	for end < len(norm) && (norm[end] == '.' || norm[end] == '_' || isAlnum(norm[end])) {

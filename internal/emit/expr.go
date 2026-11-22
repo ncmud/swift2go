@@ -83,6 +83,8 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	switch n.Kind() {
 	case "paren_expr":
 		return "(" + e.expr(n.Child("sub_expr")) + ")"
+	case "lazy_initializer_expr":
+		return e.expr(n.Child("sub_expr"))
 	case "derived_to_base_expr":
 		return e.upcastClass(n)
 	case "erasure_expr":
@@ -1442,6 +1444,9 @@ func (e *fileEmitter) macro(n ast.Node) string {
 		}
 		ct := e.m.typeOf(cond.Type())
 		if ct.Kind == types.Optional {
+			if len(ct.Args) == 1 && e.m.isReferenceGo(ct.Args[0], e.m.GoType(ct.Args[0], e.generics)) {
+				return "swiftrt.RequireRef(" + e.expr(cond) + ", " + msg + ")"
+			}
 			return "swiftrt.RequireSome(" + e.expr(cond) + ", " + msg + ")"
 		}
 		if cond.Kind() == "binary_expr" {
@@ -1456,6 +1461,9 @@ func (e *fileEmitter) macro(n ast.Node) string {
 			}
 		}
 		return fmt.Sprintf("swiftrt.Expect(%s, %q, %t, %s)", e.expr(cond), "", fatal, msg)
+	}
+	if name == "_sourceLocation" {
+		return "swiftrt.SourceLocationHere()"
 	}
 	// Any other expression macro is emitted from the expansion the compiler recorded.
 	if r := n.Child("rewritten"); r != nil {

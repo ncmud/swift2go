@@ -283,7 +283,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 	defined := map[string]bool{}
 	for _, mem := range n.List("members") {
 		if mem.Kind() == "func_decl" {
-			defined[mem.Name()] = true
+			defined[funcSignatureKey(mem)] = true
 		}
 	}
 	for _, c := range n.Child("inherits").List("conformances") {
@@ -299,10 +299,10 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 			e.propertyGetters(n, nil, q, proto, pm, pfx)
 			e.staticForwarders(q, proto, pm, pfx)
 			for _, info := range pm.sortedDecls() {
-				if !info.ProtoExt || info.Owner != proto || info.Kind != "func_decl" || defined[info.Node.Name()] {
+				if !info.ProtoExt || info.Owner != proto || info.Kind != "func_decl" || defined[funcSignatureKey(info.Node)] {
 					continue
 				}
-				req := pm.requirementName(proto, info.Node.Name())
+				req := pm.requirementName(proto, info.Node)
 				if req == "" {
 					continue
 				}
@@ -325,6 +325,12 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 	}
 }
 
+// funcSignatureKey is a function's base name and argument labels, which tell apart overloads such as
+// `f(_:write:)` and `f(_:log:)`.
+func funcSignatureKey(n ast.Node) string {
+	return n.Name() + "(" + strings.Join(paramLabels(n), ":") + ")"
+}
+
 func prefixComma(s string) string {
 	if s == "" {
 		return ""
@@ -345,9 +351,9 @@ func (m *Module) sortedDecls() []*DeclInfo {
 	return out
 }
 
-func (m *Module) requirementName(proto, base string) string {
+func (m *Module) requirementName(proto string, impl ast.Node) string {
 	for _, r := range m.protoReqs[proto] {
-		if r.Kind() == "func_decl" && r.Name() == base {
+		if r.Kind() == "func_decl" && funcSignatureKey(r) == funcSignatureKey(impl) {
 			if info := m.decls[r.Str("usr")]; info != nil {
 				return info.GoName
 			}

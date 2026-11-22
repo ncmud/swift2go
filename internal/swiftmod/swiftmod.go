@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -22,6 +23,8 @@ type Target struct {
 	// ProductDeps are dependencies through a package's products, which share the target's name here.
 	ProductDeps []string `json:"product_dependencies"`
 	Type        string   `json:"type"`
+	// ModuleType is SwiftTarget, or ClangTarget for a C target.
+	ModuleType string `json:"module_type"`
 	// Dir is the root of the SwiftPM package that declares the target.
 	Dir string `json:"-"`
 }
@@ -252,6 +255,47 @@ func TestingFlags() []string {
 		"-F", dev + "/Platforms/MacOSX.platform/Developer/Library/Frameworks",
 		"-plugin-path", dev + "/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
 	}
+}
+
+// ClangModuleFlags gives swiftc a module map for each C target declared by the package at pkgDir that has no
+// module map from a SwiftPM build, so Swift targets can import it without building the package first. Maps
+// are written under dir. The public headers are the target's include directory when it has one, else the
+// target directory itself.
+func ClangModuleFlags(targets map[string]Target, pkgDir, dir string) ([]string, error) {
+	built := filepath.Join(pkgDir, ".build", "out", "Intermediates.noindex", "GeneratedModuleMaps")
+	var names []string
+	for name, t := range targets {
+		if t.ModuleType == "ClangTarget" && t.Dir == pkgDir {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	var flags []string
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(built, name+".modulemap")); err == nil {
+			continue
+		}
+		src := filepath.Join(pkgDir, targets[name].Path)
+		headers := filepath.Join(src, "include")
+		if st, err := os.Stat(headers); err != nil || !st.IsDir() {
+			headers = src
+		}
+		if _, err := os.Stat(filepath.Join(headers, "module.modulemap")); err == nil {
+			flags = append(flags, "-Xcc", "-fmodule-map-file="+filepath.Join(headers, "module.modulemap"))
+			continue
+		}
+		mapDir := filepath.Join(dir, name)
+		if err := os.MkdirAll(mapDir, 0o755); err != nil {
+			return nil, err
+		}
+		modmap := fmt.Sprintf("module %s {\n    umbrella %q\n    export *\n}\n", name, headers)
+		f := filepath.Join(mapDir, "module.modulemap")
+		if err := os.WriteFile(f, []byte(modmap), 0o644); err != nil {
+			return nil, err
+		}
+		flags = append(flags, "-Xcc", "-fmodule-map-file="+f, "-Xcc", "-I"+headers)
+	}
+	return flags, nil
 }
 
 // PrebuiltFlags points swiftc at third-party modules, C module maps and macro plugins

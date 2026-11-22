@@ -54,7 +54,11 @@ func (m *Module) GoType(t *types.Type, generics map[string]string) string {
 		}
 		parts := make([]string, len(t.Args))
 		for i, a := range t.Args {
-			parts[i] = fmt.Sprintf("F%d %s", i, m.GoType(a, generics))
+			g := m.GoType(a, generics)
+			if g == "" {
+				g = "struct{}"
+			}
+			parts[i] = fmt.Sprintf("F%d %s", i, g)
 		}
 		return "struct{ " + strings.Join(parts, "; ") + " }"
 	case types.Func:
@@ -242,7 +246,7 @@ func (m *Module) isReferenceGo(t *types.Type, goType string) bool {
 	if t.Kind == types.Existential {
 		return true
 	}
-	if t.Kind == types.Named && m.typeKinds[t.Name] == "protocol" {
+	if t.Kind == types.Named && m.isLocalProtocol(t.Name) {
 		return true
 	}
 	return false
