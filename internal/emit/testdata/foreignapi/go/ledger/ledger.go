@@ -238,3 +238,27 @@ type Code struct{ raw int }
 
 // CodeBusy is `Code.busy`.
 var CodeBusy = Code{5}
+
+// Handler is `Handler`.
+type Handler struct{ parameterType string }
+
+// HandlerParameterType is `Handler.parameterType`.
+func HandlerParameterType(h Handler) string { return h.parameterType }
+
+// HandlerBind is `Handler.bind(_:)`: fn is a swiftrt.Closure, whose Optional flags tell `Book` from `Book?`.
+func HandlerBind(fn any) Handler {
+	c := fn.(swiftrt.Closure)
+	name := map[reflect.Type]string{reflect.TypeFor[*Book](): "Book", reflect.TypeFor[int](): "Int"}[reflect.TypeOf(c.Fn).In(1)]
+	if c.Optional[1] {
+		name = "Optional<" + name + ">"
+	}
+	return Handler{name}
+}
+
+// HandlerBindIfAny is `Handler.bindIfAny(_:_:)`: fn is nil or a swiftrt.Closure.
+func HandlerBindIfAny[A any](fn any, _ swiftrt.TypeT[A]) Handler {
+	if fn == nil || reflect.ValueOf(fn).Kind() == reflect.Func && reflect.ValueOf(fn).IsNil() {
+		return Handler{"none"}
+	}
+	return HandlerBind(fn)
+}

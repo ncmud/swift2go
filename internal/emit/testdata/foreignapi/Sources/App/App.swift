@@ -96,3 +96,13 @@ public func registered() -> (String, [Int64?], String) {
     mail.insert(book)
     return (book.entries.joined(separator: ","), [log.id, score.id, mail.id], Log.filter(Column("id") == 1).sql)
 }
+
+public func boundParameterTypes() -> [String] {
+    [
+        Handler.bind { (_, _: Book) in }.parameterType,
+        Handler.bind { (_, _: Book?) in }.parameterType,
+        Handler.bind { (_, _: Int) in }.parameterType,
+        Handler.bindIfAny({ (_, _: Book?) in }, Book?.self).parameterType,
+        Handler.bindIfAny(nil, Book.self).parameterType,
+    ]
+}

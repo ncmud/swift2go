@@ -31,3 +31,7 @@ import Testing
     #expect(ids == [1, 2, 300])
     #expect(sql == "SELECT * FROM log WHERE id = 1")
 }
+
+@Test func closuresRecordOptionalParameters() {
+    #expect(boundParameterTypes() == ["Book", "Optional<Book>", "Int", "Optional<Book>", "none"])
+}

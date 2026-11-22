@@ -143,3 +143,13 @@ public struct Code: Equatable, Sendable {
 
     public static let busy = Code(rawValue: 5)
 }
+
+public struct Handler {
+    public var parameterType: String
+
+    public static func bind<A>(_ fn: @escaping (Book, A) -> Void) -> Handler { Handler(parameterType: "\(A.self)") }
+
+    public static func bindIfAny<A>(_ fn: ((Book, A) -> Void)?, _: A.Type) -> Handler {
+        Handler(parameterType: fn == nil ? "none" : "\(A.self)")
+    }
+}
