@@ -190,8 +190,42 @@ func New(name string, files []ast.File, rtPath string) (*Module, error) {
 	return m, nil
 }
 
-// SetTarget marks the module as a test target whose code joins package pkg.
-func (m *Module) SetTarget(pkg string) { m.Test = true; m.Pkg = pkg }
+// SetTarget marks the module as a test target whose code joins the package of under. Package-level names the
+// two modules share, such as file-private globals both declare, are renamed in the test module.
+func (m *Module) SetTarget(under *Module) {
+	m.Test = true
+	m.Pkg = under.Pkg
+	taken := map[string]bool{}
+	for _, info := range under.decls {
+		if info.GoName != "" && under.packageLevel(info) {
+			taken[info.GoName] = true
+		}
+	}
+	var usrs []string
+	for usr, info := range m.decls {
+		switch info.Kind {
+		case "struct_decl", "class_decl", "enum_decl", "protocol":
+			continue
+		}
+		if info.GoName != "" && m.packageLevel(info) {
+			usrs = append(usrs, usr)
+		}
+	}
+	sort.Strings(usrs)
+	for _, usr := range usrs {
+		info := m.decls[usr]
+		if !taken[info.GoName] {
+			continue
+		}
+		base := info.GoName + "Test"
+		name := base
+		for n := 2; taken[name]; n++ {
+			name = base + strconv.Itoa(n)
+		}
+		info.GoName = name
+		taken[name] = true
+	}
+}
 
 func (m *Module) demangle(s string) string {
 	if strings.HasPrefix(s, "c:objc(") {
@@ -520,6 +554,10 @@ func (m *Module) assignNames() {
 			}
 			info.GoName = m.memberName(info, owner, base)
 		case "var_decl":
+			if rest, ok := strings.CutPrefix(name, "$__lazy_storage_$_"); ok {
+				info.GoName = m.memberName(info, owner, capitalize(goSafe(rest))+"LazyStorage")
+				break
+			}
 			if strings.HasPrefix(name, "$") {
 				info.GoName = m.memberName(info, owner, capitalize(name[1:])+"Projected")
 				break

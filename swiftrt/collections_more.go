@@ -184,6 +184,17 @@ func SliceSuffixInt[T any](xs []T, n int) []T {
 // ReversedCollectionMap is Swift `reversed().map`.
 func ReversedCollectionMap[T, U any](xs []T, f func(T) U) []U { return SliceMap(xs, f) }
 
+// ReversedCollectionPrefixWhile is Swift `reversed().prefix(while:)`; the slice is already reversed.
+func ReversedCollectionPrefixWhile[T any](xs []T, f func(T) bool) []T { return SlicePrefixWhile(xs, f) }
+
+// MapReserveCapacityInt is Swift `Dictionary.reserveCapacity(_:)`. Go maps can't grow in place, so only an empty map is
+// remade with room for n entries.
+func MapReserveCapacityInt[M ~map[K]V, K comparable, V any](m *M, n int) {
+	if len(*m) == 0 && n > 0 {
+		*m = make(M, n)
+	}
+}
+
 // SliceForEach is Swift `forEach`.
 func SliceForEach[T any](xs []T, f func(T)) {
 	for _, x := range xs {

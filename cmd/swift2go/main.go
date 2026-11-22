@@ -36,6 +36,7 @@ func main() {
 }
 
 func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
+	pkgDir = absPath(pkgDir)
 	targets, err := swiftmod.Describe(pkgDir)
 	if err != nil {
 		return err
@@ -45,6 +46,11 @@ func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 		return err
 	}
 	prebuilt := swiftmod.PrebuiltFlags(pkgDir)
+	clang, err := swiftmod.ClangModuleFlags(targets, pkgDir, absPath(filepath.Join(outDir, "modules", "clang")))
+	if err != nil {
+		return err
+	}
+	prebuilt = append(prebuilt, clang...)
 	load := func(name string) ([]ast.File, error) {
 		t, ok := targets[name]
 		if !ok {
@@ -89,7 +95,7 @@ func run(cmd string, names []string, pkgDir, outDir, modulesDir string) error {
 				return fmt.Errorf("%s: transpile its target %v first", name, t.Deps)
 			}
 			under := byName[t.Deps[0]]
-			m.SetTarget(under.Pkg)
+			m.SetTarget(under)
 			pkgOut = filepath.Join(outDir, under.Pkg)
 		}
 		m.ImportPath = path.Join(goModule, filepath.ToSlash(pkgOut))

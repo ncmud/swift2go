@@ -2,6 +2,8 @@ package swiftrt
 
 import (
 	"fmt"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -63,6 +65,21 @@ func RequireSome[T any](p *T, msg string) T {
 		report(true, "required value was nil %s", msg)
 	}
 	return *p
+}
+
+// SourceLocationHere is swift-testing's `#_sourceLocation`: the Go file and line of the call that evaluates it.
+func SourceLocationHere() any {
+	_, file, line, _ := runtime.Caller(1)
+	return file + ":" + strconv.Itoa(line)
+}
+
+// RequireRef is #require(optional) on an Optional class or existential, which is the reference itself.
+func RequireRef[T any](v T, msg string) T {
+	if isNil(v) {
+		currentT.Helper()
+		report(true, "required value was nil %s", msg)
+	}
+	return v
 }
 
 // Thrown carries a Swift error through a Go panic.

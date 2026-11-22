@@ -32,3 +32,16 @@ func TestLocalWrappers(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalWrappersInClosureResult(t *testing.T) {
+	raw := "() throws -> Anything #1 in Mod.f() -> ()?"
+	cases := map[string]string{
+		"$s3Mod1fyyF8AnythingL_VSgyKXED": "() throws -> Mod.Anything?",
+		"$s3Mod1fyyF8AnythingL_VyKXED":   "() throws -> Mod.Anything",
+	}
+	for mangled, want := range cases {
+		if got := localWrappers(mangled, raw, normalizeLocal(raw)); got != want {
+			t.Errorf("localWrappers(%q) = %q, want %q", mangled, got, want)
+		}
+	}
+}
