@@ -149,8 +149,8 @@ func TestSwiftSDK(t *testing.T) {
 		want   string
 		bundle string
 	}{
-		{swiftmod.Destination{}, "macos/darwin", "swift_Platform.bundle"},
-		{linux, "linux" + libc, "swift_Platform.resources"},
+		{swiftmod.Destination{}, "macos/darwin", "platform_Platform.bundle"},
+		{linux, "linux" + libc, "platform_Platform.resources"},
 	} {
 		outDir := filepath.Join("out", "platformtest")
 		_ = os.RemoveAll(outDir)

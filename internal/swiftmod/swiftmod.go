@@ -33,6 +33,8 @@ type Target struct {
 	Resources  []Resource `json:"resources"`
 	// Dir is the root of the SwiftPM package that declares the target.
 	Dir string `json:"-"`
+	// Package is the name the package's manifest gives it, which names its resource bundles.
+	Package string `json:"-"`
 	// PublicHeaders is the public header directory of a C target, relative to Path.
 	PublicHeaders string `json:"-"`
 	// Plugins names the build-tool plugins the target uses.
@@ -177,6 +179,7 @@ func describeOne(pkgDir, scratch string, root bool) (map[string]Target, error) {
 		return nil, fmt.Errorf("swift package describe: %w", err)
 	}
 	var d struct {
+		Name    string   `json:"name"`
 		Targets []Target `json:"targets"`
 	}
 	if err := json.Unmarshal(out, &d); err != nil {
@@ -186,6 +189,7 @@ func describeOne(pkgDir, scratch string, root bool) (map[string]Target, error) {
 	needManifest := root
 	for _, t := range d.Targets {
 		t.Dir = pkgDir
+		t.Package = d.Name
 		if len(t.Deps) == 0 {
 			t.Deps = t.ProductDeps
 		}
@@ -297,9 +301,14 @@ func AddGenerated(t *Target, buildDir, derivedDir string, d Destination) error {
 	return nil
 }
 
-// bundleName is the name SwiftPM gives a target's resource bundle.
+// bundleName is the name SwiftPM gives a target's resource bundle: the package's name as its manifest
+// spells it, then the target's.
 func bundleName(t Target) string {
-	return strings.ToLower(filepath.Base(t.Dir)) + "_" + t.Name
+	pkg := t.Package
+	if pkg == "" {
+		pkg = strings.ToLower(filepath.Base(t.Dir))
+	}
+	return pkg + "_" + t.Name
 }
 
 func writeBundleAccessor(t Target, derivedDir, suffix string) (string, error) {
