@@ -157,11 +157,7 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	case "return_stmt":
 		e.returnStmt(n)
 	case "fail_stmt":
-		if e.initFail != "" {
-			e.w("return %s\n", e.initFail)
-		} else {
-			e.w("return nil\n")
-		}
+		e.failInit()
 	case "then_stmt":
 		if r := n.Child("result"); isVoidGo(e.exprGoType(r)) {
 			e.stmt(r)
@@ -1543,6 +1539,23 @@ func (e *fileEmitter) jump(kind, label string) {
 	e.w("%s = true\nreturn\n", flag)
 }
 
+// failInit writes a failable initializer's `return nil`. Inside a block that runs as a Go closure it
+// sets the block's flag for it, and the code after the closure fails the initializer.
+func (e *fileEmitter) failInit() {
+	if d := e.doRet; d != nil {
+		if d.fail == "" {
+			d.fail = d.flag + "_fail"
+		}
+		e.w("%s = true\nreturn\n", d.fail)
+		return
+	}
+	if e.initFail != "" {
+		e.w("return %s\n", e.initFail)
+	} else {
+		e.w("return nil\n")
+	}
+}
+
 // nestedDefers reports whether list, a block other than a function body, holds a defer.
 func (e *fileEmitter) nestedDefers(list []ast.Node) bool {
 	found := false
@@ -1586,7 +1599,15 @@ func (e *fileEmitter) exitingClosure(emit func(), wrap func(body string)) {
 	for _, jump := range sortedKeys(do.jumps) {
 		e.w("%s := false\n", do.jumps[jump])
 	}
+	if do.fail != "" {
+		e.w("%s := false\n", do.fail)
+	}
 	wrap(body)
+	if do.fail != "" {
+		e.w("if %s {\n", do.fail)
+		e.failInit()
+		e.w("}\n")
+	}
 	e.w("if %s {\n", done)
 	switch {
 	case saveDo != nil:
@@ -1689,6 +1710,7 @@ type doReturn struct {
 	val, flag string
 	depth     int               // jumpDepth when the do body began
 	loops     int               // loopDepth when the do body began
+	fail      string            // flag a failable initializer's `return nil` set, once one has
 	jumps     map[string]string // break/continue flags the body set
 	inner     map[string]bool   // labels declared inside the body
 }
