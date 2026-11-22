@@ -155,13 +155,14 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			e.slots = append(e.slots, slot{pre: tmp + " := []rune(" + str + ")\n", writeBack: str + " = string(" + tmp + ")\n"})
 			return "&" + tmp
 		}
-		if ds := stripLoads(sub); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "OrderedDictionary" {
+		if ds := stripLoads(sub); ds.Kind() == "subscript_expr" && isFuncDict(e.m.Recv(e.m.typeOf(ds.Child("base").Type()))) {
 			if args := ds.Child("args").List("args"); len(args) == 2 && args[1].Str("label") == "default" {
-				// An ordered dictionary element mutated in place: copy it out, then store it back.
+				// A runtime dictionary's element mutated in place: copy it out, then store it back.
+				fn := "swiftrt." + e.m.Recv(e.m.typeOf(ds.Child("base").Type()))
 				d := e.lvalue(stripLoads(ds.Child("base")))
 				k, tmp := e.newTmp("key"), e.newTmp("slot")
-				pre := k + " := " + e.expr(args[0].Child("expr")) + "\n" + tmp + " := swiftrt.OrderedDictionarySubscriptDefault(" + d + ", " + k + ", " + e.defaultValue(args[1].Child("expr")) + ")\n"
-				e.slots = append(e.slots, slot{pre: pre, writeBack: "swiftrt.OrderedDictionarySet(&" + d + ", " + k + ", &" + tmp + ")\n"})
+				pre := k + " := " + e.expr(args[0].Child("expr")) + "\n" + tmp + " := " + fn + "SubscriptDefault(" + d + ", " + k + ", " + e.defaultValue(args[1].Child("expr")) + ")\n"
+				e.slots = append(e.slots, slot{pre: pre, writeBack: fn + "Set(&" + d + ", " + k + ", &" + tmp + ")\n"})
 				return "&" + tmp
 			}
 		}
@@ -331,6 +332,17 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if lit, ok := e.literalInit(n, "dictionaryLiteral"); ok {
 			return lit
 		}
+		gt := e.exprGoType(n)
+		if t := e.m.typeOf(n.Type()); e.m.Recv(t) == "HMap" && len(n.List("elements")) > 0 {
+			var keys, vals []string
+			for _, el := range n.List("elements") {
+				if kv := el.List("elements"); len(kv) == 2 {
+					keys, vals = append(keys, e.expr(kv[0])), append(vals, e.expr(kv[1]))
+				}
+			}
+			kt, vt := e.m.GoType(t.Args[0], e.generics), e.m.GoType(t.Args[1], e.generics)
+			return "swiftrt.HMapOf([]" + kt + "{" + strings.Join(keys, ", ") + "}, []" + vt + "{" + strings.Join(vals, ", ") + "})"
+		}
 		var parts []string
 		for _, el := range n.List("elements") {
 			kv := el.List("elements")
@@ -338,7 +350,7 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 				parts = append(parts, e.expr(kv[0])+": "+e.expr(kv[1]))
 			}
 		}
-		return "(" + e.exprGoType(n) + "{" + strings.Join(parts, ", ") + "})"
+		return "(" + gt + "{" + strings.Join(parts, ", ") + "})"
 	case "subscript_expr":
 		return e.subscript(n)
 	case "ternary_expr":
@@ -814,17 +826,18 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 			e.w("%s := %s\nif _, ok := %s[%s]; !ok {\n%s[%s] = %s\n}\n", k, e.expr(args[0].Child("expr")), m, k, m, k, e.defaultValue(args[1].Child("expr")))
 			return m + "[" + k + "]"
 		}
-		if e.m.Recv(bt) == "OrderedDictionary" && (len(args) == 1 || len(args) == 2 && args[1].Str("label") == "default") {
-			// Assigning through an ordered dictionary element: copy it out, store it back after the statement.
+		if recv := e.m.Recv(bt); isFuncDict(recv) && (len(args) == 1 || len(args) == 2 && args[1].Str("label") == "default") {
+			// Assigning through a runtime dictionary's element: copy it out, store it back after the statement.
+			fn := "swiftrt." + recv
 			d := e.lvalue(n.Child("base"))
 			k, tmp := e.newTmp("key"), e.newTmp("elem")
 			if len(args) == 2 {
-				e.w("%s := %s\n%s := swiftrt.OrderedDictionarySubscriptDefault(%s, %s, %s)\n", k, e.expr(args[0].Child("expr")), tmp, d, k, e.defaultValue(args[1].Child("expr")))
-				e.post = append(e.post, "swiftrt.OrderedDictionarySet(&"+d+", "+k+", &"+tmp+")")
+				e.w("%s := %s\n%s := %sSubscriptDefault(%s, %s, %s)\n", k, e.expr(args[0].Child("expr")), tmp, fn, d, k, e.defaultValue(args[1].Child("expr")))
+				e.post = append(e.post, fn+"Set(&"+d+", "+k+", &"+tmp+")")
 				return tmp
 			}
-			e.w("%s := %s\n%s := swiftrt.OrderedDictionaryGet(%s, %s)\n", k, e.expr(args[0].Child("expr")), tmp, d, k)
-			e.post = append(e.post, "swiftrt.OrderedDictionarySet(&"+d+", "+k+", "+tmp+")")
+			e.w("%s := %s\n%s := %sGet(%s, %s)\n", k, e.expr(args[0].Child("expr")), tmp, fn, d, k)
+			e.post = append(e.post, fn+"Set(&"+d+", "+k+", "+tmp+")")
 			return "(*" + tmp + ")"
 		}
 		var labels []string
@@ -849,7 +862,7 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 func (e *fileEmitter) subscriptAssign(dest, src ast.Node) (string, bool) {
 	bt := e.m.typeOf(dest.Child("base").Type())
 	args := dest.Child("args").List("args")
-	if e.m.Recv(bt) == "OrderedDictionary" && len(args) == 1 {
+	if recv := e.m.Recv(bt); isFuncDict(recv) && len(args) == 1 {
 		v := e.expr(src)
 		switch {
 		case src.Kind() == "nil_literal_expr":
@@ -861,7 +874,7 @@ func (e *fileEmitter) subscriptAssign(dest, src ast.Node) (string, bool) {
 				v = "swiftrt.SomeRef(" + v + ")"
 			}
 		}
-		return "swiftrt.OrderedDictionarySet(&" + e.lvalue(dest.Child("base")) + ", " + e.expr(args[0].Child("expr")) + ", " + v + ")", true
+		return "swiftrt." + recv + "Set(&" + e.lvalue(dest.Child("base")) + ", " + e.expr(args[0].Child("expr")) + ", " + v + ")", true
 	}
 	if e.m.Recv(bt) != "Map" {
 		return "", false
@@ -886,6 +899,10 @@ func (e *fileEmitter) subscriptAssign(dest, src ast.Node) (string, bool) {
 	return "swiftrt.MapSet(" + m + ", " + k + ", " + e.expr(src) + ")", true
 }
 
+// isFuncDict reports whether a dictionary family is a runtime struct reached only through its
+// swiftrt functions, never Go map syntax.
+func isFuncDict(recv string) bool { return recv == "OrderedDictionary" || recv == "HMap" }
+
 func (e *fileEmitter) subscript(n ast.Node) string {
 	base := n.Child("base")
 	for base.Kind() == "inout_expr" {
@@ -902,12 +919,8 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 	}
 	bt := e.m.typeOf(base.Type())
 	recv := e.m.Recv(bt)
-	if len(args) == 2 && args[1].Str("label") == "default" && (recv == "Map" || recv == "OrderedDictionary") {
-		fn := "swiftrt.MapSubscriptDefault"
-		if recv == "OrderedDictionary" {
-			fn = "swiftrt.OrderedDictionarySubscriptDefault"
-		}
-		return fn + "(" + e.expr(base) + ", " + e.expr(args[0].Child("expr")) + ", " + e.defaultValue(args[1].Child("expr")) + ")"
+	if len(args) == 2 && args[1].Str("label") == "default" && (recv == "Map" || isFuncDict(recv)) {
+		return "swiftrt." + recv + "SubscriptDefault(" + e.expr(base) + ", " + e.expr(args[0].Child("expr")) + ", " + e.defaultValue(args[1].Child("expr")) + ")"
 	}
 	if len(args) != 1 {
 		return e.m.Unsup("subscript-multi-arg", e.where, e.exprGoType(n))
@@ -923,8 +936,8 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 	if recv == "Map" {
 		return "swiftrt.MapGet(" + e.expr(base) + ", " + e.expr(a) + ")"
 	}
-	if recv == "OrderedDictionary" {
-		return "swiftrt.OrderedDictionaryGet(" + e.expr(base) + ", " + e.expr(a) + ")"
+	if isFuncDict(recv) {
+		return "swiftrt." + recv + "Get(" + e.expr(base) + ", " + e.expr(a) + ")"
 	}
 	label := args[0].Str("label")
 	return "swiftrt." + recv + "Subscript" + capitalize(label) + at + "(" + e.expr(base) + ", " + e.expr(a) + ")"

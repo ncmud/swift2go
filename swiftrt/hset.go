@@ -10,7 +10,7 @@ import (
 // HSet is a Swift `Set` whose element type cannot be a Go map key (an array, a set, or a struct
 // holding one). Elements are keyed by a canonical rendering of their value, so equal values
 // collapse as Swift's Hashable equality would.
-type HSet[T any] struct{ m map[string]T }
+type HSet[T any] struct{ M map[string]T }
 
 func hkey(v any) string {
 	var b strings.Builder
@@ -74,9 +74,9 @@ func writeKey(b *strings.Builder, v reflect.Value) {
 
 // HSetOf is a set literal.
 func HSetOf[T any](xs ...T) HSet[T] {
-	s := HSet[T]{m: map[string]T{}}
+	s := HSet[T]{M: map[string]T{}}
 	for _, x := range xs {
-		s.m[hkey(x)] = x
+		s.M[hkey(x)] = x
 	}
 	return s
 }
@@ -86,17 +86,17 @@ func HSetInsert[T any](s *HSet[T], v T) struct {
 	F0 bool
 	F1 T
 } {
-	if s.m == nil {
-		s.m = map[string]T{}
+	if s.M == nil {
+		s.M = map[string]T{}
 	}
 	k := hkey(v)
-	if old, ok := s.m[k]; ok {
+	if old, ok := s.M[k]; ok {
 		return struct {
 			F0 bool
 			F1 T
 		}{false, old}
 	}
-	s.m[k] = v
+	s.M[k] = v
 	return struct {
 		F0 bool
 		F1 T
@@ -105,29 +105,29 @@ func HSetInsert[T any](s *HSet[T], v T) struct {
 
 // HSetContains is `Set.contains(_:)`.
 func HSetContains[T any](s HSet[T], v T) bool {
-	_, ok := s.m[hkey(v)]
+	_, ok := s.M[hkey(v)]
 	return ok
 }
 
 // HSetRemove is `Set.remove(_:)`.
 func HSetRemove[T any](s *HSet[T], v T) *T {
 	k := hkey(v)
-	old, ok := s.m[k]
+	old, ok := s.M[k]
 	if !ok {
 		return nil
 	}
-	delete(s.m, k)
+	delete(s.M, k)
 	return &old
 }
 
 // HSetCount is `Set.count`.
-func HSetCount[T any](s HSet[T]) int { return len(s.m) }
+func HSetCount[T any](s HSet[T]) int { return len(s.M) }
 
 // HSetIsEmpty is `Set.isEmpty`.
-func HSetIsEmpty[T any](s HSet[T]) bool { return len(s.m) == 0 }
+func HSetIsEmpty[T any](s HSet[T]) bool { return len(s.M) == 0 }
 
 // HSetRemoveAll is `Set.removeAll()`.
-func HSetRemoveAll[T any](s *HSet[T]) { s.m = nil }
+func HSetRemoveAll[T any](s *HSet[T]) { s.M = nil }
 
 // HSetFormUnion is `Set.formUnion(_:)`.
 func HSetFormUnion[T any](s *HSet[T], other any) {
@@ -138,8 +138,8 @@ func HSetFormUnion[T any](s *HSet[T], other any) {
 
 // Elements lists the members, for iteration.
 func (s HSet[T]) Elements() []T {
-	out := make([]T, 0, len(s.m))
-	for _, v := range s.m {
+	out := make([]T, 0, len(s.M))
+	for _, v := range s.M {
 		out = append(out, v)
 	}
 	return out

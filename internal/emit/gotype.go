@@ -35,6 +35,9 @@ func (m *Module) GoType(t *types.Type, generics map[string]string) string {
 	case types.Array:
 		return "[]" + m.GoType(t.Args[0], generics)
 	case types.Dict:
+		if !m.goKeyable(t.Args[0], map[string]bool{}) {
+			return "swiftrt.HMap[" + m.GoType(t.Args[0], generics) + ", " + m.GoType(t.Args[1], generics) + "]"
+		}
 		return "map[" + m.GoType(t.Args[0], generics) + "]" + m.GoType(t.Args[1], generics)
 	case types.Optional:
 		inner := m.GoType(t.Args[0], generics)
@@ -120,6 +123,9 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	case "Swift.Optional":
 		return m.GoType(&types.Type{Kind: types.Optional, Args: args}, generics)
 	case "Swift.Dictionary":
+		if len(args) == 2 && !m.goKeyable(args[0], map[string]bool{}) {
+			return "swiftrt.HMap[" + arg(0) + ", " + arg(1) + "]"
+		}
 		return "map[" + arg(0) + "]" + arg(1)
 	case "Swift.Set":
 		if len(args) == 1 && !m.goKeyable(args[0], map[string]bool{}) {
@@ -251,6 +257,9 @@ func (m *Module) Recv(t *types.Type) string {
 	case types.Array:
 		return "Slice"
 	case types.Dict:
+		if len(t.Args) == 2 && !m.goKeyable(t.Args[0], map[string]bool{}) {
+			return "HMap"
+		}
 		return "Map"
 	case types.Optional:
 		// A type parameter's Optional is *T, so it maps like a value's, not a reference's.
@@ -273,6 +282,9 @@ func (m *Module) Recv(t *types.Type) string {
 	case "Swift.Array", "Swift.ArraySlice", "Swift.ContiguousArray", "Swift.String.UnicodeScalarView", "Swift.String.UTF8View", "Swift.Substring.UnicodeScalarView":
 		return "Slice"
 	case "Swift.Dictionary":
+		if len(t.Args) == 2 && !m.goKeyable(t.Args[0], map[string]bool{}) {
+			return "HMap"
+		}
 		return "Map"
 	case "Swift.Set":
 		if len(t.Args) == 1 && !m.goKeyable(t.Args[0], map[string]bool{}) {

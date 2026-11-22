@@ -852,7 +852,7 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		} else {
 			e.w("for _, %s := range swiftrt.MapOrdered(%s) {\n", name(p), e.expr(seq))
 		}
-	case "Slice", "Set", "OrderedDictionary", "OrderedSet", "Heap":
+	case "Slice", "Set", "OrderedDictionary", "HMap", "OrderedSet", "Heap":
 		src := e.expr(seq)
 		if st.Kind == types.Named && st.Name == "Swift.DefaultIndices" {
 			src = "swiftrt.Iterate[int](" + src + ")"
@@ -860,8 +860,8 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		switch e.m.Recv(st) {
 		case "Set":
 			src = "swiftrt.SetElements(" + src + ")"
-		case "OrderedDictionary":
-			src = "swiftrt.OrderedDictionaryElements(" + src + ")"
+		case "OrderedDictionary", "HMap":
+			src = "swiftrt." + e.m.Recv(st) + "Elements(" + src + ")"
 		case "OrderedSet", "Heap":
 			src = src + ".Items"
 		}
