@@ -1,24 +1,38 @@
 package swiftrt
 
 import (
-	"os"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
 
-func pipe(t *testing.T) (r, w int32) {
+// rawPipe makes a close-on-exec kernel pipe whose descriptors no *os.File owns, so a test that
+// closes one closes it once.
+func rawPipe(t *testing.T) (r, w int32) {
 	t.Helper()
-	pr, pw, err := os.Pipe()
+	var p [2]int
+	syscall.ForkLock.RLock()
+	err := syscall.Pipe(p[:])
+	if err == nil {
+		syscall.CloseOnExec(p[0])
+		syscall.CloseOnExec(p[1])
+	}
+	syscall.ForkLock.RUnlock()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return int32(p[0]), int32(p[1]) //nolint:gosec // descriptors are small
+}
+
+func pipe(t *testing.T) (r, w int32) {
+	t.Helper()
+	r, w = rawPipe(t)
 	t.Cleanup(func() {
-		_ = pr.Close()
-		_ = pw.Close()
+		_ = syscall.Close(int(r))
+		_ = syscall.Close(int(w))
 	})
-	return int32(pr.Fd()), int32(pw.Fd()) //nolint:gosec // descriptors are small
+	return r, w
 }
 
 func TestCReadWritePollOnKernelDescriptors(t *testing.T) {
@@ -49,8 +63,12 @@ func TestCReadWritePollOnKernelDescriptors(t *testing.T) {
 	}
 }
 
+// TestCFailuresSetErrno closes the write end of a pipe and then reads its end of input. A process
+// forked elsewhere in the test binary holds a copy of every descriptor until it execs, which keeps
+// the write end open for that moment, so the read waits for the hangup before it expects 0.
 func TestCFailuresSetErrno(t *testing.T) {
-	r, w := pipe(t)
+	r, w := rawPipe(t)
+	t.Cleanup(func() { _ = syscall.Close(int(r)) })
 	if err := syscall.SetNonblock(int(r), true); err != nil {
 		t.Fatal(err)
 	}
@@ -59,13 +77,17 @@ func TestCFailuresSetErrno(t *testing.T) {
 		t.Fatalf("read of an empty non-blocking pipe = %d, errno %d", n, CErrno())
 	}
 	if rc := CFClose(w); rc != 0 {
-		t.Fatalf("close = %d", rc)
+		t.Fatalf("close = %d, errno %d", rc, CErrno())
 	}
-	if rc := CFClose(w); rc != -1 || CErrno() != CMacroEBADF {
-		t.Fatalf("second close = %d, errno %d", rc, CErrno())
+	if rc := CFClose(-1); rc != -1 || CErrno() != CMacroEBADF {
+		t.Fatalf("close of an invalid descriptor = %d, errno %d", rc, CErrno())
+	}
+	pfd := CPollfdInitFdEventsRevents(r, int16(CMacroPOLLIN), 0)
+	if n := CFPoll(&pfd, 1, 10_000); n != 1 {
+		t.Fatalf("poll for the hangup = %d, errno %d", n, CErrno())
 	}
 	if n := CFRead(r, Some[any](buf), len(buf)); n != 0 {
-		t.Fatalf("read at end of input = %d", n)
+		t.Fatalf("read at end of input = %d, errno %d", n, CErrno())
 	}
 }
 
