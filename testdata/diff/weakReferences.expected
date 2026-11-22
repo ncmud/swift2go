@@ -1,6 +1,5 @@
-root true
-node temp child true
+cache starts nil: true
+root true node temp child true
 delegate gone: true
 node kept: child
-cache starts nil: true
 child gone: true

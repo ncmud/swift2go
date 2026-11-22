@@ -1,5 +1,7 @@
 // A weak stored property doesn't keep its object alive and reads nil once the object is freed.
 // Go frees it at a collection, so the case allocates until the reference clears or a bound is hit.
+// Each object is made and dropped in a function of its own, so no temporary in the caller's frame
+// keeps it reachable.
 
 protocol WRDelegate: AnyObject {
     var tag: String { get }
@@ -24,9 +26,41 @@ final class WRCache {
     weak var last: WRNode? = nil
 }
 
+final class WRWorld {
+    let root = WRNode(name: "root")
+    let holder = WRHolderBox()
+    let cache = WRCache()
+}
+
+final class WRHolderBox {
+    var value = WRHolder()
+}
+
+@inline(never)
+func wrAttach(_ w: WRWorld) -> String {
+    let child = WRLeaf(name: "child")
+    child.parent = w.root
+    w.root.children.append(child)
+    let temp = WRNode(name: "temp")
+    w.holder.value.delegate = temp
+    w.holder.value.node = child
+    w.cache.last = child
+    let h = w.holder.value
+    return "\(child.parent?.name ?? "nil") \(child.parent === w.root) \(h.delegate?.tag ?? "nil") \(h.node?.name ?? "nil") \(h.node is WRLeaf)"
+}
+
+@inline(never)
+func wrDelegateGone(_ w: WRWorld) -> Bool { w.holder.value.delegate == nil }
+
+@inline(never)
+func wrChildGone(_ w: WRWorld) -> Bool { w.cache.last == nil && w.holder.value.node == nil }
+
+@inline(never)
+func wrNodeName(_ w: WRWorld) -> String { w.holder.value.node?.name ?? "nil" }
+
 func wrChurn(_ isGone: () -> Bool) -> Bool {
     var rounds = 0
-    while !isGone() && rounds < 2000 {
+    while !isGone() && rounds < 4000 {
         let junk = [Int](repeating: rounds, count: 50_000)
         rounds += junk.count > 0 ? 1 : 0
     }
@@ -35,26 +69,12 @@ func wrChurn(_ isGone: () -> Bool) -> Bool {
 
 public func weakReferences() {
     var out: [String] = []
-    let root = WRNode(name: "root")
-    var child: WRNode? = WRLeaf(name: "child")
-    child!.parent = root
-    root.children.append(child!)
-    out.append("\(child!.parent?.name ?? "nil") \(child!.parent === root)")
-
-    var holder = WRHolder()
-    var temp: WRNode? = WRNode(name: "temp")
-    holder.delegate = temp
-    holder.node = child
-    out.append("\(holder.delegate?.tag ?? "nil") \(holder.node?.name ?? "nil") \(holder.node is WRLeaf)")
-    temp = nil
-    out.append("delegate gone: \(wrChurn { holder.delegate == nil })")
-    out.append("node kept: \(holder.node?.name ?? "nil")")
-
-    let cache = WRCache()
-    out.append("cache starts nil: \(cache.last == nil)")
-    cache.last = child
-    root.children.removeAll()
-    child = nil
-    out.append("child gone: \(wrChurn { cache.last == nil && holder.node == nil })")
+    let w = WRWorld()
+    out.append("cache starts nil: \(w.cache.last == nil)")
+    out.append(wrAttach(w))
+    out.append("delegate gone: \(wrChurn { wrDelegateGone(w) })")
+    out.append("node kept: \(wrNodeName(w))")
+    w.root.children.removeAll()
+    out.append("child gone: \(wrChurn { wrChildGone(w) })")
     print(out.joined(separator: "\n"))
 }
