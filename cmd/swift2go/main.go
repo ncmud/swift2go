@@ -31,6 +31,10 @@ func main() {
 	overlays := overlayFlag{}
 	flag.Var(overlays, "overlay", "`Target=dir`: hand-written Go files in dir replace the target's Swift files of the same name (repeatable)")
 	incremental := flag.Bool("incremental", false, "re-dump only the files whose content or dependencies changed since an earlier incremental run, which cached the ASTs under OUT/.cache")
+	swiftSDK := flag.String("swift-sdk", "", "compile for an installed Swift SDK, named by its id or a target triple as for `swift build --swift-sdk`, and build the package's dependencies for it")
+	triple := flag.String("triple", "", "the target triple of the Swift SDK to compile for, when it has more than one")
+	var xcc listFlag
+	flag.Var(&xcc, "Xcc", "pass `flag` to the C compiler that imports C modules, here and in the `swift build` that -swift-sdk runs (repeatable)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: swift2go [flags] dump|transpile|stats <Target> [<TestTarget>]")
 		flag.PrintDefaults()
@@ -40,10 +44,15 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if *buildDir == "" {
-		*buildDir = swiftmod.BuildDir(*pkgDir)
+	dest, err := swiftmod.FindSwiftSDK(*swiftSDK, *triple)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "swift2go:", err)
+		os.Exit(2)
 	}
-	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays, *incremental); err != nil {
+	if *buildDir == "" {
+		*buildDir = swiftmod.BuildDir(*pkgDir, dest)
+	}
+	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays, *incremental, dest, xcc...); err != nil {
 		fmt.Fprintln(os.Stderr, "swift2go:", err)
 		os.Exit(1)
 	}
@@ -63,6 +72,16 @@ func (f mapFlag) Set(v string) error {
 	return nil
 }
 
+// listFlag collects the values of a repeatable flag.
+type listFlag []string
+
+func (f *listFlag) String() string { return strings.Join(*f, " ") }
+
+func (f *listFlag) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
 // overlayFlag collects -overlay Target=dir pairs.
 type overlayFlag map[string]string
 
@@ -77,16 +96,31 @@ func (o overlayFlag) Set(v string) error {
 	return nil
 }
 
-func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag, incremental bool) error {
+func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag, incremental bool, dest swiftmod.Destination, xcc ...string) error {
 	pkgDir = absPath(pkgDir)
-	describe := swiftmod.Describe
+	if !dest.Host() {
+		// A Swift SDK's modules come from a swift.org build of the compiler, which Xcode's compiler
+		// of the same version refuses by its revision unless told otherwise.
+		if err := os.Setenv("SWIFT_IGNORE_SWIFTMODULE_REVISION", "1"); err != nil {
+			return err
+		}
+	}
+	describe := func(dir string) (map[string]swiftmod.Target, error) { return swiftmod.Describe(dir, buildDir) }
 	if incremental {
 		describe = func(dir string) (map[string]swiftmod.Target, error) {
-			return swiftmod.DescribeCached(dir, absPath(filepath.Join(outDir, ".cache", "describe.gob")))
+			return swiftmod.DescribeCached(dir, buildDir, absPath(filepath.Join(outDir, ".cache", "describe.gob")))
 		}
 	}
 	targets, err := describe(pkgDir)
 	if err != nil {
+		return err
+	}
+	// swiftc and swift build spell C compiler flags alike.
+	var ccFlags []string
+	for _, f := range xcc {
+		ccFlags = append(ccFlags, "-Xcc", f)
+	}
+	if err := swiftmod.BuildDependencies(pkgDir, buildDir, dest, targets, names, ccFlags...); err != nil {
 		return err
 	}
 	goModule, err := currentModule()
@@ -102,7 +136,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 	if err != nil {
 		return err
 	}
-	extra := append(append(swiftmod.TestingFlags(), swiftmod.PrebuiltFlags(buildDir)...), cflags...)
+	extra := slices.Concat(dest.Flags(), ccFlags, swiftmod.TestingFlags(dest), swiftmod.PrebuiltFlags(buildDir, dest), cflags)
 	for i, mp := range mappings {
 		if t, ok := targets[mp.Module]; ok && t.ModuleType == "ClangTarget" {
 			continue
@@ -114,11 +148,11 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 		}
 		mappings[i].Requirements = reqs
 	}
-	searchDirs := []string{mods, filepath.Join(buildDir, "out", "Products", "Debug")}
+	searchDirs := []string{mods, swiftmod.ModulesDir(buildDir, dest)}
 	emitted := map[string]bool{}
 	ifaces := map[string]string{}
 	load := func(t swiftmod.Target) ([]ast.File, error) {
-		if err := swiftmod.AddGenerated(&t, buildDir, absPath(filepath.Join(outDir, "derived"))); err != nil {
+		if err := swiftmod.AddGenerated(&t, buildDir, absPath(filepath.Join(outDir, "derived")), dest); err != nil {
 			return nil, err
 		}
 		if err := swiftmod.StaleModule(t, targets, emitted, searchDirs); err != nil {
@@ -181,7 +215,11 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			fmt.Printf("%s: %d files\n", name, len(files))
 			continue
 		}
-		m, err := emit.New(name, files, rtPath)
+		var opts []emit.Option
+		if dest.CorelibsFoundation() {
+			opts = append(opts, emit.CorelibsFoundation())
+		}
+		m, err := emit.New(name, files, rtPath, opts...)
 		if err != nil {
 			fail(name, err)
 			continue

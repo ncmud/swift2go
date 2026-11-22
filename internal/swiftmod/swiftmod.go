@@ -62,25 +62,26 @@ func (t Target) SourcePaths() []string {
 
 // Describe returns the targets of the package rooted at pkgDir and of every package in its
 // dependency graph: local packages and remote checkouts alike. A target of the root package
-// shadows a same-named target of a dependency.
-func Describe(pkgDir string) (map[string]Target, error) {
+// shadows a same-named target of a dependency. Remote dependencies are those checked out in buildDir
+// when it holds checkouts, and otherwise in pkgDir/.build.
+func Describe(pkgDir, buildDir string) (map[string]Target, error) {
 	pkgDir, err := filepath.Abs(pkgDir)
 	if err != nil {
 		return nil, err
 	}
-	_, targets, err := describe(pkgDir)
+	_, targets, err := describe(pkgDir, buildDir)
 	return targets, err
 }
 
 // describe returns the directories of the packages in pkgDir's dependency graph, pkgDir first,
 // and their targets.
-func describe(pkgDir string) ([]string, map[string]Target, error) {
+func describe(pkgDir, buildDir string) ([]string, map[string]Target, error) {
 	scratch, err := os.MkdirTemp("", "swift2go-describe-*")
 	if err != nil {
 		return nil, nil, err
 	}
 	defer os.RemoveAll(scratch)
-	dirs := append([]string{pkgDir}, dependencyDirs(pkgDir, scratch)...)
+	dirs := append([]string{pkgDir}, dependencyDirs(pkgDir, buildDir, scratch)...)
 	subs := make([]map[string]Target, len(dirs))
 	errs := make([]error, len(dirs))
 	var wg sync.WaitGroup
@@ -111,7 +112,7 @@ func describe(pkgDir string) ([]string, map[string]Target, error) {
 
 // dependencyDirs lists the package directories in pkgDir's dependency graph, breadth first,
 // followed by any packages under pkgDir/Packages that the graph does not reach.
-func dependencyDirs(pkgDir, scratch string) []string {
+func dependencyDirs(pkgDir, buildDir, scratch string) []string {
 	seen := map[string]bool{pkgDir: true}
 	var dirs []string
 	add := func(dir string) {
@@ -121,7 +122,10 @@ func dependencyDirs(pkgDir, scratch string) []string {
 		}
 	}
 	args := []string{"package", "--disable-automatic-resolution", "show-dependencies", "--format", "json"}
-	if !exists(filepath.Join(pkgDir, ".build")) {
+	switch {
+	case buildDir != "" && exists(filepath.Join(buildDir, "checkouts")):
+		args = append([]string{"package", "--scratch-path", buildDir}, args[1:]...)
+	case !exists(filepath.Join(pkgDir, ".build")):
 		args = append([]string{"package", "--scratch-path", filepath.Join(scratch, "graph")}, args[1:]...)
 	}
 	cmd := exec.Command("swift", args...)
@@ -229,40 +233,54 @@ func readManifest(pkgDir string, global []string, m map[string]Target) error {
 	return nil
 }
 
-// BuildDir is the SwiftPM build directory holding pkgDir's built dependencies: pkgDir/.build,
+// BuildDir is the SwiftPM build directory holding pkgDir's built dependencies for d: pkgDir/.build,
 // or, for a package checked out under another package's .build/checkouts, that package's build directory.
-func BuildDir(pkgDir string) string {
+func BuildDir(pkgDir string, d Destination) string {
 	pkgDir, _ = filepath.Abs(pkgDir)
 	own := filepath.Join(pkgDir, ".build")
-	if _, err := os.Stat(productsDir(own)); err == nil {
+	if _, err := os.Stat(ProductsDir(own, d)); err == nil {
 		return own
 	}
 	if parent := filepath.Dir(pkgDir); filepath.Base(parent) == "checkouts" {
 		enclosing := filepath.Dir(parent)
-		if _, err := os.Stat(productsDir(enclosing)); err == nil {
+		if _, err := os.Stat(ProductsDir(enclosing, d)); err == nil {
 			return enclosing
 		}
 	}
 	return own
 }
 
-func productsDir(buildDir string) string {
-	return filepath.Join(buildDir, "out", "Products", "Debug")
+// ProductsDir is the directory of buildDir that holds the products of a debug build for d. The
+// host's are laid out by SwiftPM's default build system; another destination's by the native one,
+// which [BuildDependencies] runs.
+func ProductsDir(buildDir string, d Destination) string {
+	if d.Host() {
+		return filepath.Join(buildDir, "out", "Products", "Debug")
+	}
+	return filepath.Join(buildDir, d.Triple, "debug")
+}
+
+// ModulesDir is the directory of buildDir that holds the .swiftmodule files built for d.
+func ModulesDir(buildDir string, d Destination) string {
+	if d.Host() {
+		return ProductsDir(buildDir, d)
+	}
+	return filepath.Join(ProductsDir(buildDir, d), "Modules")
 }
 
 // AddGenerated adds the Swift sources SwiftPM would generate for t to t.Generated: a
 // `Bundle.module` accessor, written to derivedDir, when t has resources, and the outputs of the
 // build-tool plugins t uses, read from buildDir. It fails when plugin outputs are missing or
 // older than a non-Swift file in the target's directory, since `swift build` must regenerate them.
-func AddGenerated(t *Target, buildDir, derivedDir string) error {
+func AddGenerated(t *Target, buildDir, derivedDir string, d Destination) error {
 	if len(t.Resources) > 0 {
-		f, err := writeBundleAccessor(*t, derivedDir)
+		f, err := writeBundleAccessor(*t, derivedDir, d.ResourceBundleSuffix())
 		if err != nil {
 			return err
 		}
 		t.Generated = append(t.Generated, f)
 	}
-	outputs, err := pluginOutputs(*t, buildDir)
+	outputs, err := pluginOutputs(*t, buildDir, ModulesDir(buildDir, d))
 	if err != nil {
 		return err
 	}
@@ -275,7 +293,7 @@ func bundleName(t Target) string {
 	return strings.ToLower(filepath.Base(t.Dir)) + "_" + t.Name
 }
 
-func writeBundleAccessor(t Target, derivedDir string) (string, error) {
+func writeBundleAccessor(t Target, derivedDir, suffix string) (string, error) {
 	dir := filepath.Join(derivedDir, t.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -289,7 +307,7 @@ extension Foundation.Bundle {
         let bundleName = %q
         let candidates = [Bundle.main.resourceURL, Bundle.main.bundleURL]
         for candidate in candidates {
-            let bundlePath = candidate?.appendingPathComponent(bundleName + ".bundle")
+            let bundlePath = candidate?.appendingPathComponent(bundleName + %q)
             if let bundle = bundlePath.flatMap(Bundle.init(url:)) {
                 return bundle
             }
@@ -297,13 +315,14 @@ extension Foundation.Bundle {
         fatalError("unable to find bundle named \(bundleName)")
     }()
 }
-`, bundleName(t))
+`, bundleName(t), suffix)
 	path := filepath.Join(dir, "resource_bundle_accessor.swift")
 	return path, os.WriteFile(path, []byte(src), 0o644)
 }
 
-// pluginOutputs lists the Swift files build-tool plugins generated for t under buildDir.
-func pluginOutputs(t Target, buildDir string) ([]string, error) {
+// pluginOutputs lists the Swift files build-tool plugins generated for t under buildDir, whose
+// built modules are in modulesDir.
+func pluginOutputs(t Target, buildDir, modulesDir string) ([]string, error) {
 	identity := strings.ToLower(filepath.Base(t.Dir))
 	root := filepath.Join(buildDir, "plugins", "outputs", identity, t.Name, "destination")
 	var files []string
@@ -325,7 +344,7 @@ func pluginOutputs(t Target, buildDir string) ([]string, error) {
 		return nil, fmt.Errorf("%s uses build-tool plugins (%s) and %s holds none of their output; run `swift build --target %s` in %s first",
 			t.Name, strings.Join(t.Plugins, ", "), root, t.Name, t.Dir)
 	}
-	if built := modTime(filepath.Join(productsDir(buildDir), t.Name+".swiftmodule")); built.After(newest) {
+	if built := modTime(filepath.Join(modulesDir, t.Name+".swiftmodule")); built.After(newest) {
 		newest = built
 	}
 	targetDir := filepath.Join(t.Dir, t.Path)
@@ -669,21 +688,32 @@ func EmitModule(t Target, dir string, extra ...string) error {
 	return nil
 }
 
-// TestingFlags are the swiftc flags that make the swift-testing module and its macros available.
-func TestingFlags() []string {
+// TestingFlags are the swiftc flags that make the swift-testing module and its macros available
+// when compiling for d. Another destination's SDK must provide the module itself.
+func TestingFlags(d Destination) []string {
 	dev := "/Applications/Xcode.app/Contents/Developer"
-	return []string{
-		"-F", dev + "/Platforms/MacOSX.platform/Developer/Library/Frameworks",
-		"-plugin-path", dev + "/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+	flags := []string{"-plugin-path", dev + "/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing"}
+	if d.Host() {
+		flags = append([]string{"-F", dev + "/Platforms/MacOSX.platform/Developer/Library/Frameworks"}, flags...)
 	}
+	return flags
 }
 
 // PrebuiltFlags points swiftc at third-party modules, generated C module maps and macro plugins
-// that SwiftPM already built under buildDir.
-func PrebuiltFlags(buildDir string) []string {
-	products := productsDir(buildDir)
+// that SwiftPM already built for d under buildDir. Macro plugins run on the host, so a build for
+// another destination holds them among the host's products.
+func PrebuiltFlags(buildDir string, d Destination) []string {
+	products := ProductsDir(buildDir, d)
 	if _, err := os.Stat(products); err != nil {
 		return nil
+	}
+	if !d.Host() {
+		flags := []string{"-I", ModulesDir(buildDir, d)}
+		hosts, _ := filepath.Glob(filepath.Join(buildDir, "*-apple-macosx*", "debug", "Macros-tool"))
+		if len(hosts) > 0 {
+			flags = append(flags, "-load-plugin-executable", hosts[0]+"#Macros")
+		}
+		return flags
 	}
 	maps := generatedMapsDir(buildDir)
 	flags := []string{"-I", products, "-I", maps}

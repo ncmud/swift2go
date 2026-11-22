@@ -62,7 +62,7 @@ public func greeting() -> String {
 	targets := []string{"Core", "App"}
 	transpile := func(dir string, incremental bool) map[string]string {
 		t.Helper()
-		if err := run("transpile", targets, pkgDir, dir, swiftmod.BuildDir(pkgDir), "", mapFlag{}, overlayFlag{}, incremental); err != nil {
+		if err := run("transpile", targets, pkgDir, dir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, incremental, swiftmod.Destination{}); err != nil {
 			t.Fatal(err)
 		}
 		return goFiles(t, dir)

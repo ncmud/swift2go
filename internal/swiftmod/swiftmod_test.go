@@ -89,7 +89,7 @@ func TestAddGeneratedReadsPluginOutputsAndRejectsStaleOnes(t *testing.T) {
 		Resources: []Resource{{Path: filepath.Join(pkg, "Sources/Spec/openapi.yaml")}}}
 	derived := t.TempDir()
 	got := spec
-	if err := AddGenerated(&got, build, derived); err != nil {
+	if err := AddGenerated(&got, build, derived, Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	accessor := filepath.Join(derived, "Spec", "resource_bundle_accessor.swift")
@@ -102,12 +102,12 @@ func TestAddGeneratedReadsPluginOutputsAndRejectsStaleOnes(t *testing.T) {
 
 	write(t, filepath.Join(pkg, "Sources/Spec/openapi.yaml"), "", time.Now())
 	stale := spec
-	if err := AddGenerated(&stale, build, derived); err == nil || !strings.Contains(err.Error(), "swift build --target Spec") {
+	if err := AddGenerated(&stale, build, derived, Destination{}); err == nil || !strings.Contains(err.Error(), "swift build --target Spec") {
 		t.Errorf("AddGenerated with an edited plugin input = %v, want an error naming swift build", err)
 	}
 
 	missing := spec
-	if err := AddGenerated(&missing, filepath.Join(t.TempDir(), ".build"), derived); err == nil {
+	if err := AddGenerated(&missing, filepath.Join(t.TempDir(), ".build"), derived, Destination{}); err == nil {
 		t.Error("AddGenerated without plugin outputs succeeded")
 	}
 }

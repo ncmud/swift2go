@@ -238,7 +238,7 @@ func (m *Module) namedGo(name string, args []*types.Type, generics map[string]st
 	if strings.HasPrefix(name, "Swift.") {
 		return "any /* " + name + " */"
 	}
-	if rest, ok := strings.CutPrefix(name, "__C."); ok && rest != "" && rest[0] >= 'a' && rest[0] <= 'z' && !strings.Contains(rest, ".") {
+	if rest, ok := strings.CutPrefix(name, "__C."); ok && isCStructName(rest) {
 		// C structs (timeval, timespec) are exported Go structs in the runtime.
 		return "swiftrt.C" + capitalize(rest)
 	}
@@ -374,7 +374,7 @@ func (m *Module) Recv(t *types.Type) string {
 	if m.IsOptionSet(t.Name) && !foreignOptionSets[t.Name] {
 		return "OptionSet"
 	}
-	if rest, ok := strings.CutPrefix(t.Name, "__C."); ok && rest != "" && rest[0] >= 'a' && rest[0] <= 'z' && !strings.Contains(rest, ".") {
+	if rest, ok := strings.CutPrefix(t.Name, "__C."); ok && isCStructName(rest) {
 		return "C" + capitalize(rest)
 	}
 	if strings.HasSuffix(t.Name, ".AllCases") {
@@ -545,4 +545,11 @@ func (m *Module) declaresMember(q, name string) bool {
 
 func isGenericParamType(t *types.Type) bool {
 	return t.Kind == types.Generic || t.Kind == types.Named && genericParamName.MatchString(t.Name)
+}
+
+// isCStructName reports whether an imported C type name is a C struct's or typedef's, which start
+// lowercase after any underscores (timeval, __sigset_t), rather than an Objective-C class's.
+func isCStructName(name string) bool {
+	rest := strings.TrimLeft(name, "_")
+	return rest != "" && rest[0] >= 'a' && rest[0] <= 'z' && !strings.Contains(name, ".")
 }
