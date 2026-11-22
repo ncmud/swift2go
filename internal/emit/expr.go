@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -664,6 +665,9 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		case info.Static && info.ProtoExt:
 			return pfx + info.GoName + "(" + e.metaReceiver(base) + ")"
 		case info.Static:
+			if info.Computed && info.OwnerKind == "foreign" {
+				return pfx + info.GoName + e.foreignStaticTypeArgs(info, base) + "()"
+			}
 			if info.Computed || info.Lazy {
 				return pfx + info.GoName + "()"
 			}
@@ -2896,4 +2900,44 @@ func (e *fileEmitter) paramConversion(n ast.Node) (string, bool) {
 		body = "return " + body
 	}
 	return "func(f func(" + fg + ") " + res + ") func(" + tg + ") " + res + " { return func(v " + tg + ") " + res + " { " + body + " } }(" + e.expr(sub) + ")", true
+}
+
+// foreignStaticTypeArgs is "[X]" for a static computed property of a generic foreign type read as
+// `Optional<X>.p`: Go cannot infer type parameters of a function without arguments.
+func (e *fileEmitter) foreignStaticTypeArgs(info *DeclInfo, base ast.Node) string {
+	var getter ast.Node
+	for _, a := range info.Node.List("accessors") {
+		if a.Bool("get") || a.Str("accessor_kind") == "get" {
+			getter = a
+		}
+	}
+	for base != nil && (base.Kind() == "load_expr" || base.Kind() == "paren_expr" || base.Kind() == "dot_self_expr") {
+		base = base.Child("sub_expr")
+	}
+	if getter == nil || base == nil {
+		return ""
+	}
+	t := e.m.typeOf(base.Type())
+	if t == nil || t.Kind != types.Meta || len(t.Args) != 1 {
+		return ""
+	}
+	params := getter.Child("generic_signature").Strings("generic_params")
+	if len(params) == 0 || len(params) != len(t.Args[0].Args) {
+		return ""
+	}
+	saveG, saveTP, saveTB := e.generics, e.typeParams, e.typeBounds
+	e.generics = nil
+	g := e.genericScope(getter)
+	declared := e.typeParams
+	e.generics, e.typeParams, e.typeBounds = saveG, saveTP, saveTB
+	args := make([]string, len(declared))
+	for i, p := range params {
+		if j := slices.Index(declared, g[e.m.demangle(p)]); j >= 0 {
+			args[j] = e.m.GoType(t.Args[0].Args[i], e.generics)
+		}
+	}
+	if len(args) == 0 || slices.Contains(args, "") {
+		return ""
+	}
+	return "[" + strings.Join(args, ", ") + "]"
 }

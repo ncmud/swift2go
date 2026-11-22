@@ -1021,6 +1021,14 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 	}
 	res := e.m.GoType(e.m.typeOf(n.Str("interface_type")), e.generics)
 	switch {
+	case self != nil && self.Kind == "foreign" && info.Static && !info.ProtoExt:
+		// A static on a generic foreign type (`extension Optional where Wrapped: P`) takes the
+		// type's parameters as its own, so `Wrapped.req` reaches P's statics through them.
+		saveG := e.generics
+		e.generics = e.genericScope(getter)
+		defer func() { e.generics = saveG }()
+		res = e.m.GoType(e.m.typeOf(n.Str("interface_type")), e.generics)
+		e.w("func %s%s() %s ", info.GoName, e.typeParamList(), res)
 	case self == nil || info.Static && !info.ProtoExt:
 		e.w("func %s%s() %s ", info.GoName, e.selfTypeDecl(self), res)
 	case self.Kind == "foreign" || info.FreeSelf():
