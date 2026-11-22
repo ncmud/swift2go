@@ -78,6 +78,10 @@ func HMapRemoveValueForKey[K, V any](d *HMap[K, V], k K) *V {
 // HMapRemoveAll is `removeAll()`.
 func HMapRemoveAll[K, V any](d *HMap[K, V]) { d.M = nil }
 
+// HMapRemoveAllKeepingCapacity is `Dictionary.removeAll(keepingCapacity:)`. The capacity hint has no
+// effect, and the entries are dropped rather than cleared in place so copies keep theirs.
+func HMapRemoveAllKeepingCapacity[K, V any](d *HMap[K, V], _ bool) { d.M = nil }
+
 // HMapCount is `count`.
 func HMapCount[K, V any](d HMap[K, V]) int { return len(d.M) }
 
