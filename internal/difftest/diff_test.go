@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,10 @@ func TestDiff(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(gomod, "go.sum"), sum, 0o644))
 	tool := filepath.Join(work, "swift2go")
 	run(t, root, "go", "build", "-o", tool, "./cmd/swift2go")
-	run(t, gomod, tool, "-pkg", pkg, "-out", "out", "transpile", "DiffBase", "Cases")
+	report := run(t, gomod, tool, "-pkg", pkg, "-out", "out", "transpile", "DiffBase", "Cases")
+	if unsupported := regexp.MustCompile(`(?m)^\w+: [1-9]\d* unsupported$`); unsupported.Match(report) {
+		t.Errorf("the cases use constructs swift2go reports as unsupported:\n%s", report)
+	}
 
 	var mainGo strings.Builder
 	mainGo.WriteString("package main\n\nimport (\n\t\"os\"\n\n\tcases \"difftest/out/cases\"\n)\n\nvar all = map[string]func(){\n")
@@ -197,13 +201,15 @@ func lineDiff(want, got string) string {
 	return b.String()
 }
 
-func run(t *testing.T, dir, name string, args ...string) {
+func run(t *testing.T, dir, name string, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
 	}
+	return out
 }
 
 func must(t *testing.T, err error) {

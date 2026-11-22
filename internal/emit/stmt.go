@@ -1592,6 +1592,7 @@ func (e *fileEmitter) foreignPayloadCase(p ast.Node, st *types.Type) (string, bo
 func (e *fileEmitter) assign(n ast.Node) {
 	dest := n.Child("dest")
 	src := n.Child("src")
+	defer e.assignSliceBase(dest, src)()
 	if dest.Kind() == "discard_assignment_expr" {
 		e.w("_ = %s\n", e.expr(src))
 		return
