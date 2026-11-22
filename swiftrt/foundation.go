@@ -4,9 +4,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf16"
 	"uuid"
 )
 
@@ -450,40 +454,189 @@ func DurationMillisecondsInt(ms int) Duration { return Duration(int64(ms) * 1e6)
 // DurationMilliseconds is `Duration.milliseconds(_:)`.
 func DurationMilliseconds[T Integer](ms T) Duration { return Duration(int64(ms) * 1e6) }
 
-// StringInitFormatSlice is Foundation `String(format:_:)`, translating %@ and %ld to Go verbs.
+// StringInitFormatSlice is Foundation `String(format:_:)`.
 func StringInitFormatSlice(format string, args []any) string {
-	r := strings.NewReplacer("%@", "%v", "%ld", "%d", "%lld", "%d", "%lu", "%d", "%llu", "%d", "%li", "%d")
-	return fmt.Sprintf(r.Replace(format), args...)
-}
-
-// StringPaddingToLengthWithPadStartingAt is Foundation `padding(toLength:withPad:startingAt:)`.
-func StringPaddingToLengthWithPadStartingAt(s string, n int, pad string, start int) string {
-	cs := StringChars(s)
-	if len(cs) >= n {
-		return strings.Join(cs[:n], "")
-	}
-	ps := StringChars(pad)
 	var b strings.Builder
-	b.WriteString(s)
-	for i := 0; len(cs)+i < n; i++ {
-		b.WriteString(ps[(start+i)%len(ps)])
+	next := 0
+	arg := func(i int) any {
+		if i < 0 || i >= len(args) {
+			return nil
+		}
+		return args[i]
+	}
+	for i := 0; i < len(format); i++ {
+		c := format[i]
+		if c != '%' {
+			b.WriteByte(c)
+			continue
+		}
+		spec, verb, n := parseFormatSpec(format[i+1:])
+		i += n
+		switch verb {
+		case 0:
+			b.WriteString(format[i-n : i+1])
+			continue
+		case '%':
+			b.WriteByte('%')
+			continue
+		}
+		if spec.position > 0 {
+			next = spec.position - 1
+		}
+		if spec.widthArg {
+			if w, ok := arg(next).(int); ok {
+				spec.width = strconv.Itoa(w)
+			}
+			next++
+		}
+		if spec.precArg {
+			if p, ok := arg(next).(int); ok {
+				spec.prec = "." + strconv.Itoa(p)
+			}
+			next++
+		}
+		b.WriteString(formatOne(spec, verb, arg(next)))
+		next++
 	}
 	return b.String()
 }
 
-// StringCapitalized is Foundation `capitalized`.
-func StringCapitalized(s string) string {
-	words := strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' })
-	_ = words
-	var b strings.Builder
-	up := true
-	for _, r := range s {
-		if up {
-			b.WriteString(strings.ToUpper(string(r)))
-		} else {
-			b.WriteString(strings.ToLower(string(r)))
+type formatSpec struct {
+	position          int
+	flags, width      string
+	prec, length      string
+	widthArg, precArg bool
+}
+
+// parseFormatSpec reads one conversion after its '%': the spec, the conversion character (0 if
+// there is none), and the number of bytes read.
+func parseFormatSpec(f string) (formatSpec, byte, int) {
+	var spec formatSpec
+	i := 0
+	digits := func() string {
+		j := i
+		for i < len(f) && f[i] >= '0' && f[i] <= '9' {
+			i++
 		}
-		up = r == ' ' || r == '\t' || r == '\n' || r == '-'
+		return f[j:i]
+	}
+	if d := digits(); d != "" && i < len(f) && f[i] == '$' {
+		spec.position, _ = strconv.Atoi(d)
+		i++
+	} else {
+		i -= len(d)
+	}
+	for i < len(f) && strings.IndexByte("-+ #0'", f[i]) >= 0 {
+		if f[i] != '\'' {
+			spec.flags += string(f[i])
+		}
+		i++
+	}
+	if i < len(f) && f[i] == '*' {
+		spec.widthArg = true
+		i++
+	} else {
+		spec.width = digits()
+	}
+	if i < len(f) && f[i] == '.' {
+		i++
+		if i < len(f) && f[i] == '*' {
+			spec.precArg = true
+			i++
+		} else {
+			spec.prec = "." + digits()
+		}
+	}
+	for i < len(f) && strings.IndexByte("hlqLzjt", f[i]) >= 0 {
+		spec.length += string(f[i])
+		i++
+	}
+	if i >= len(f) {
+		return spec, 0, i
+	}
+	return spec, f[i], i + 1
+}
+
+// formatOne formats one argument as Foundation does for the conversion verb.
+func formatOne(spec formatSpec, verb byte, v any) string {
+	pre := "%" + spec.flags + spec.width + spec.prec
+	switch verb {
+	case '@':
+		// Foundation ignores the width and precision of %@.
+		return Str(v)
+	case 'd', 'i':
+		return fmt.Sprintf(pre+"d", v)
+	case 'u', 'x', 'X', 'o':
+		if verb == 'u' {
+			verb = 'd'
+		}
+		if n, ok := asInt64(v); ok && n < 0 {
+			if spec.length == "" || spec.length == "h" || spec.length == "hh" {
+				return fmt.Sprintf(pre+string(verb), uint32(n))
+			}
+			return fmt.Sprintf(pre+string(verb), uint64(n))
+		}
+		return fmt.Sprintf(pre+string(verb), v)
+	case 'g', 'G':
+		if spec.prec == "" {
+			pre += ".6"
+		}
+		return fmt.Sprintf(pre+string(verb), v)
+	case 'c', 'C':
+		if n, ok := asInt64(v); ok {
+			return string(rune(n))
+		}
+		return Str(v)
+	case 's', 'S':
+		return fmt.Sprintf(pre+"s", Str(v))
+	}
+	return fmt.Sprintf(pre+string(verb), v)
+}
+
+func asInt64(v any) (int64, bool) {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return rv.Int(), true
+	}
+	return 0, false
+}
+
+// StringPaddingToLengthWithPadStartingAt is Foundation `padding(toLength:withPad:startingAt:)`,
+// which counts UTF-16 code units.
+func StringPaddingToLengthWithPadStartingAt(s string, n int, pad string, start int) string {
+	units := utf16.Encode([]rune(s))
+	if len(units) >= n {
+		return string(utf16.Decode(units[:n]))
+	}
+	ps := utf16.Encode([]rune(pad))
+	for i := 0; len(units) < n; i++ {
+		units = append(units, ps[(start+i)%len(ps)])
+	}
+	return string(utf16.Decode(units))
+}
+
+// StringCapitalized is Foundation `capitalized`: each cased letter that starts a word is
+// titlecased and the rest are lowercased. Marks, format characters, modifier letters and symbols,
+// and apostrophes leave the word going; any other character ends it.
+func StringCapitalized(s string) string {
+	var b strings.Builder
+	inWord := false
+	for _, r := range s {
+		switch {
+		case unicode.In(r, unicode.Lu, unicode.Ll, unicode.Lt):
+			if inWord {
+				b.WriteString(mapRune(r, lowerSpecial, unicode.ToLower))
+			} else {
+				b.WriteString(mapRune(r, titleSpecial, unicode.ToTitle))
+			}
+			inWord = true
+		case r == '\'' || r == '’' || unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk):
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+			inWord = false
+		}
 	}
 	return b.String()
 }
