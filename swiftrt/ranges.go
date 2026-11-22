@@ -20,6 +20,22 @@ type PartialRangeUpTo[T Ordered] struct{ Hi T }
 // PartialRangeThrough is `...hi`.
 type PartialRangeThrough[T Ordered] struct{ Hi T }
 
+// NewRange is Swift's `lo..<hi`, which traps when hi is below lo.
+func NewRange[T Ordered](lo, hi T) Range[T] {
+	if hi < lo {
+		Trap("Range requires lowerBound <= upperBound")
+	}
+	return Range[T]{lo, hi}
+}
+
+// NewClosedRange is Swift's `lo...hi`, which traps when hi is below lo.
+func NewClosedRange[T Ordered](lo, hi T) ClosedRange[T] {
+	if hi < lo {
+		Trap("Range requires lowerBound <= upperBound")
+	}
+	return ClosedRange[T]{lo, hi}
+}
+
 func (r Range[T]) Contains(v T) bool               { return r.Lo <= v && v < r.Hi }
 func (r ClosedRange[T]) Contains(v T) bool         { return r.Lo <= v && v <= r.Hi }
 func (r PartialRangeFrom[T]) Contains(v T) bool    { return r.Lo <= v }

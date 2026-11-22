@@ -2,11 +2,15 @@
 //
 // Each testdata/diff/<name>.swift declares `public func <name>()`. The expected output, recorded
 // from Swift with `go test ./internal/difftest -update`, is testdata/diff/<name>.expected. The test
-// transpiles every case into one Go package and runs each case's function as its own process.
+// transpiles every case into one Go package and runs each case's function as its own process. A case
+// that traps records what it printed before the trap, then a line "TRAP"; the trap's own message
+// differs between the languages and is not compared.
 package difftest
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 )
 
@@ -83,7 +88,7 @@ func TestDiff(t *testing.T) {
 			if err != nil {
 				t.Fatalf("no expected output; run go test ./internal/difftest -update: %v", err)
 			}
-			got, _ := exec.Command(bin, n).CombinedOutput()
+			got, _ := caseOutput(bin, n)
 			if !bytes.Equal(got, want) {
 				t.Errorf("output differs from Swift\n%s", lineDiff(string(want), string(got)))
 			}
@@ -130,12 +135,31 @@ func record(t *testing.T, pkg, root string, names []string) {
 	run(t, pkg, "swift", "build")
 	bin := filepath.Join(pkg, ".build", "debug", "Runner")
 	for _, n := range names {
-		out, err := exec.Command(bin, n).CombinedOutput()
+		out, err := caseOutput(bin, n)
 		if err != nil {
 			t.Fatalf("Swift case %s failed: %v\n%s", n, err, out)
 		}
 		must(t, os.WriteFile(filepath.Join(root, "testdata", "diff", n+".expected"), out, 0o644))
 	}
+}
+
+// caseOutput runs one case and returns its standard output followed by its standard error. A case
+// that exits on a signal or with a nonzero status trapped: it returns the standard output followed
+// by "TRAP".
+func caseOutput(bin, name string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, bin, name)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return stdout.Bytes(), ctx.Err()
+	}
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
+		return append(stdout.Bytes(), "TRAP\n"...), nil
+	}
+	return append(stdout.Bytes(), stderr.Bytes()...), err
 }
 
 func exported(name string) string {

@@ -2386,10 +2386,12 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		return "func() struct{} { " + s + "; return struct{}{} }()"
 	case "&&", "||":
 		return e.expr(l) + " " + op + " " + e.expr(r)
-	case "..<":
-		return "(swiftrt.Range[" + e.m.GoType(lt, e.generics) + "]{Lo: " + e.expr(l) + ", Hi: " + e.expr(r) + "})"
-	case "...":
-		return "(swiftrt.ClosedRange[" + e.m.GoType(lt, e.generics) + "]{Lo: " + e.expr(l) + ", Hi: " + e.expr(r) + "})"
+	case "..<", "...":
+		typ := map[string]string{"..<": "Range", "...": "ClosedRange"}[op] + "[" + e.m.GoType(lt, e.generics) + "]"
+		if lo, hi, ok := integerLiterals(l, r); ok && lo <= hi {
+			return "(swiftrt." + typ + "{Lo: " + e.expr(l) + ", Hi: " + e.expr(r) + "})"
+		}
+		return "swiftrt.New" + typ + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 	case "??":
 		return e.coalesce(n, lt, l, r)
 	case "~=":
@@ -2466,7 +2468,12 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
 		return e.floatOperands(lt, e.expr(l), e.expr(r), op)
-	case "&", "|", "^", "<<", ">>":
+	case "<<", ">>":
+		if lt.Kind == types.Named && isIntegerName(lt.Name) && !isNonNegativeLiteral(r) {
+			return "swiftrt." + map[string]string{"<<": "Shl", ">>": "Shr"}[op] + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
+		}
+		return e.expr(l) + " " + op + " " + e.expr(r)
+	case "&", "|", "^":
 		return e.expr(l) + " " + op + " " + e.expr(r)
 	case "&+", "&-", "&*":
 		return e.expr(l) + " " + op[1:] + " " + e.expr(r)
@@ -2586,6 +2593,9 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 				return "swiftrt." + fn + e.intTypeArg(lt) + "(" + cur + ", " + rs + ")"
 			}
 		}
+		if (base == "<<" || base == ">>") && lt.Kind == types.Named && isIntegerName(lt.Name) && !isNonNegativeLiteral(as[1].node) {
+			return "swiftrt." + map[string]string{"<<": "Shl", ">>": "Shr"}[base] + e.intTypeArg(lt) + "(" + cur + ", " + rs + ")"
+		}
 		if base == "+" && e.m.Recv(lt) == "Slice" {
 			return "append(" + cur + ", " + rs + "...)"
 		}
@@ -2617,6 +2627,30 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 	return lv + " " + op + " " + rs, true
 }
 
+// integerLiterals returns the values of two integer literals.
+func integerLiterals(a, b ast.Node) (x, y int64, ok bool) {
+	parse := func(n ast.Node) (int64, bool) {
+		n = stripConv(n)
+		if n.Kind() != "integer_literal_expr" {
+			return 0, false
+		}
+		v, err := strconv.ParseInt(strings.ReplaceAll(n.Str("value"), "_", ""), 0, 64)
+		if n.Bool("negative") {
+			v = -v
+		}
+		return v, err == nil
+	}
+	x, ok1 := parse(a)
+	y, ok2 := parse(b)
+	return x, y, ok1 && ok2
+}
+
+// isNonNegativeLiteral reports whether n is an integer literal Go can use as a shift count as is.
+func isNonNegativeLiteral(n ast.Node) bool {
+	n = stripConv(n)
+	return n.Kind() == "integer_literal_expr" && !n.Bool("negative") && !strings.HasPrefix(n.Str("value"), "-")
+}
+
 func (e *fileEmitter) prefix(n ast.Node) string {
 	d := e.opDecl(n)
 	op := d.Str("base_name")
@@ -2640,6 +2674,9 @@ func (e *fileEmitter) prefix(n ast.Node) string {
 	case "-":
 		if e.exprGoType(as[0].node) == "swiftrt.Int128" {
 			return "swiftrt.Int128Neg(" + x + ")"
+		}
+		if t := e.m.typeOf(as[0].node.Type()); t != nil && t.Kind == types.Named && isIntegerName(t.Name) && stripConv(as[0].node).Kind() != "integer_literal_expr" {
+			return "swiftrt.Neg(" + x + ")"
 		}
 		return "-" + x
 	case "~":

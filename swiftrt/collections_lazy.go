@@ -290,6 +290,9 @@ func Zip2SequenceMap[A, B, U any](xs []struct {
 
 // StrideFromThroughBy is `stride(from:through:by:)`.
 func StrideFromThroughBy[T Number](from, through, by T) []T {
+	if by == 0 {
+		Trap("Stride size must not be zero")
+	}
 	var out []T
 	if by > 0 {
 		for v := from; v <= through; v += by {
@@ -305,6 +308,9 @@ func StrideFromThroughBy[T Number](from, through, by T) []T {
 
 // StrideFromToBy is `stride(from:to:by:)`.
 func StrideFromToBy[T Number](from, to, by T) []T {
+	if by == 0 {
+		Trap("Stride size must not be zero")
+	}
 	var out []T
 	if by > 0 {
 		for v := from; v < to; v += by {

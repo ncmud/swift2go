@@ -844,7 +844,13 @@ func (e *fileEmitter) forEach(n ast.Node) {
 			op = "<="
 		}
 		e.w("{\n%s := %s\n", r, e.expr(seq))
-		e.w("for %s := %s.Lo; %s %s %s.Hi; %s++ {\n", v, r, v, op, r, v)
+		if isVarPattern(p) && v != "_" {
+			// The body may change a `for var` binding; the iteration must not see it.
+			i := e.newTmp("i")
+			e.w("for %s := %s.Lo; %s %s %s.Hi; %s++ {\n%s := %s\n", i, r, i, op, r, i, v, i)
+		} else {
+			e.w("for %s := %s.Lo; %s %s %s.Hi; %s++ {\n", v, r, v, op, r, v)
+		}
 		e.w("_ = %s\n", v)
 		body()
 		e.w("}\n}\n")
@@ -908,6 +914,14 @@ func (e *fileEmitter) forEach(n ast.Node) {
 	}
 	body()
 	e.w("}\n")
+}
+
+// isVarPattern reports whether p binds with `var`.
+func isVarPattern(p ast.Node) bool {
+	for p != nil && (p.Kind() == "pattern_typed" || p.Kind() == "pattern") {
+		p = p.Child("sub_pattern")
+	}
+	return p != nil && p.Kind() == "pattern_binding" && p.Str("kind") == "var"
 }
 
 func unwrapPattern(p ast.Node) ast.Node {
