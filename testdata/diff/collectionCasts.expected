@@ -19,9 +19,12 @@ setSquare: setAnyHashable=1 setSquare=1
 intDict: anyHashable=1
 string: none
 int: none
-arrKeyed: arrKeyedAny=2 arrKeyedInt=[[1], [2, 3]]
-arrKeyedAny: arrKeyedAny=1 arrKeyedString=1
-setOfArr: setOfArr=2
+arrKeyed: anyHashableInt=2 at23=2 atKey=-1 anyHashableAny=2 arrKeyedAny=2 arrKeyedInt=[[1], [2, 3]]
+arrKeyedAny: anyHashableAny=1 arrKeyedAny=1 arrKeyedString=1
+setOfArr: setAnyHashable=2 has12=false has9=false setOfArr=2
+setOfArr12: setAnyHashable=2 has12=true has9=false setOfArr=2
+structKeyed: anyHashableInt=2 at23=-1 atKey=7 anyHashableAny=2
 arrInt: none
 forced 9
 forcedArr 6
+wide 2 true mixed 3 arr2 int

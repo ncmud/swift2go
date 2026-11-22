@@ -593,6 +593,10 @@ func (e *fileEmitter) upcast(n ast.Node) string {
 		// Set<Concrete> as Set<AnyHashable>.
 		return "swiftrt.SetUpcast[" + dst + "](" + e.expr(sub) + ")"
 	}
+	if src != dst && (strings.HasPrefix(dst, "swiftrt.HSet[") || strings.HasPrefix(dst, "swiftrt.HMap[")) {
+		// Set<[Int]> as Set<AnyHashable>, or [K: V] as [AnyHashable: V]: element by element.
+		return "swiftrt.MustAs[" + dst + "](" + e.expr(sub) + ")"
+	}
 	if st, dt := e.m.typeOf(sub.Type()), e.m.typeOf(n.Type()); src != dst && e.m.Recv(st) == "Map" && e.m.Recv(dt) == "Map" && len(st.Args) == 2 && len(dt.Args) == 2 && e.m.GoType(st.Args[0], e.generics) == e.m.GoType(dt.Args[0], e.generics) {
 		// [K: Concrete] as [K: Any]: convert value by value.
 		sv, dv := e.m.GoType(st.Args[1], e.generics), e.m.GoType(dt.Args[1], e.generics)
@@ -2661,6 +2665,10 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 				return "swiftrt.DecodeAs[" + e.m.GoType(inner, e.generics) + "](" + ss[0] + ")"
 			}
 		}
+	}
+	if rt := e.m.typeOf(n.Type()); rt != nil && rt.Kind == types.Named && rt.Name == "Swift.AnyHashable" && len(kept) == 1 && kept[0].label == "" {
+		// AnyHashable(x) is x itself, held as any.
+		return "any(" + ss[0] + ")"
 	}
 	recv := e.m.Recv(e.m.typeOf(n.Type()))
 	if recv == "Map" && len(kept) == 2 && len(ss) == 2 && kept[0].label == "grouping" && e.m.Recv(e.m.typeOf(kept[0].node.Type())) == "Map" {

@@ -560,6 +560,9 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 		switch t.Name {
 		case "Swift.Array", "Swift.Set", "Swift.Dictionary", "Swift.ArraySlice", "Swift.Substring":
 			return false
+		case "Swift.AnyHashable":
+			// An AnyHashable can hold an array, which cannot key a Go map.
+			return false
 		}
 		if m.declaresMember(t.Name, "hash") {
 			// A custom hash(into:) goes with a custom ==, which Go map keys would not use.
