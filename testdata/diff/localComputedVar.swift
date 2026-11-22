@@ -16,4 +16,7 @@ public func localComputedVar() {
     print("outer", evens)
     let doubled = { (k: Int) in evens.map { $0 * k } }
     print(doubled(3))
+    var loads = 0
+    lazy var cached: Int = { loads += 1; return base.count }()
+    print(cached, cached, loads)
 }
