@@ -88,6 +88,9 @@ const (
 	CMacroTCP_CORK        int32 = 3                            //nolint:revive // C name
 )
 
+// CEaIPPROTO_IPIPPROTO_TCP is glibc's `IPPROTO_TCP`, a case of an anonymous C enum that Swift imports as Int.
+const CEaIPPROTO_IPIPPROTO_TCP = 6 //nolint:revive // C name
+
 // CFSetsockopt is C `setsockopt(_:_:_:_:_:)` with an Int32 option value. A descriptor that a
 // [DescriptorIO] owns is not a kernel socket of its own, so the option is accepted and dropped.
 func CFSetsockopt(fd, level, name int32, value any, _ uint32) int32 { //nolint:revive // C name
