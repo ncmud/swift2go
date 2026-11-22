@@ -3,6 +3,7 @@ package swiftrt
 import (
 	"bytes"
 	"fmt"
+	"hash/maphash"
 	"math"
 	"reflect"
 	"strconv"
@@ -749,3 +750,192 @@ func CFLog10(x float64) float64 { return math.Log10(x) }
 
 // CFSqrt is C `sqrt`.
 func CFSqrt(x float64) float64 { return math.Sqrt(x) }
+
+// splitWhere is Swift `split(maxSplits:omittingEmptySubsequences:whereSeparator:)` over the
+// Characters of s: after maxSplits splits the rest of s is one last piece.
+func splitWhere(s Substring, maxSplits int, omit bool, f func(Character) bool) []Substring {
+	if maxSplits < 0 {
+		Trap("Must take zero or more splits")
+	}
+	out := []Substring{}
+	start := s.Lo
+	for i := s.Lo; i < s.Hi; {
+		n := graphemeLen(s.Base[i:s.Hi])
+		if len(out) < maxSplits && f(s.Base[i:i+n]) {
+			if !(omit && start == i) {
+				out = append(out, Substring{s.Base, start, i})
+			}
+			start = i + n
+		}
+		i += n
+	}
+	if !(omit && start == s.Hi) {
+		out = append(out, Substring{s.Base, start, s.Hi})
+	}
+	return out
+}
+
+// SubstringSplitWhereSeparator is Swift `Substring.split(whereSeparator:)`.
+func SubstringSplitWhereSeparator(s Substring, f func(Character) bool) []Substring {
+	return splitWhere(s, IntMax, true, f)
+}
+
+// StringSplitMaxSplitsWhereSeparator is Swift `String.split(maxSplits:whereSeparator:)`.
+func StringSplitMaxSplitsWhereSeparator(s string, maxSplits int, f func(Character) bool) []Substring {
+	return splitWhere(sub(s), maxSplits, true, f)
+}
+
+// StringSplitOmittingEmptySubsequencesWhereSeparator is Swift
+// `String.split(omittingEmptySubsequences:whereSeparator:)`.
+func StringSplitOmittingEmptySubsequencesWhereSeparator(s string, omit bool, f func(Character) bool) []Substring {
+	return splitWhere(sub(s), IntMax, omit, f)
+}
+
+// StringSplitMaxSplitsOmittingEmptySubsequencesWhereSeparator is Swift
+// `String.split(maxSplits:omittingEmptySubsequences:whereSeparator:)`.
+func StringSplitMaxSplitsOmittingEmptySubsequencesWhereSeparator(s string, maxSplits int, omit bool, f func(Character) bool) []Substring {
+	return splitWhere(sub(s), maxSplits, omit, f)
+}
+
+// SubstringSplitSeparatorMaxSplits is Swift `Substring.split(separator:maxSplits:)`.
+func SubstringSplitSeparatorMaxSplits(s Substring, sep Character, maxSplits int) []Substring {
+	if maxSplits < 0 {
+		Trap("Must take zero or more splits")
+	}
+	return SubstringSplitSeparatorMaxSplitsOmittingEmptySubsequences(s, sep, maxSplits, true)
+}
+
+// SubstringComponentsSeparatedBy is Foundation `components(separatedBy:)` on a Substring.
+func SubstringComponentsSeparatedBy[S ~string | CharacterSet](s Substring, sep S) []string {
+	return StringComponentsSeparatedBy(s.String(), sep)
+}
+
+// StringRemoveFirst is Swift `String.removeFirst()`: it removes and returns the first Character,
+// trapping on an empty string.
+func StringRemoveFirst(s *string) Character {
+	if *s == "" {
+		Trap("Can't remove first element from an empty collection")
+	}
+	n := graphemeLen(*s)
+	c := (*s)[:n]
+	*s = (*s)[n:]
+	return c
+}
+
+// StringRemoveFirstInt is Swift `String.removeFirst(_:)`: it removes the first n Characters,
+// trapping when n is negative or more than the string holds.
+func StringRemoveFirstInt(s *string, n int) {
+	if n < 0 {
+		Trap("Number of elements to remove should be non-negative")
+	}
+	i := 0
+	for range n {
+		if i >= len(*s) {
+			Trap("Can't remove more items from a collection than it has")
+		}
+		i += graphemeLen((*s)[i:])
+	}
+	*s = (*s)[i:]
+}
+
+// StringRemoveLastInt is Swift `String.removeLast(_:)`: it removes the last n Characters, trapping
+// when n is negative or more than the string holds.
+func StringRemoveLastInt(s *string, n int) {
+	if n < 0 {
+		Trap("Number of elements to remove should be non-negative")
+	}
+	if n == 0 {
+		return
+	}
+	chars := StringChars(*s)
+	if n > len(chars) {
+		Trap("Can't remove more items from a collection than it contains")
+	}
+	end := len(*s)
+	for _, c := range chars[len(chars)-n:] {
+		end -= len(c)
+	}
+	*s = (*s)[:end]
+}
+
+// StringInsertContentsOfAt is Swift `String.insert(contentsOf:at:)`.
+func StringInsertContentsOfAt(s *string, inserted string, at int) {
+	if at < 0 || at > len(*s) {
+		Trap("String index is out of bounds")
+	}
+	*s = (*s)[:at] + inserted + (*s)[at:]
+}
+
+// StringLastIndexWhere is Swift `String.lastIndex(where:)`.
+func StringLastIndexWhere(s string, f func(Character) bool) *int {
+	for end := len(s); end > 0; {
+		c, start := lastGrapheme(s[:end])
+		if f(c) {
+			return &start
+		}
+		end = start
+	}
+	return nil
+}
+
+// StringFirstRangeOf is Swift `Collection.firstRange(of:)` on a String: the range of the first run
+// of Characters equal to needle's, comparing each by canonical equivalence. An empty needle
+// matches at the start.
+func StringFirstRangeOf(s, needle string) *Range[int] {
+	want := StringChars(needle)
+	chars := StringChars(s)
+	for i, at := 0, 0; i+len(want) <= len(chars); i++ {
+		if charsEquivalent(chars[i:i+len(want)], want) {
+			end := at
+			for _, c := range chars[i : i+len(want)] {
+				end += len(c)
+			}
+			return &Range[int]{at, end}
+		}
+		at += len(chars[i])
+	}
+	return nil
+}
+
+// StringReplacingOccurrencesOfWithRange is Foundation
+// `replacingOccurrences(of:with:options:range:)` with no options: it replaces the occurrences
+// that lie inside the range, or everywhere when the range is nil.
+func StringReplacingOccurrencesOfWithRange(s, target, repl string, r *Range[int]) string {
+	if r == nil {
+		return StringReplacingOccurrencesOfWith(s, target, repl)
+	}
+	if r.Lo < 0 || r.Hi > len(s) || r.Lo > r.Hi {
+		Trap("String index is out of bounds")
+	}
+	return s[:r.Lo] + StringReplacingOccurrencesOfWith(s[r.Lo:r.Hi], target, repl) + s[r.Hi:]
+}
+
+// StringLocalizedCaseInsensitiveContains is Foundation `localizedCaseInsensitiveContains(_:)`:
+// whether other occurs in s ignoring case. An empty other is never contained.
+func StringLocalizedCaseInsensitiveContains(s, other string) bool {
+	if other == "" {
+		return false
+	}
+	_, _, ok := foldIndex(s, other, 0, len(s), false)
+	return ok
+}
+
+// StringDebugDescription is Swift `String.debugDescription`: the string as a quoted literal.
+func StringDebugDescription(s string) string { return swiftQuote(s) }
+
+// SubstringDebugDescription is Swift `Substring.debugDescription`.
+func SubstringDebugDescription(s Substring) string { return swiftQuote(s.String()) }
+
+var stringHashSeed = maphash.MakeSeed()
+
+// StringHashValue is Swift `String.hashValue`: equal for canonically equivalent strings, and
+// seeded per process, so it differs from run to run as Swift's does.
+func StringHashValue(s string) int {
+	return int(maphash.String(stringHashSeed, StringDecomposedStringWithCanonicalMapping(s)))
+}
+
+// ScalarInitInt is Swift `Unicode.Scalar(_: UInt8)`: the scalar with that value.
+func ScalarInitInt(v uint8) rune { return rune(v) }
+
+// StringInitScalar is Swift `String(_: Unicode.Scalar)`.
+func StringInitScalar(r rune) string { return string(r) }

@@ -1,10 +1,15 @@
 package swiftrt
 
 import (
+	"cmp"
+	"fmt"
 	"hash/maphash"
+	"maps"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 )
 
 // RangeCompactMap is `(lo..<hi).compactMap`.
@@ -664,3 +669,168 @@ func ObjectIdentifierInitAny(t any) any {
 	// An existential metatype value is the zero value of its concrete type.
 	return reflect.TypeOf(t)
 }
+
+// SetFormSymmetricDifference is Swift `Set.formSymmetricDifference(_:)`: the set keeps the elements
+// that are in it or in other but not in both. An element other repeats counts once.
+func SetFormSymmetricDifference[T comparable](a *map[T]struct{}, b any) {
+	other, ok := b.(map[T]struct{})
+	if !ok {
+		other = SetInitSlice[map[T]struct{}](Iterate[T](b))
+	}
+	out := make(map[T]struct{}, len(*a))
+	for k := range *a {
+		if _, both := other[k]; !both {
+			out[k] = struct{}{}
+		}
+	}
+	for k := range other {
+		if _, both := (*a)[k]; !both {
+			out[k] = struct{}{}
+		}
+	}
+	*a = out
+}
+
+// SetIsSupersetOf is Swift `Set.isSuperset(of:)`: whether the set holds every element of the
+// other set or sequence.
+func SetIsSupersetOf[T comparable](a map[T]struct{}, b any) bool {
+	if other, ok := b.(map[T]struct{}); ok {
+		return SetIsSubsetOf(other, a)
+	}
+	for _, v := range Iterate[T](b) {
+		if _, ok := a[v]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// SetInitString is Swift `Set(_: String)`: the string's distinct Characters.
+func SetInitString[S ~map[Character]struct{}](s string) S { return SetInitSlice[S](StringChars(s)) }
+
+// SetInitClosedRange is Swift `Set(lo...hi)`.
+func SetInitClosedRange[S ~map[T]struct{}, T Integer](r ClosedRange[T]) S {
+	return SetInitSlice[S](SliceInitClosedRange[[]T](r))
+}
+
+// SlicePrepend is swift-collections `Deque.prepend(_:)`: it adds v at the front.
+func SlicePrepend[T any](xs *[]T, v T) { *xs = slices.Insert(*xs, 0, v) }
+
+// SliceInitZip2Sequence is Swift `Array(zip(a, b))`.
+func SliceInitZip2Sequence[S ~[]T, T any](xs []T) S { return S(slices.Clone(xs)) }
+
+// SliceInitStrideThrough is Swift `Array(stride(from:through:by:))`.
+func SliceInitStrideThrough[S ~[]T, T any](xs []T) S { return S(slices.Clone(xs)) }
+
+// SliceRemoveSubrange is Swift `Array.removeSubrange(_:)` for a Range or ClosedRange of indices;
+// it traps when the range reaches outside the array.
+func SliceRemoveSubrange[T any](xs *[]T, r interval[int]) {
+	lo, hi, closed := r.interval()
+	if closed {
+		hi++
+	}
+	if lo < 0 {
+		Trap("Array replace: subrange start is negative")
+	}
+	if hi > len(*xs) {
+		Trap("Array replace: subrange extends past the end")
+	}
+	if lo > hi {
+		Trap("Range requires lowerBound <= upperBound")
+	}
+	*xs = slices.Delete(*xs, lo, hi)
+}
+
+// SliceRemoveSubrangeRange is Swift `Array.removeSubrange(_:)` with a half-open Range.
+func SliceRemoveSubrangeRange[T any](xs *[]T, r Range[int]) { SliceRemoveSubrange(xs, r) }
+
+// SliceDistanceFromTo is Swift `Collection.distance(from:to:)` on a collection with integer
+// indices, such as an Array or a String's UTF-8 view.
+func SliceDistanceFromTo[T any](_ []T, from, to int) int { return to - from }
+
+// RangeLast is Swift `Range.last`: the bound before the upper one, or nil for an empty range.
+func RangeLast(r Range[int]) *int {
+	if r.Hi <= r.Lo {
+		return nil
+	}
+	return new(r.Hi - 1)
+}
+
+// ReversedCollectionJoinedSeparator is Swift `joined(separator:)` on a reversed collection.
+func ReversedCollectionJoinedSeparator[T ~string | Substring](xs []T, sep string) string {
+	return SliceJoinedSeparator(xs, sep)
+}
+
+// MapMergingUniquingKeysWith is Swift `Dictionary.merging(_:uniquingKeysWith:)`: a new dictionary
+// with other's entries added, a key in both taking the value f makes of the two.
+func MapMergingUniquingKeysWith[K comparable, V any](m, other map[K]V, f func(V, V) V) map[K]V {
+	out := make(map[K]V, len(m)+len(other))
+	maps.Copy(out, m)
+	MapMergeUniquingKeysWith(&out, other, f)
+	return out
+}
+
+// MapMaxBy is Swift `Dictionary.max(by:)`.
+func MapMaxBy[K comparable, V any](m map[K]V, less func(struct {
+	F0 K
+	F1 V
+}, struct {
+	F0 K
+	F1 V
+}) bool) *struct {
+	F0 K
+	F1 V
+} {
+	return SliceMaxBy(MapOrdered(m), less)
+}
+
+// LazyMapSequenceSorted is Swift `sorted()` on a lazy map.
+func LazyMapSequenceSorted[T cmp.Ordered](xs []T) []T { return SliceSorted(xs) }
+
+// LazyFilterSequenceFirst is Swift `first` on a lazy filter.
+func LazyFilterSequenceFirst[T any](xs []T) *T { return SliceFirst(xs) }
+
+// LazyFilterSequenceDropFirstInt is Swift `dropFirst(_:)` on a lazy filter.
+func LazyFilterSequenceDropFirstInt[T any](xs []T, n int) []T { return SliceDropFirstInt(xs, n) }
+
+// ClosedRangeCountWhere is Swift `(lo...hi).count(where:)` over an integer range.
+func ClosedRangeCountWhere[T Integer](r ClosedRange[T], f func(T) bool) int {
+	return len(ClosedRangeFilter(r, f))
+}
+
+// ClosedRangeCompactMapRef is `(lo...hi).compactMap` returning optional references.
+func ClosedRangeCompactMapRef[T Integer, U any](r ClosedRange[T], f func(T) U) []U {
+	return compactRef(SliceInitClosedRange[[]T](r), f)
+}
+
+// FloatMagnitude is Swift `FloatingPoint.magnitude`: the absolute value.
+func FloatMagnitude[F ~float32 | ~float64](v F) F { return F(math.Abs(float64(v))) }
+
+// InstantAdvancedBy is Swift `ContinuousClock.Instant.advanced(by:)`.
+func InstantAdvancedBy(i ContinuousClockInstant, d Duration) ContinuousClockInstant {
+	return ContinuousClockInstant(time.Time(i).Add(time.Duration(d)))
+}
+
+// keyValuePairs is the elements of a Swift `KeyValuePairs`, which the generated code carries as
+// a slice of key-value tuples behind `any`.
+func keyValuePairs[E any](kv any) []E {
+	if pairs, ok := kv.([]E); ok {
+		return pairs
+	}
+	rv := reflect.ValueOf(kv)
+	elem := reflect.TypeFor[E]()
+	if kv == nil || rv.Kind() != reflect.Slice || !rv.Type().Elem().ConvertibleTo(elem) {
+		panic(fmt.Sprintf("swiftrt: %T is not a KeyValuePairs of %v", kv, elem))
+	}
+	out := make([]E, rv.Len())
+	for i := range out {
+		out[i] = rv.Index(i).Convert(elem).Interface().(E)
+	}
+	return out
+}
+
+// SliceInitKeyValuePairs is Swift `Array(_: KeyValuePairs)`: the pairs in the order written.
+func SliceInitKeyValuePairs[S ~[]E, E any](kv any) S { return S(slices.Clone(keyValuePairs[E](kv))) }
+
+// KeyValuePairsMap is Swift `KeyValuePairs.map(_:)`.
+func KeyValuePairsMap[E, U any](kv any, f func(E) U) []U { return SliceMap(keyValuePairs[E](kv), f) }

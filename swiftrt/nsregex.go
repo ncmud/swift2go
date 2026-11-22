@@ -198,3 +198,27 @@ func textCheckingResult(s string, base int, loc []int) TextCheckingResult {
 	}
 	return m
 }
+
+// MatchingOptions is Foundation `NSRegularExpression.MatchingOptions`.
+type MatchingOptions struct{ RawValue uint }
+
+// NSRangeInitRangeIn is Foundation `NSRange(_:in:)` on a `Range<String.Index>`: the UTF-16 location
+// and length of `s[r]`.
+func NSRangeInitRangeIn(r Range[int], s string) Range[int] {
+	if r.Lo < 0 || r.Hi > len(s) || r.Lo > r.Hi {
+		Trap("String index is out of bounds")
+	}
+	return Range[int]{Lo: utf16Offset(s, r.Lo), Hi: utf16Offset(s, r.Hi)}
+}
+
+// NSRegularExpressionStringByReplacingMatchesInOptionsRangeWithTemplate is Foundation
+// `NSRegularExpression.stringByReplacingMatches(in:options:range:withTemplate:)` with no options:
+// s with each match inside the UTF-16 range r replaced by the template, in which `$n` is capture
+// group n and a backslash makes the next character literal. A range outside s traps.
+func NSRegularExpressionStringByReplacingMatchesInOptionsRangeWithTemplate(re *Regex, s string, options MatchingOptions, r Range[int], template string) string {
+	if options.RawValue != 0 {
+		panic(fmt.Sprintf("swiftrt: NSRegularExpression.MatchingOptions %#x are not supported", options.RawValue))
+	}
+	lo, sub := nsRegexSearchRange(s, r)
+	return s[:lo] + re.re.ReplaceAllString(sub, icuTemplate(template)) + s[lo+len(sub):]
+}

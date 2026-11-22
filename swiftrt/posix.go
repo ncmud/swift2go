@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // cStringArg reads a C string argument: the optional pointer the generated code passes for a Swift
@@ -137,6 +138,10 @@ func cCharAt(p any, i int) int8 {
 			Trap("unexpectedly found nil while unwrapping an Optional value")
 		}
 		return cCharAt(*v, i)
+	case *uint8:
+		return int8(*(*uint8)(unsafe.Add(unsafe.Pointer(v), i))) //nolint:gosec // the caller vouches for i elements at v, as in C
+	case *int8:
+		return *(*int8)(unsafe.Add(unsafe.Pointer(v), i)) //nolint:gosec // the caller vouches for i elements at v, as in C
 	}
 	panic(fmt.Sprintf("swiftrt: %T is not a C character pointer", p))
 }

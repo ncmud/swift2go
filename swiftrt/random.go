@@ -22,7 +22,17 @@ func (*SystemRandomNumberGenerator) Next() uint64 {
 }
 
 // rng accepts a generator the emitter passes as an unconstrained generic `inout some RandomNumberGenerator`.
-func rng(g any) RandomNumberGenerator { return g.(RandomNumberGenerator) }
+func rng(g any) RandomNumberGenerator {
+	if p, ok := g.(*any); ok {
+		g = *p
+	}
+	return g.(RandomNumberGenerator)
+}
+
+// SystemRandomNumberGeneratorInit is Swift `SystemRandomNumberGenerator()`.
+func SystemRandomNumberGeneratorInit() *SystemRandomNumberGenerator {
+	return &SystemRandomNumberGenerator{}
+}
 
 type interval[T any] interface {
 	interval() (lo, hi T, closed bool)

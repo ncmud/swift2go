@@ -6,8 +6,10 @@ import (
 	"sync/atomic"
 )
 
-// Task is a Swift `Task` handle: an operation running on its own goroutine.
-type Task struct {
+// TaskHandle is a Swift `Task` handle: an operation running on its own goroutine. Generated code
+// holds it as `any`; the name Task belongs to Foundation's `Process`, which the emitter calls by
+// its Objective-C name NSTask.
+type TaskHandle struct {
 	done  chan struct{}
 	scope *cancelScope
 	value any
@@ -17,8 +19,8 @@ type Task struct {
 // TaskInitOperation is Swift `Task { ... }`, run on a goroutine. op is a `func()` or a `func() T`; an
 // error the operation throws is kept for TaskValue, and any other panic crashes the process as a
 // Swift trap would.
-func TaskInitOperation(op any) *Task {
-	t := &Task{done: make(chan struct{}), scope: newCancelScope(nil)}
+func TaskInitOperation(op any) *TaskHandle {
+	t := &TaskHandle{done: make(chan struct{}), scope: newCancelScope(nil)}
 	go runInScope(t.scope, func() {
 		defer close(t.done)
 		t.err = Catch(func() {
@@ -40,12 +42,30 @@ func TaskInitOperation(op any) *Task {
 
 // TaskCancel is Swift `Task.cancel()`: it marks the task and its child tasks cancelled; the operation
 // keeps running and observes the cancellation through TaskIsCancelled, TaskCheckCancellation and TaskSleepFor.
-func TaskCancel(t any) { t.(*Task).scope.cancel() }
+func TaskCancel(t any) { taskHandle(t).scope.cancel() }
+
+// taskHandle is the task behind a `Task` value, which the generated code may hold boxed as an
+// optional.
+func taskHandle(t any) *TaskHandle {
+	if p, ok := t.(*any); ok && p != nil {
+		t = *p
+	}
+	return t.(*TaskHandle)
+}
+
+// TaskInitExecutorPreferenceOperation is Swift `Task(executorPreference:operation:)`. The executor
+// preference does not change what the operation does, so the task runs as TaskInitOperation would
+// run it.
+func TaskInitExecutorPreferenceOperation(_ *any, op any) *TaskHandle { return TaskInitOperation(op) }
+
+// TaskDetachedOperation is Swift `Task.detached(operation:)`: a task that inherits nothing from the
+// one that starts it. Tasks here take no cancellation or priority from their creator either way.
+func TaskDetachedOperation(op any) *TaskHandle { return TaskInitOperation(op) }
 
 // TaskValue is Swift `await task.value`: it waits for the operation and returns its result,
 // rethrowing the error a throwing task ended with.
 func TaskValue(t any) any {
-	task := t.(*Task)
+	task := taskHandle(t)
 	<-task.done
 	if task.err != nil {
 		panic(Throw(task.err))
@@ -88,6 +108,19 @@ func WithCheckedThrowingContinuation(body func(any)) any {
 	}
 	return c.value
 }
+
+// WithCheckedContinuation is Swift `withCheckedContinuation(_:)`: it runs body with a continuation
+// and blocks until the continuation is resumed, returning its value.
+func WithCheckedContinuation(body func(any)) any {
+	c := &CheckedContinuation{ch: make(chan struct{})}
+	body(c)
+	<-c.ch
+	return c.value
+}
+
+// CheckedContinuationResume is `CheckedContinuation.resume()` on a continuation of Void; a second
+// resume traps.
+func CheckedContinuationResume(c any) { c.(*CheckedContinuation).resume(struct{}{}, nil) }
 
 // CheckedContinuationResumeReturning is `CheckedContinuation.resume(returning:)`; a second resume traps.
 func CheckedContinuationResumeReturning(c any, value any) {

@@ -1,67 +1,18 @@
 package swiftrt
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-)
-
-// DateISO8601Format is Foundation `Date.ISO8601Format()`: UTC, whole seconds.
-func DateISO8601Format(d Date) string {
-	return d.Time().UTC().Format("2006-01-02T15:04:05Z")
-}
-
-// ISO8601FormatStyle is Foundation `Date.ISO8601FormatStyle` with the fields chosen by its builder methods.
-type ISO8601FormatStyle struct{ year, month, day bool }
-
-// ISO8601FormatStyleIso8601 is `.iso8601`.
-var ISO8601FormatStyleIso8601 = ISO8601FormatStyle{}
-
-// ISO8601FormatStyleYear is `ISO8601FormatStyle.year()`.
-func ISO8601FormatStyleYear(s ISO8601FormatStyle) ISO8601FormatStyle { s.year = true; return s }
-
-// ISO8601FormatStyleMonth is `ISO8601FormatStyle.month()`.
-func ISO8601FormatStyleMonth(s ISO8601FormatStyle) ISO8601FormatStyle { s.month = true; return s }
-
-// ISO8601FormatStyleDay is `ISO8601FormatStyle.day()`.
-func ISO8601FormatStyleDay(s ISO8601FormatStyle) ISO8601FormatStyle { s.day = true; return s }
-
-// DateFormatted is Foundation `Date.formatted(_:)` with an ISO8601FormatStyle in GMT.
-func DateFormatted(d Date, s ISO8601FormatStyle) string {
-	t := d.Time().UTC()
-	if !s.year && !s.month && !s.day {
-		return t.Format("2006-01-02T15:04:05Z")
-	}
-	var parts []string
-	if s.year {
-		parts = append(parts, t.Format("2006"))
-	}
-	if s.month {
-		parts = append(parts, t.Format("01"))
-	}
-	if s.day {
-		parts = append(parts, t.Format("02"))
-	}
-	return strings.Join(parts, "-")
-}
-
-// ISO8601DateFormatOptions is Foundation `ISO8601DateFormatter.Options`.
-type ISO8601DateFormatOptions struct{ RawValue uint }
-
-// ISO8601DateFormatter.Options members, under the names the emitter gives imported Objective-C constants.
-const (
-	NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithInternetDateTime     = 1907
-	NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithFractionalSeconds    = 2048
-	NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithFullDate             = 275
-	NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithFullTime             = 1632
-	NSISO8601DateFormatOptionsCENSISO8601DateFormatOptionsNSISO8601DateFormatWithColonSeparatorInTime = 512
 )
 
 // DateFormatterStyle is Foundation `DateFormatter.Style`.
@@ -328,8 +279,14 @@ func IntegerFormatStyleFormat(s IntegerFormatStyle, v any) string {
 	panic("swiftrt.IntegerFormatStyleFormat: not an integer: " + rv.Type().String())
 }
 
-// IntFormatted is `BinaryInteger.formatted(_:)`.
-func IntFormatted[T Integer](v T, s IntegerFormatStyle) string { return IntegerFormatStyleFormat(s, v) }
+// IntFormatted is `BinaryInteger.formatted(_:)`, and `formatted()` when no style is given: the
+// number with the grouping of the style's locale.
+func IntFormatted[T Integer](v T, style ...IntegerFormatStyle) string {
+	if len(style) == 0 {
+		return IntegerFormatStyleFormat(IntegerFormatStyleNumber, v)
+	}
+	return IntegerFormatStyleFormat(style[0], v)
+}
 
 // URL is Foundation `URL`, kept as its absolute string.
 type URL struct{ Raw string }
@@ -668,4 +625,33 @@ func ErrorLocalizedDescription(err any) string {
 		return "The operation could not be completed. " + e.Error()
 	}
 	return "The operation could not be completed. (" + typeName(t) + " error 1.)"
+}
+
+// DataInitCapacity is Foundation `Data(capacity:)`: empty, with room for n bytes.
+func DataInitCapacity(n int) []byte { return make([]byte, 0, max(n, 0)) }
+
+// DataAppendInt is Foundation `Data.append(_:)` with one byte.
+func DataAppendInt(b *[]byte, v uint8) { *b = append(*b, v) }
+
+// DataInitUTF8View is Foundation `Data(_:)` over a String's or Substring's UTF-8 view.
+func DataInitUTF8View(utf8 []byte) []byte { return slices.Clone(utf8) }
+
+// DataBase64EncodedString is Foundation `Data.base64EncodedString()`: standard alphabet, padded,
+// without line breaks.
+func DataBase64EncodedString(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// DataInitUnsafeRawBufferPointer is Foundation `Data(_: UnsafeRawBufferPointer)`: a copy of the
+// buffer's bytes.
+func DataInitUnsafeRawBufferPointer(p any) []byte { return SliceInitUnsafeRawBufferPointer[[]byte](p) }
+
+// DataInitBytesCount is Foundation `Data(bytes:count:)`: a copy of the n bytes at a C pointer.
+func DataInitBytesCount(p any, n int) []byte {
+	if n < 0 {
+		Trap("Negative value is not representable")
+	}
+	buf, _ := cBuffer(p, n)
+	if len(buf) < n {
+		Trap("Data(bytes:count:) reads past the end of the buffer")
+	}
+	return slices.Clone(buf)
 }

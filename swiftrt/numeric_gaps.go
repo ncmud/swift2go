@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"fmt"
 	"math"
 	"math/bits"
 	"os"
@@ -267,3 +268,6 @@ const FloatPi = math.Pi
 
 // FloatLeastNonzeroMagnitude is `Double.leastNonzeroMagnitude`.
 const FloatLeastNonzeroMagnitude = math.SmallestNonzeroFloat64
+
+// IntDescription is Swift `BinaryInteger.description`: the value in decimal.
+func IntDescription[T Integer](v T) string { return fmt.Sprintf("%d", v) }

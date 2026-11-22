@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"reflect"
@@ -824,4 +825,70 @@ func NSValueObjCType(n NSNumber) any {
 		c = 'i'
 	}
 	return []int8{int8(c), 0}
+}
+
+// Null is Foundation `NSNull` under the name the emitter gives the type in casts.
+type Null = NSNull
+
+// NSNullInit is Foundation `NSNull()`.
+func NSNullInit() NSNull { return NSNull{} }
+
+// NSNumberBoolValue is Foundation `NSNumber.boolValue`: whether the number is not zero.
+func NSNumberBoolValue(n NSNumber) bool {
+	switch n.kind {
+	case 'u':
+		return n.u != 0
+	case 'd':
+		return n.f != 0
+	}
+	return n.i != 0
+}
+
+// NSNumberIntValue is Foundation `NSNumber.intValue`: an unsigned value keeps its bit pattern, and
+// a Double is truncated toward zero and clamped to Int's range, NaN giving 0.
+func NSNumberIntValue(n NSNumber) int {
+	switch n.kind {
+	case 'u':
+		return int(n.u)
+	case 'd':
+		switch {
+		case math.IsNaN(n.f):
+			return 0
+		case n.f >= 0x1p63:
+			return math.MaxInt64
+		case n.f <= -0x1p63:
+			return math.MinInt64
+		}
+		return int(n.f)
+	}
+	return int(n.i)
+}
+
+// CFTypeID is Core Foundation `CFTypeID`.
+type CFTypeID = uint
+
+// The type identifiers of the Core Foundation classes behind the Foundation objects the runtime
+// has, with the values Darwin gives them.
+const (
+	cfNullTypeID    CFTypeID = 16
+	cfBooleanTypeID CFTypeID = 21
+	cfNumberTypeID  CFTypeID = 22
+)
+
+// CFCFBooleanGetTypeID is Core Foundation `CFBooleanGetTypeID()`.
+func CFCFBooleanGetTypeID() CFTypeID { return cfBooleanTypeID }
+
+// CFCFGetTypeID is Core Foundation `CFGetTypeID(_:)` for an NSNumber or NSNull: a number made
+// from a Bool is a CFBoolean, and any other number a CFNumber.
+func CFCFGetTypeID(v any) CFTypeID {
+	switch x := v.(type) {
+	case NSNumber:
+		if x.kind == 'b' {
+			return cfBooleanTypeID
+		}
+		return cfNumberTypeID
+	case NSNull:
+		return cfNullTypeID
+	}
+	panic(fmt.Sprintf("swiftrt: CFGetTypeID of %T is not supported", v))
 }
