@@ -79,6 +79,7 @@ type Module struct {
 	importPkgs      map[string]string
 	typeCache       map[string]*types.Type
 	payloadEnums    map[string]bool
+	enumComparable  map[string]bool
 	typeParamNames  map[string][]string // generic struct/class → its Go type parameter names
 	shares          map[string]bool     // memo of sharesStorage for named types
 	classProtos     map[string]bool     // protocols only classes can conform to (`: AnyObject`)

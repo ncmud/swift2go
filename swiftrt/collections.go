@@ -94,6 +94,11 @@ func SliceContains[T comparable](xs []T, v T) bool {
 	case Substring, SwiftEqualer:
 		return slices.ContainsFunc(xs, func(x T) bool { return Equal(x, v) })
 	}
+	// An interface holding a value Go can't compare, such as a payload enum case with a slice, panics
+	// under ==.
+	if dt := reflect.TypeOf(any(v)); dt != nil && !dt.Comparable() {
+		return slices.ContainsFunc(xs, func(x T) bool { return Equal(x, v) })
+	}
 	return slices.Contains(xs, v)
 }
 
