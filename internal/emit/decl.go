@@ -44,6 +44,7 @@ type fileEmitter struct {
 	typeParams    []string
 	typeBounds    map[string]string // type parameter → Go constraint, when not `any`
 	hoisted       []ast.Node
+	erased        map[int]bool // parameters paramList types as any, by index
 }
 
 func (e *fileEmitter) w(format string, args ...any) { fmt.Fprintf(&e.b, format, args...) }
@@ -330,8 +331,24 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				if req == "" || overridden(proto, info.Node) {
 					continue
 				}
+				erased, erasedResult := e.m.requirementErasure(proto, info.Node)
+				e.erased = erased
 				params, args := e.paramList(info.Node)
+				e.erased = nil
 				res := e.resultGo(info.Node)
+				if erasedResult {
+					res = "any"
+				}
+				if len(erased) > 0 {
+					// The default takes the conformer's own type where the requirement takes an associated type.
+					parts := strings.Split(args, ", ")
+					for i, p := range info.Node.Child("params").List("params") {
+						if erased[i] && i < len(parts) {
+							parts[i] = "swiftrt.MustAs[" + e.m.GoType(e.m.typeOf(p.Str("interface_type")), e.generics) + "](" + parts[i] + ")"
+						}
+					}
+					args = strings.Join(parts, ", ")
+				}
 				recv := e.m.GoType(&types.Type{Kind: types.Named, Name: q}, nil)
 				if info.Mutating && !strings.HasPrefix(recv, "*") && n.Kind() == "struct_decl" {
 					recv = "*" + recv
@@ -927,6 +944,12 @@ func (e *fileEmitter) paramList(fn ast.Node) (decl string, names string) {
 			name = e.newTmp("unused")
 		}
 		gt := e.m.GoType(e.m.typeOf(p.Str("interface_type")), e.generics)
+		if e.erased[len(ps)] {
+			gt = "any"
+			if !strings.HasPrefix(name, "unused") {
+				name += "Any"
+			}
+		}
 		if p.Bool("inout") {
 			gt = "*" + gt
 			if e.inoutParams == nil {
@@ -938,6 +961,19 @@ func (e *fileEmitter) paramList(fn ast.Node) (decl string, names string) {
 		ns = append(ns, name)
 	}
 	return strings.Join(ps, ", "), strings.Join(ns, ", ")
+}
+
+// unerase declares, under each erased parameter's own name, its value at the type fn declares.
+func (e *fileEmitter) unerase(fn ast.Node, erased map[int]bool) string {
+	var b strings.Builder
+	for i, p := range fn.Child("params").List("params") {
+		if !erased[i] || p.Name() == "_" || p.Name() == "" {
+			continue
+		}
+		name := goSafe(p.Name())
+		fmt.Fprintf(&b, "%s := %sAny.(%s)\n_ = %s\n", name, name, e.m.GoType(e.m.typeOf(p.Str("interface_type")), e.generics), name)
+	}
+	return b.String()
 }
 
 // resultGo is the Go result type; Swift errors propagate as panics (see swiftrt.Throw).
@@ -956,8 +992,18 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 	saveG := e.generics
 	e.generics = e.genericScope(n)
 	defer func() { e.generics = saveG }()
+	var erased map[int]bool
+	var erasedResult bool
+	if self != nil && info.Owner != "" && !info.ProtoExt {
+		erased, erasedResult = e.m.assocErasure(n, info.Owner)
+	}
+	e.erased = erased
 	params, _ := e.paramList(n)
+	e.erased = nil
 	res := e.resultGo(n)
+	if erasedResult {
+		res = "any"
+	}
 	e.where = shortPath(e.file.Filename) + ":" + info.Owner + "." + n.Name()
 	switch {
 	case self == nil || info.Static && !info.ProtoExt:
@@ -1017,6 +1063,7 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 		e.preamble, post = e.overrideHooks(info, self, params, names, res, false)
 		defer e.w("%s", post)
 	}
+	e.preamble += e.unerase(n, erased)
 	e.body(n, res)
 	e.w("\n\n")
 	if ps := n.Child("params").List("params"); self != nil && info.FreeSelf() && n.Name() == "encode" && len(ps) == 1 && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Encoder" && e.m.IsPayloadEnum(e.selfQualified(self)) {

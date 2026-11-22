@@ -46,44 +46,119 @@ type DeclInfo struct {
 
 // Module is one Swift module being transpiled.
 type Module struct {
-	Name           string
-	Pkg            string
-	RTPath         string // import path of swiftrt
-	Files          []ast.File
-	Overlay        string   // directory of hand-written Go files that replace Swift files of the same name
-	Replaced       []string // Swift files WriteGo left to the overlay
-	Test           bool     // transpiling a test target into the package under test
-	Target         string
-	dm             *types.Demangler
-	decls          map[string]*DeclInfo
-	typeKinds      map[string]string // qualified Swift type name → decl kind
-	protoReqs      map[string][]ast.Node
-	protoParents   map[string][]string // a local protocol's directly inherited protocols
-	conformers     map[string][]string // protocol qualified name → conforming local types
-	varInit        map[string]ast.Node // stored var usr → initializer expr
-	Unsupported    map[string]int
-	UnsupportedAt  map[string][]string
-	Deps           []*Module
-	ImportPath     string
-	Mappings       []Mapping                  // hand-written Go packages standing in for modules not transpiled in this run
-	mappedKinds    map[string]map[string]byte // nominal kinds of each mapped module's types, read on first use
-	adapters       map[string]bool            // adapter types emitted for retroactive conformances to local protocols
-	importPkgs     map[string]string
-	typeCache      map[string]*types.Type
-	payloadEnums   map[string]bool
-	typeParamNames map[string][]string // generic struct/class → its Go type parameter names
-	lazyInits      map[string]bool     // owner|name of stored statics and globals with non-literal initializers
-	lineStarts     map[string][]int
-	sources        map[string][]byte
-	localFuncs     map[string]ast.Node // functions declared inside function bodies, by USR
-	objcNames      map[string]string   // Swift names of Objective-C members, by USR
-	hoists         int
-	keyable        map[string]bool // whether a local struct can be a Go map key
-	mutatingTypes  map[string]bool
-	overridden     map[string]bool // USRs of class members some subclass overrides
-	superOf        map[string]string
-	typeAliases    map[string]string // qualified typealias name → mangled aliased type
-	members        map[string][]*DeclInfo
+	Name            string
+	Pkg             string
+	RTPath          string // import path of swiftrt
+	Files           []ast.File
+	Overlay         string   // directory of hand-written Go files that replace Swift files of the same name
+	Replaced        []string // Swift files WriteGo left to the overlay
+	Test            bool     // transpiling a test target into the package under test
+	Target          string
+	dm              *types.Demangler
+	decls           map[string]*DeclInfo
+	typeKinds       map[string]string // qualified Swift type name → decl kind
+	protoReqs       map[string][]ast.Node
+	protoParents    map[string][]string // a local protocol's directly inherited protocols
+	conformers      map[string][]string // protocol qualified name → conforming local types
+	varInit         map[string]ast.Node // stored var usr → initializer expr
+	Unsupported     map[string]int
+	UnsupportedAt   map[string][]string
+	Deps            []*Module
+	ImportPath      string
+	Mappings        []Mapping                  // hand-written Go packages standing in for modules not transpiled in this run
+	mappedKinds     map[string]map[string]byte // nominal kinds of each mapped module's types, read on first use
+	adapters        map[string]bool            // adapter types emitted for retroactive conformances to local protocols
+	importPkgs      map[string]string
+	typeCache       map[string]*types.Type
+	payloadEnums    map[string]bool
+	typeParamNames  map[string][]string // generic struct/class → its Go type parameter names
+	lazyInits       map[string]bool     // owner|name of stored statics and globals with non-literal initializers
+	lineStarts      map[string][]int
+	sources         map[string][]byte
+	localFuncs      map[string]ast.Node // functions declared inside function bodies, by USR
+	objcNames       map[string]string   // Swift names of Objective-C members, by USR
+	hoists          int
+	keyable         map[string]bool // whether a local struct can be a Go map key
+	mutatingTypes   map[string]bool
+	overridden      map[string]bool // USRs of class members some subclass overrides
+	superOf         map[string]string
+	typeAliases     map[string]string // qualified typealias name → mangled aliased type
+	members         map[string][]*DeclInfo
+	protocolsByType map[string][]string
+}
+
+// protocolsOf lists the protocols the qualified type q declares conformance to, in this module or a
+// dependency.
+func (m *Module) protocolsOf(q string) []string {
+	if m.protocolsByType == nil {
+		m.protocolsByType = map[string][]string{}
+		for _, mod := range append([]*Module{m}, m.Deps...) {
+			for _, p := range slices.Sorted(maps.Keys(mod.conformers)) {
+				for _, t := range mod.conformers[p] {
+					if !slices.Contains(m.protocolsByType[t], p) {
+						m.protocolsByType[t] = append(m.protocolsByType[t], p)
+					}
+				}
+			}
+		}
+	}
+	return m.protocolsByType[q]
+}
+
+// assocErasure reports which parameters, by index, and whether the result of fn, a method of q, take
+// the place of an associated type in the protocol requirement fn implements. Those are any in Go, so
+// fn's Go signature must use any there too to satisfy the protocol's interface.
+func (m *Module) assocErasure(fn ast.Node, q string) (params map[int]bool, result bool) {
+	for _, proto := range m.protocolsOf(q) {
+		p, r := m.requirementErasure(proto, fn)
+		for i := range p {
+			if params == nil {
+				params = map[int]bool{}
+			}
+			params[i] = true
+		}
+		result = result || r
+	}
+	return params, result
+}
+
+// requirementErasure is assocErasure for an implementation of a requirement of proto, or of a protocol
+// proto refines.
+func (m *Module) requirementErasure(proto string, fn ast.Node) (params map[int]bool, result bool) {
+	key := funcSignatureKey(fn)
+	seen := map[string]bool{}
+	var visit func(p string)
+	visit = func(p string) {
+		if seen[p] {
+			return
+		}
+		seen[p] = true
+		for _, pm := range append([]*Module{m}, m.Deps...) {
+			for _, r := range pm.protoReqs[p] {
+				if r.Kind() != "func_decl" || funcSignatureKey(r) != key || r.Bool("static") != fn.Bool("static") {
+					continue
+				}
+				isAssoc := func(mangled string) bool {
+					t := pm.typeOf(mangled)
+					return t.Kind == types.Named && m.isAssociatedType(t.Name)
+				}
+				result = result || isAssoc(r.Str("result"))
+				for i, rp := range r.Child("params").List("params") {
+					if !rp.Bool("inout") && isAssoc(rp.Str("interface_type")) {
+						if params == nil {
+							params = map[int]bool{}
+						}
+						params[i] = true
+					}
+				}
+			}
+			for _, parent := range pm.protoParents[p] {
+				visit(parent)
+			}
+		}
+	}
+	visit(proto)
+	return params, result
 }
 
 // membersOf lists the declarations this module makes in type q and its extensions.
