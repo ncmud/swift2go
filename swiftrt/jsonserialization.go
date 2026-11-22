@@ -54,6 +54,15 @@ func NSJSONSerializationJsonObjectWith(data []byte) any {
 // value other than an array or dictionary needs `.fragmentsAllowed`; it, NaN, infinity, non-string
 // keys and non-JSON values throw NSCocoaErrorDomain 3851.
 func NSJSONSerializationDataWithJSONObjectOptions(obj any, options NSJSONWritingOptions) []byte {
+	return jsonSerializationData(obj, options)
+}
+
+// NSJSONSerializationDataWithJSONObject is `JSONSerialization.data(withJSONObject:)`, with no options.
+func NSJSONSerializationDataWithJSONObject(obj any) []byte {
+	return jsonSerializationData(obj, NSJSONWritingOptions{})
+}
+
+func jsonSerializationData(obj any, options NSJSONWritingOptions) []byte {
 	has := func(o NSJSONWritingOptions) bool { return options.RawValue&o.RawValue != 0 }
 	rv := reflect.ValueOf(obj)
 	for rv.IsValid() && (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && !rv.IsNil() {

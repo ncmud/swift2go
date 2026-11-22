@@ -325,7 +325,9 @@ func StrideFromToBy[T Number](from, to, by T) []T {
 }
 
 // RangeFilter is `range.filter`.
-func RangeFilter(r Range[int], f func(int) bool) []int { return SliceFilter(rangeInts(r.Lo, r.Hi), f) }
+func RangeFilter[T Integer](r Range[T], f func(T) bool) []T {
+	return SliceFilter(rangeValues(r.Lo, r.Hi), f)
+}
 
 // RangePrefixInt is `range.prefix(n)`.
 func RangePrefixInt(r Range[int], n int) Range[int] {

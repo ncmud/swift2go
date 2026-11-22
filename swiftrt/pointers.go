@@ -410,3 +410,13 @@ func CFStrftime(buf any, maxsize int, format *any, tm *CTm) int {
 	flush(n + 1)
 	return n
 }
+
+// UnsafeMutableRawPointerOptInitBitPattern is `UnsafeMutableRawPointer(bitPattern:)`: nil for zero, and
+// otherwise a pointer value that compares equal to another made from the same bits.
+func UnsafeMutableRawPointerOptInitBitPattern(bits int) *any {
+	if bits == 0 {
+		return nil
+	}
+	p := any(uintptr(bits))
+	return &p
+}

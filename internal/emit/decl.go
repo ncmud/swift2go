@@ -322,7 +322,7 @@ func (e *fileEmitter) equalityHook(fn ast.Node, self *DeclInfo) {
 	default:
 		return
 	}
-	if q := e.m.qualify(self.Owner, self.Node.Name()); len(e.m.TypeParams(q)) > 0 || e.m.IsPayloadEnum(q) {
+	if q := e.m.typeQName(self); len(e.m.TypeParams(q)) > 0 || e.m.IsPayloadEnum(q) {
 		return
 	}
 	ps := fn.Child("params").List("params")
@@ -355,7 +355,7 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	if info == nil {
 		return
 	}
-	q := e.m.qualify(info.Owner, n.Name())
+	q := e.m.typeQName(info)
 	saveG := e.generics
 	e.generics = e.typeGenerics(q)
 	defer func() { e.generics = saveG }()
@@ -467,7 +467,7 @@ func (e *fileEmitter) codingKeyOmissionDefaults(n ast.Node, recvT string, keys m
 
 // protocolForwarders gives a conforming type the protocol-extension default methods it does not define.
 func (e *fileEmitter) protocolForwarders(n ast.Node, self *DeclInfo) {
-	q := e.m.qualify(self.Owner, n.Name())
+	q := e.m.typeQName(self)
 	e.protocolForwardersFor(n, q)
 	e.conformanceRegistrations(n, q)
 }
@@ -794,7 +794,7 @@ func (e *fileEmitter) enumDecl(n ast.Node) {
 	}
 	if payload {
 		saveG := e.generics
-		e.generics = e.typeGenerics(e.m.qualify(info.Owner, n.Name()))
+		e.generics = e.typeGenerics(e.m.typeQName(info))
 		defer func() { e.generics = saveG }()
 		e.payloadEnum(n, info, cases)
 	} else if len(cases) == 0 && len(n.Child("inherits").List("conformances")) > 0 {
@@ -819,7 +819,7 @@ func (e *fileEmitter) enumDecl(n ast.Node) {
 		}
 		e.w("func (self %s) SwiftCase() (string, []string) {\n\treturn [...]string{%s}[self], nil\n}\n\n", info.GoName, strings.Join(names, ", "))
 		e.w("func (%s) SwiftTypeName() string { return %q }\n\n", info.GoName, e.m.qualify(info.Owner, n.Name()))
-		e.descriptionMarkers(e.m.qualify(info.Owner, n.Name()), info.GoName)
+		e.descriptionMarkers(e.m.typeQName(info), info.GoName)
 		e.rawValue(n, info, cases)
 		if !hasRawType(n) && e.synthesizesCodable(n) {
 			e.w("func init() { swiftrt.RegisterCaseEnum[%s](%s) }\n\n", info.GoName, strings.Join(names, ", "))
@@ -903,7 +903,7 @@ func (e *fileEmitter) rawValue(n ast.Node, info *DeclInfo, cases []ast.Node) {
 }
 
 func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) {
-	q := e.m.qualify(info.Owner, n.Name())
+	q := e.m.typeQName(info)
 	decl, use := e.m.typeParamDecl(q), e.m.typeParamUse(q)
 	g := e.typeGenerics(q)
 	e.w("type %s%s interface{ is%s() }\n\n", info.GoName, decl, info.GoName)
@@ -1051,7 +1051,7 @@ func (e *fileEmitter) extensionDecl(n ast.Node) {
 	q := t.Name
 	var self *DeclInfo
 	for _, info := range e.m.decls {
-		if (info.Kind == "struct_decl" || info.Kind == "class_decl" || info.Kind == "enum_decl") && e.m.qualify(info.Owner, info.Node.Name()) == q {
+		if (info.Kind == "struct_decl" || info.Kind == "class_decl" || info.Kind == "enum_decl") && e.m.typeQName(info) == q {
 			self = info
 		}
 	}
@@ -1747,7 +1747,7 @@ func (e *fileEmitter) conditionSkip(call ast.Node) string {
 
 func (m *Module) zeroArgInit(self *DeclInfo) string {
 	for _, info := range m.decls {
-		if info.Kind == "constructor_decl" && info.Owner == m.qualify(self.Owner, self.Node.Name()) && len(info.Node.Child("params").List("params")) == 0 {
+		if info.Kind == "constructor_decl" && info.Owner == m.typeQName(self) && len(info.Node.Child("params").List("params")) == 0 {
 			return info.GoName
 		}
 	}
@@ -2739,7 +2739,7 @@ func (e *fileEmitter) selfQualified(self *DeclInfo) string {
 		}
 		return ""
 	}
-	return e.m.qualify(self.Owner, self.Node.Name())
+	return e.m.typeQName(self)
 }
 
 // selfTypeArgs is "[A, B]" for a method receiver on a generic type.
