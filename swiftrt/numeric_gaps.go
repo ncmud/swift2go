@@ -254,3 +254,16 @@ const IntBitWidth = 64
 
 // DurationSeconds is Swift `Duration.seconds(_:)` with a BinaryInteger count.
 func DurationSeconds[T Integer](s T) Duration { return Duration(Mul(int64(s), 1_000_000_000)) }
+
+// FloatValue returns x. Passing a constant through it makes arithmetic on it happen at run time in
+// the type's precision, as Swift's does, instead of exactly at compile time.
+func FloatValue[F ~float32 | ~float64](x F) F { return x }
+
+// NegativeZero is the floating-point literal `-0.0`.
+func NegativeZero[F ~float32 | ~float64]() F { return F(math.Copysign(0, -1)) }
+
+// FloatPi is `Double.pi`.
+const FloatPi = math.Pi
+
+// FloatLeastNonzeroMagnitude is `Double.leastNonzeroMagnitude`.
+const FloatLeastNonzeroMagnitude = math.SmallestNonzeroFloat64

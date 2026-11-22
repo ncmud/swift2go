@@ -259,6 +259,9 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	recvT := info.GoName + e.m.typeParamUse(q)
 	if n.Kind() == "class_decl" {
 		e.w("// SwiftClass marks %s as a reference type.\nfunc (*%s) SwiftClass() {}\n\n", info.GoName, recvT)
+		e.w("func (*%s) SwiftTypeName() string { return %q }\n\n", recvT, q)
+	} else if !conformsTo(n, "s:s9OptionSetP") {
+		e.w("func (%s) SwiftTypeName() string { return %q }\n\n", recvT, q)
 	}
 	if n.Kind() == "class_decl" && e.m.HasSubclass(info.GoName) && e.m.Superclass(info.GoName) == "" {
 		e.w("// SwiftDynamic returns the most-derived object, for downcasts and identity.\nfunc (self *%s) SwiftDynamic() any {\n\tif self != nil && self.SwiftSub != nil {\n\t\treturn self.SwiftSub\n\t}\n\treturn self\n}\n\n", recvT)
@@ -465,6 +468,12 @@ func (e *fileEmitter) enumDecl(n ast.Node) {
 			}
 		}
 		e.w(")\n\n")
+		var names []string
+		for _, c := range cases {
+			names = append(names, strconv.Quote(c.Name()))
+		}
+		e.w("func (self %s) SwiftCase() (string, []string) {\n\treturn [...]string{%s}[self], nil\n}\n\n", info.GoName, strings.Join(names, ", "))
+		e.w("func (%s) SwiftTypeName() string { return %q }\n\n", info.GoName, e.m.qualify(info.Owner, n.Name()))
 		e.rawValue(n, info, cases)
 		if conformsTo(n, "s:s9CodingKeyP") {
 			e.w("func (self %s) StringValue() string {\n\tswitch self {\n", info.GoName)
@@ -549,6 +558,12 @@ func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) 
 	decl, use := e.m.typeParamDecl(q), e.m.typeParamUse(q)
 	g := e.typeGenerics(q)
 	e.w("type %s%s interface{ is%s() }\n\n", info.GoName, decl, info.GoName)
+	describe := ""
+	for _, d := range e.m.decls {
+		if d.Owner == q && d.Kind == "var_decl" && !d.Static && d.OnPayloadEnum && d.Node.Name() == "description" {
+			describe = d.GoName
+		}
+	}
 	for _, c := range cases {
 		ci := e.info(c)
 		e.w("type %s%s struct {\n", ci.GoName, decl)
@@ -556,6 +571,19 @@ func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) 
 			e.w("\tF%d %s\n", i, e.m.GoType(e.m.typeOf(p.Str("interface_type")), g))
 		}
 		e.w("}\n\nfunc (%s%s) is%s() {}\n\n", ci.GoName, use, info.GoName)
+		var labels []string
+		for _, p := range c.Child("params").List("params") {
+			labels = append(labels, strconv.Quote(p.Name()))
+		}
+		ls := "nil"
+		if slices.ContainsFunc(labels, func(l string) bool { return l != `""` }) {
+			ls = "[]string{" + strings.Join(labels, ", ") + "}"
+		}
+		e.w("func (%s%s) SwiftCase() (string, []string) { return %q, %s }\n\n", ci.GoName, use, c.Name(), ls)
+		e.w("func (%s%s) SwiftTypeName() string { return %q }\n\n", ci.GoName, use, q)
+		if describe != "" {
+			e.w("func (self %s%s) Description() string { return %s%s(self) }\n\n", ci.GoName, use, describe, use)
+		}
 	}
 	if decl == "" && e.synthesizesCodable(n) {
 		var cs []string
