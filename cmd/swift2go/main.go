@@ -79,7 +79,13 @@ func (o overlayFlag) Set(v string) error {
 
 func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag, incremental bool) error {
 	pkgDir = absPath(pkgDir)
-	targets, err := swiftmod.Describe(pkgDir)
+	describe := swiftmod.Describe
+	if incremental {
+		describe = func(dir string) (map[string]swiftmod.Target, error) {
+			return swiftmod.DescribeCached(dir, absPath(filepath.Join(outDir, ".cache", "describe.gob")))
+		}
+	}
+	targets, err := describe(pkgDir)
 	if err != nil {
 		return err
 	}
