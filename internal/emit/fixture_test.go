@@ -85,7 +85,7 @@ func transpileMapped(t *testing.T, fixture string, mapped map[string]string, tar
 				t.Fatal(err)
 			}
 		}
-		data, err := swiftmod.DumpAST(tg, mods, extra...)
+		data, err := swiftmod.DumpAST(tg, mods, t.TempDir(), extra...)
 		if err != nil {
 			t.Fatal(err)
 		}
