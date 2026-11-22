@@ -52,11 +52,19 @@ func hasSuffixChars(s, p string) bool {
 	if len(s) > 0 && len(p) > 0 && s[len(s)-1] < 0x80 && p[len(p)-1] < 0x80 && s[len(s)-1] != p[len(p)-1] {
 		return false
 	}
-	if isASCII(s) && isASCII(p) {
-		return false
+	ps := StringChars(p)
+	rest := s
+	for k := len(ps) - 1; k >= 0; k-- {
+		if rest == "" {
+			return false
+		}
+		c, at := lastGrapheme(rest)
+		if !charsEquivalent([]Character{c}, ps[k:k+1]) {
+			return false
+		}
+		rest = rest[:at]
 	}
-	cs, ps := StringChars(s), StringChars(p)
-	return len(ps) <= len(cs) && charsEquivalent(cs[len(cs)-len(ps):], ps)
+	return true
 }
 
 func charsEquivalent(a, b []Character) bool {
@@ -73,8 +81,8 @@ func graphemeBoundary(s string, i int) bool {
 	if i == 0 || i == len(s) {
 		return true
 	}
-	state, off := -1, 0
-	rest := s
+	state, off := -1, graphemeRestart(s, i)
+	rest := s[off:]
 	for off < i {
 		var c string
 		c, rest, state = firstGrapheme(rest, state)
