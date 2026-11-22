@@ -68,9 +68,16 @@ func Describe(pkgDir string) (map[string]Target, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, targets, err := describe(pkgDir)
+	return targets, err
+}
+
+// describe returns the directories of the packages in pkgDir's dependency graph, pkgDir first,
+// and their targets.
+func describe(pkgDir string) ([]string, map[string]Target, error) {
 	scratch, err := os.MkdirTemp("", "swift2go-describe-*")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.RemoveAll(scratch)
 	dirs := append([]string{pkgDir}, dependencyDirs(pkgDir, scratch)...)
@@ -91,7 +98,7 @@ func Describe(pkgDir string) (map[string]Target, error) {
 	m := map[string]Target{}
 	for i, sub := range subs {
 		if errs[i] != nil {
-			return nil, fmt.Errorf("%s: %w", dirs[i], errs[i])
+			return nil, nil, fmt.Errorf("%s: %w", dirs[i], errs[i])
 		}
 		for name, t := range sub {
 			if _, dup := m[name]; !dup {
@@ -99,7 +106,7 @@ func Describe(pkgDir string) (map[string]Target, error) {
 			}
 		}
 	}
-	return m, nil
+	return dirs, m, nil
 }
 
 // dependencyDirs lists the package directories in pkgDir's dependency graph, breadth first,

@@ -86,6 +86,8 @@ go run github.com/ncmud/swift2go/cmd/swift2go -incremental -pkg path/to/SwiftPac
 - The Go of every target in the run is still written from its whole AST, so the output matches a
   clean run's. The emitter reads function bodies across files and modules, for example to decide
   whether a call can modify its arguments, so an edited body can change the Go of other files.
+- The package graph that `swift package describe` reports is cached in `out/.cache/describe.gob` until
+  the toolchain, a manifest, a `Package.resolved` or the names of the files in a target's directory change.
 - An incremental run does not write `out/ast/<Target>.json`.
 
 ### Replacing a module with a Go package
