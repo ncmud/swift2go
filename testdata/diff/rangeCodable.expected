@@ -1,0 +1,9 @@
+{"bounds":[-1000000000000,1000000000000],"levels":[[1,5],[7,7]],"window":[0.5,2]}
+-1000000000000...1000000000000 0.5..<2.0 [ClosedRange(1...5), ClosedRange(7...7)]
+3...9
+3..<3
+DecodingError.dataCorrupted: Data was corrupted. Debug description: Cannot initialize ClosedRange<Int> with a lowerBound (9) greater than upperBound (3)
+DecodingError.dataCorrupted: Data was corrupted. Debug description: Cannot initialize Range<Int> with a lowerBound (9) greater than upperBound (3)
+DecodingError.valueNotFound: Expected value of type Int. Path: [1]. Debug description: Unkeyed container is at end.
+DecodingError.typeMismatch: Expected value of type Array<Any>. Debug description: Expected to decode Array<Any> but found a dictionary instead.
+1...2

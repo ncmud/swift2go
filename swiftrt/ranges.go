@@ -1,5 +1,10 @@
 package swiftrt
 
+import (
+	"reflect"
+	"strconv"
+)
+
 // Ordered is a Swift Comparable that Go can order with `<`.
 type Ordered interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~float32 | ~float64 | ~string
@@ -85,3 +90,70 @@ func RangeCount(r Range[int]) int { return max(0, r.Hi-r.Lo) }
 
 // RangeIsEmpty is Range.isEmpty.
 func RangeIsEmpty[T Ordered](r Range[T]) bool { return !(r.Lo < r.Hi) }
+
+// Encode is Range's Encodable conformance: the array [lowerBound, upperBound].
+func (r Range[T]) Encode(e *Encoder) { e.Value = []any{EncodeValue(r.Lo), EncodeValue(r.Hi)} }
+
+// Encode is ClosedRange's Encodable conformance: the array [lowerBound, upperBound].
+func (r ClosedRange[T]) Encode(e *Encoder) { e.Value = []any{EncodeValue(r.Lo), EncodeValue(r.Hi)} }
+
+// boundsDecodable is a Range or ClosedRange, which Swift decodes from [lowerBound, upperBound].
+type boundsDecodable interface{ decodeBounds(raw any, path []string) }
+
+func (r *Range[T]) decodeBounds(raw any, path []string) {
+	r.Lo, r.Hi = decodeBounds[T](raw, path)
+	if r.Hi < r.Lo {
+		boundsOutOfOrder("Range", r.Lo, r.Hi, path)
+	}
+}
+
+func (r *ClosedRange[T]) decodeBounds(raw any, path []string) {
+	r.Lo, r.Hi = decodeBounds[T](raw, path)
+	if r.Hi < r.Lo {
+		boundsOutOfOrder("ClosedRange", r.Lo, r.Hi, path)
+	}
+}
+
+// decodeBounds reads the first two elements of an unkeyed container, as a range's init(from:)
+// does; elements after them are ignored.
+func decodeBounds[T Ordered](raw any, path []string) (T, T) {
+	xs, ok := raw.([]any)
+	if !ok {
+		mismatch(reflect.TypeFor[[]any](), raw, path)
+	}
+	var bounds [2]T
+	for i := range bounds {
+		elementPath := append(codingPathCopy(path), "Index "+strconv.Itoa(i))
+		if i >= len(xs) {
+			panic(Throw(DecodingErrorValueNotFound{F0: reflect.TypeFor[T](), F1: CodingContext{
+				CodingPath: elementPath, DebugDescription: "Unkeyed container is at end.",
+			}}))
+		}
+		bounds[i] = DecodeValue[T](xs[i], elementPath)
+	}
+	return bounds[0], bounds[1]
+}
+
+func boundsOutOfOrder[T Ordered](kind string, lo, hi T, path []string) {
+	panic(Throw(DecodingErrorDataCorrupted{F0: CodingContext{
+		CodingPath: codingPathCopy(path),
+		DebugDescription: "Cannot initialize " + kind + "<" + decodeTypeName(reflect.TypeFor[T]()) + "> with a lowerBound (" +
+			Str(lo) + ") greater than upperBound (" + Str(hi) + ")",
+	}}))
+}
+
+// Description is Range's description, "lo..<hi".
+func (r Range[T]) Description() string { return Str(r.Lo) + "..<" + Str(r.Hi) }
+
+// DebugDescription is Range's debugDescription, "Range(lo..<hi)".
+func (r Range[T]) DebugDescription() string {
+	return "Range(" + debugStr(r.Lo) + "..<" + debugStr(r.Hi) + ")"
+}
+
+// Description is ClosedRange's description, "lo...hi".
+func (r ClosedRange[T]) Description() string { return Str(r.Lo) + "..." + Str(r.Hi) }
+
+// DebugDescription is ClosedRange's debugDescription, "ClosedRange(lo...hi)".
+func (r ClosedRange[T]) DebugDescription() string {
+	return "ClosedRange(" + debugStr(r.Lo) + "..." + debugStr(r.Hi) + ")"
+}
