@@ -161,6 +161,7 @@ func TaskSleepFor(d any) {
 	dur := goDuration(d)
 	s := currentScope()
 	if s == nil {
+		defer ActorSuspend()()
 		time.Sleep(dur)
 		return
 	}
@@ -169,9 +170,12 @@ func TaskSleepFor(d any) {
 	}
 	timer := time.NewTimer(dur)
 	defer timer.Stop()
+	resume := ActorSuspend()
 	select {
 	case <-timer.C:
+		resume()
 	case <-s.done:
+		resume()
 		panic(Throw(CancellationError{}))
 	}
 }
@@ -245,11 +249,13 @@ func withTaskGroup(body any) any {
 	if err != nil {
 		g.scope.cancel()
 	}
+	resume := ActorSuspend()
 	g.mu.Lock()
 	for g.running > 0 {
 		g.cond.Wait()
 	}
 	g.mu.Unlock()
+	resume()
 	if err != nil {
 		panic(Throw(err))
 	}
@@ -276,10 +282,14 @@ func taskGroupAdd(group *any, op any) {
 
 func taskGroupNext(group *any) *any {
 	g := (*group).(*taskGroup)
+	resume := ActorSuspend()
 	g.mu.Lock()
 	for len(g.results) == 0 && g.running > 0 {
 		g.cond.Wait()
 	}
+	g.mu.Unlock()
+	resume()
+	g.mu.Lock()
 	if len(g.results) == 0 {
 		g.mu.Unlock()
 		return nil

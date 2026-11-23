@@ -338,6 +338,7 @@ func (h *wsHandler) writeFrame(f wsFrame) error {
 	for i, c := range f.data {
 		buf = append(buf, c^key[i%4])
 	}
+	defer ActorSuspend()()
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
 	if _, err := h.conn.Write(buf); err != nil {
@@ -442,6 +443,7 @@ func (h *wsHandler) nextFrame() (wsFrame, bool) {
 		}
 		cancelled = s.done
 	}
+	defer ActorSuspend()()
 	select {
 	case f, ok := <-h.frames:
 		if ok {
@@ -677,6 +679,7 @@ func WebSocketClientConnectUrlConfigurationTlsConfigurationEventLoopGroupLoggerH
 	logger Logger,
 	handler func(WebSocketInboundStream, WebSocketOutboundWriter, WebSocketClientContext),
 ) *WebSocketCloseFrame {
+	defer ActorSuspend()()
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Hostname() == "" {
 		panic(Throw(WebSocketClientErrorInvalidURL))

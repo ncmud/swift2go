@@ -72,7 +72,9 @@ func TaskDetachedOperation(op any) *TaskHandle { return startTask(nil, op) }
 // rethrowing the error a throwing task ended with.
 func TaskValue(t any) any {
 	task := taskHandle(t)
+	resume := ActorSuspend()
 	<-task.done
+	resume()
 	if task.err != nil {
 		panic(Throw(task.err))
 	}
@@ -111,7 +113,9 @@ func (c *CheckedContinuation) resume(value any, err error) {
 func WithCheckedThrowingContinuation(body func(any)) any {
 	c := &CheckedContinuation{ch: make(chan struct{})}
 	body(c)
+	resume := ActorSuspend()
 	<-c.ch
+	resume()
 	if c.err != nil {
 		panic(Throw(c.err))
 	}
@@ -123,7 +127,9 @@ func WithCheckedThrowingContinuation(body func(any)) any {
 func WithCheckedContinuation(body func(any)) any {
 	c := &CheckedContinuation{ch: make(chan struct{})}
 	body(c)
+	resume := ActorSuspend()
 	<-c.ch
+	resume()
 	return c.value
 }
 
@@ -240,12 +246,14 @@ func AsyncStreamIteratorNext[T any](it *AsyncStreamIterator[T]) *T {
 		}
 		changed := s.changed
 		s.mu.Unlock()
+		resume := ActorSuspend()
 		select {
 		case <-changed:
 		case <-cancelled:
 			s.finish()
 			cancelled = nil
 		}
+		resume()
 	}
 }
 

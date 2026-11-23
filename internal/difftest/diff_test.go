@@ -6,6 +6,9 @@
 // that traps records what it printed before the trap, then a line "TRAP"; the trap's own message
 // differs between the languages and is not compared.
 //
+// Cases whose names start with "actor" run concurrent tasks on actors; they also run from a build with
+// the race detector, which reports a race as a trap.
+//
 // testdata/diff/base holds the library DiffBase, which Cases depends on, for cases that use
 // declarations of another package.
 package difftest
@@ -88,6 +91,11 @@ func TestDiff(t *testing.T) {
 	bin := filepath.Join(work, "cases")
 	run(t, gomod, "go", "mod", "tidy")
 	run(t, gomod, "go", "build", "-o", bin, "./main")
+	raceBin := ""
+	if strings.TrimSpace(string(run(t, gomod, "go", "env", "CGO_ENABLED"))) == "1" {
+		raceBin = filepath.Join(work, "cases-race")
+		run(t, gomod, "go", "build", "-race", "-o", raceBin, "./main")
+	}
 
 	for _, n := range names {
 		t.Run(n, func(t *testing.T) {
@@ -98,6 +106,13 @@ func TestDiff(t *testing.T) {
 			got, _ := caseOutput(bin, n)
 			if !bytes.Equal(got, want) {
 				t.Errorf("output differs from Swift\n%s", lineDiff(string(want), string(got)))
+			}
+			if raceBin == "" || !strings.HasPrefix(n, "actor") {
+				return
+			}
+			if got, _ := caseOutput(raceBin, n); !bytes.Equal(got, want) {
+				report, _ := exec.Command(raceBin, n).CombinedOutput()
+				t.Errorf("output under the race detector differs from Swift\n%s", report)
 			}
 		})
 	}

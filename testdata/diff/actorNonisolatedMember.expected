@@ -1,0 +1,3 @@
+w1
+worker w1 is nonisolated
+jobs 1

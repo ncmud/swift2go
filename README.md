@@ -266,6 +266,7 @@ replaces the Swift file of the same name, which is then not translated: `socket_
 | `Regex` literals | RE2 with Swift's Unicode word boundaries emulated |
 | `NSRegularExpression` | RE2 with ICU's Unicode classes, or `regexp2`'s backtracking engine for lookaround and backreferences |
 | `async`/`await`, `Task`, `AsyncStream`, `for await` | goroutines and channels in `swiftrt` |
+| `actor` | a class whose isolated members hold a `swiftrt.Actor` lock, released at each `await`; see [docs/ACTORS.md](docs/ACTORS.md) |
 | swift-testing `@Test`, `#expect`, `#require`, `arguments:` | `func TestX(t *testing.T)` and subtests |
 | freestanding expression macros | the compiler's recorded expansion |
 | `main.swift` top-level code | `func main` in `package main`, its variables package variables assigned in source order |
