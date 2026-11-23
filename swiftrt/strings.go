@@ -311,7 +311,7 @@ func StringInitRepeatingCount[T string](s T, n int) string {
 func StringInitDescribing(v any) string { return Str(v) }
 
 // StringInitInt is String(_: Int).
-func StringInitInt[T Integer](v T) string { return Str(int(v)) }
+func StringInitInt[T Integer](v T) string { return formatInteger(v, 10) }
 
 // StringInitString is String(_: String).
 func StringInitString(s string) string { return s }

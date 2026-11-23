@@ -15,6 +15,8 @@ func TestNormalizeLocal(t *testing.T) {
 		"Permanent #1 in Mod.Instance.fingerprint : Swift.String":                             "Mod.Permanent",
 		"[Permanent #1 in Mod.Instance.fingerprint : Swift.String]":                           "[Mod.Permanent]",
 		"[GroupKey #1 in Mod.Exporter.Result.report() -> Swift.String : [Mod.Exporter.Item]]": "[Mod.GroupKey : [Mod.Exporter.Item]]",
+		"Header #2 in Tool":   "Tool.Header",
+		"[Header #1 in Tool]": "[Tool.Header]",
 	}
 	for in, want := range cases {
 		if got := normalizeLocal(in); got != want {
@@ -46,6 +48,20 @@ func TestLocalWrappersInClosureResult(t *testing.T) {
 	for mangled, want := range cases {
 		if got := localWrappers(mangled, raw, normalizeLocal(raw)); got != want {
 			t.Errorf("localWrappers(%q) = %q, want %q", mangled, got, want)
+		}
+	}
+}
+
+func TestLocalWrappersInTopLevelCode(t *testing.T) {
+	cases := map[string][2]string{
+		"$s4Tool6HeaderL0_VD":   {"Header #2 in Tool", "Tool.Header"},
+		"$s4Tool6HeaderL0_VmD":  {"Header #2 in Tool.Type", "Tool.Header.Type"},
+		"$s4Tool6HeaderL_VSgD":  {"Header #1 in Tool?", "Tool.Header?"},
+		"$s4Tool6HeaderL1_VSgD": {"Header #3 in Tool?", "Tool.Header?"},
+	}
+	for mangled, c := range cases {
+		if got := localWrappers(mangled, c[0], normalizeLocal(c[0])); got != c[1] {
+			t.Errorf("localWrappers(%q) = %q, want %q", mangled, got, c[1])
 		}
 	}
 }

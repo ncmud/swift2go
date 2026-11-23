@@ -154,10 +154,11 @@ func (d *Demangler) Lookup(s string) (string, bool) {
 	return v, ok
 }
 
-var localStart = regexp.MustCompile(`(\w+) #\d+ in (?:static )?(\w+)\.`)
+var localStart = regexp.MustCompile(`(\w+) #\d+ in (?:static )?(\w+)(\.)?`)
 
 // normalizeLocal rewrites a type declared inside a function, "Foo #1 in static Mod.Type.fn(a: [Int]) -> [Bar]",
-// to "Mod.Foo", skipping the enclosing function's signature by balancing brackets.
+// to "Mod.Foo", skipping the enclosing function's signature by balancing brackets. A type declared in a
+// program's top-level code, "Foo #1 in Mod", becomes "Mod.Foo" as well.
 func normalizeLocal(s string) string {
 	for {
 		loc := localStart.FindStringSubmatchIndex(s)
@@ -166,6 +167,10 @@ func normalizeLocal(s string) string {
 		}
 		name, mod := s[loc[2]:loc[3]], s[loc[4]:loc[5]]
 		i := loc[1]
+		if loc[6] < 0 {
+			s = s[:loc[0]] + mod + "." + name + s[i:]
+			continue
+		}
 		for i < len(s) && s[i] != '(' && s[i] != ' ' && s[i] != ',' && s[i] != ']' && s[i] != '>' {
 			i++
 		}
@@ -230,17 +235,23 @@ func skipBalanced(s string, i int) int {
 //
 // A local type nested in another type, such as the result of a closure type ("() throws -> Foo #1 in f() -> ()?"
 // for `() throws -> Foo?`), gets the optionals that directly follow it in the mangling.
+// localMangling is the mangling of a local struct, class or enum: L, its discriminator past the first
+// ("L_" is #1, "L0_" is #2), and its kind.
+var localMangling = regexp.MustCompile(`L\d*_[VCO]`)
+
 func localWrappers(mangled, raw, norm string) string {
 	loc := localStart.FindStringSubmatchIndex(raw)
 	if loc == nil || !strings.HasSuffix(mangled, "D") {
 		return norm
 	}
-	i := strings.LastIndex(mangled, "L_")
-	if i < 0 || i+3 > len(mangled) || !strings.ContainsRune("VCO", rune(mangled[i+2])) {
+	marks := localMangling.FindAllStringIndex(mangled, -1)
+	if len(marks) == 0 {
 		return norm
 	}
+	// The wrappers' mangling follows the local type's: mangled[after:].
+	after := marks[len(marks)-1][1]
 	if loc[0] != 0 {
-		if len(localStart.FindAllStringIndex(raw, -1)) != 1 || strings.Count(mangled, "L_") != 1 {
+		if len(localStart.FindAllStringIndex(raw, -1)) != 1 || len(marks) != 1 {
 			return norm
 		}
 		at := loc[0] + len(raw[loc[4]:loc[5]]) + 1 + len(raw[loc[2]:loc[3]])
@@ -248,7 +259,7 @@ func localWrappers(mangled, raw, norm string) string {
 			return norm
 		}
 		opt := ""
-		for rest := mangled[i+3:]; strings.HasPrefix(rest, "Sg"); rest = rest[2:] {
+		for rest := mangled[after:]; strings.HasPrefix(rest, "Sg"); rest = rest[2:] {
 			opt += "?"
 		}
 		return norm[:at] + opt + norm[at:]
@@ -259,7 +270,7 @@ func localWrappers(mangled, raw, norm string) string {
 	}
 	var out strings.Builder
 	out.WriteString(norm[:end])
-	rest := strings.TrimSuffix(mangled[i+3:], "D")
+	rest := strings.TrimSuffix(mangled[after:], "D")
 	for rest != "" {
 		switch {
 		case strings.HasPrefix(rest, "Sg"):

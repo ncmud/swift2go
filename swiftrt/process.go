@@ -10,6 +10,10 @@ import (
 // CFExit is C `exit(_:)`: it ends the process with the status code.
 func CFExit(code int32) { os.Exit(int(code)) }
 
+// CFFflush is C `fflush(_:)`. Print writes straight to the descriptor and buffers nothing, so there is
+// nothing to flush: it returns 0.
+func CFFflush(any) int32 { return 0 }
+
 // CFAbort is C `abort()`: it ends the process abnormally. In Go that is an unrecovered panic, which
 // prints every goroutine's stack and, under GOTRACEBACK=crash, raises SIGABRT for a core.
 func CFAbort() { panic("swiftrt: abort() called") }

@@ -113,6 +113,45 @@ func TestOverlay(t *testing.T) {
 	}
 }
 
+// TestExecutable transpiles testdata/executable/swift, whose top-level code declares a type inside a do block,
+// runs the program, and builds it for WASI.
+func TestExecutable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("transpiles a Swift package")
+	}
+	swifttest.Require(t, "xcrun", "swift", "swiftc")
+	pkgDir, err := filepath.Abs("testdata/executable/swift")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir("../..")
+	outDir := filepath.Join("out", "executabletest")
+	t.Cleanup(func() { _ = os.RemoveAll(outDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
+
+	if err := run("transpile", []string{"Tool"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, false, swiftmod.Destination{}); err != nil {
+		t.Fatal(err)
+	}
+	tool := "./" + filepath.ToSlash(filepath.Join(outDir, "tool"))
+	for input, want := range map[string]string{`{"version": 7}`: "version 7", "{}": "not a header"} {
+		cmd := exec.Command("go", "run", tool)
+		cmd.Stdin = strings.NewReader(input + "\n")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("go run: %v\n%s", err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("for %s: printed %q, want %q", input, got, want)
+		}
+	}
+
+	wasm := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "tool.wasm"), tool)
+	wasm.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm", "CGO_ENABLED=0")
+	if out, err := wasm.CombinedOutput(); err != nil {
+		t.Fatalf("go build for wasip1: %v\n%s", err, out)
+	}
+}
+
 // TestSwiftSDK transpiles testdata/platform/swift for the host and for an installed Linux Swift SDK, and
 // checks that each Go program takes the `#if os(...)` and `canImport` branches of its platform and finds its
 // resources in the bundle SwiftPM names on that platform.

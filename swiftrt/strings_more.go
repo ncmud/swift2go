@@ -704,9 +704,17 @@ func ReversedCollectionDropWhile[T any](xs []T, f func(T) bool) []T { return Sli
 // StringInitReversedCollection is `String(reversedCharacters)`.
 func StringInitReversedCollection(cs []Character) string { return StringInitSlice(cs) }
 
+// formatInteger writes v in the radix, reading an unsigned value past the largest Int as unsigned.
+func formatInteger[T Integer](v T, radix int) string {
+	if v < 0 {
+		return strconv.FormatInt(int64(v), radix)
+	}
+	return strconv.FormatUint(uint64(v), radix)
+}
+
 // StringInitIntRadixUppercase is `String(n, radix:uppercase:)`.
 func StringInitIntRadixUppercase[T Integer](n T, radix int, upper bool) string {
-	s := strconv.FormatInt(int64(n), radix)
+	s := formatInteger(n, radix)
 	if upper {
 		s = strings.ToUpper(s)
 	}
@@ -714,7 +722,7 @@ func StringInitIntRadixUppercase[T Integer](n T, radix int, upper bool) string {
 }
 
 // StringInitIntRadix is `String(n, radix:)`.
-func StringInitIntRadix[T Integer](n T, radix int) string { return strconv.FormatInt(int64(n), radix) }
+func StringInitIntRadix[T Integer](n T, radix int) string { return formatInteger(n, radix) }
 
 // CharacterIsWholeNumber reports `Character.wholeNumberValue != nil`.
 func CharacterIsWholeNumber(c Character) bool { return CharacterWholeNumberValue(c) != nil }

@@ -6,8 +6,6 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
 // DescriptorIO serves the C descriptor functions (read, write, close, poll) for descriptors that a
@@ -82,7 +80,7 @@ func failed[R ~int | ~int32](err error) R {
 const (
 	CMacroEINTR       int32 = int32(syscall.EINTR)
 	CMacroEAGAIN      int32 = int32(syscall.EAGAIN)
-	CMacroEWOULDBLOCK int32 = int32(syscall.EWOULDBLOCK)
+	CMacroEWOULDBLOCK int32 = int32(sysEWOULDBLOCK)
 	CMacroEINPROGRESS int32 = int32(syscall.EINPROGRESS)
 	CMacroEBADF       int32 = int32(syscall.EBADF)
 	CMacroEPIPE       int32 = int32(syscall.EPIPE)
@@ -106,12 +104,12 @@ func CPollfdInitFdEventsRevents(fd int32, events, revents int16) CPollfd {
 
 // C `poll(2)` event bits.
 const (
-	CMacroPOLLIN   int32 = unix.POLLIN
-	CMacroPOLLPRI  int32 = unix.POLLPRI
-	CMacroPOLLOUT  int32 = unix.POLLOUT
-	CMacroPOLLERR  int32 = unix.POLLERR
-	CMacroPOLLHUP  int32 = unix.POLLHUP
-	CMacroPOLLNVAL int32 = unix.POLLNVAL
+	CMacroPOLLIN   int32 = sysPOLLIN
+	CMacroPOLLPRI  int32 = sysPOLLPRI
+	CMacroPOLLOUT  int32 = sysPOLLOUT
+	CMacroPOLLERR  int32 = sysPOLLERR
+	CMacroPOLLHUP  int32 = sysPOLLHUP
+	CMacroPOLLNVAL int32 = sysPOLLNVAL
 )
 
 // cBuffer is the memory behind a C buffer argument: the bytes of the array, or of the C string,
@@ -210,16 +208,9 @@ func pollDescriptors(fds []CPollfd, timeoutMs int32) int32 {
 			}
 		}
 	}
-	set := make([]unix.PollFd, len(fds))
-	for i, f := range fds {
-		set[i] = unix.PollFd{Fd: f.Fd, Events: f.Events}
-	}
-	n, err := unix.Poll(set, int(timeoutMs))
+	n, err := sysPoll(fds, int(timeoutMs))
 	if err != nil {
 		return failed[int32](err)
-	}
-	for i := range fds {
-		fds[i].Revents = set[i].Revents
 	}
 	return int32(n) //nolint:gosec // at most len(fds)
 }
