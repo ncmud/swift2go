@@ -4,6 +4,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unsafe"
 )
 
 // Number is any Swift integer or floating-point type.
@@ -210,6 +211,16 @@ func Shr[T Integer, U Integer](a T, n U) T {
 		return a << negatedCount(n)
 	}
 	return a >> uint64(n)
+}
+
+// MaskedShl is Swift's masking `&<<`: the count is reduced modulo the bit width of T.
+func MaskedShl[T Integer, U Integer](a T, n U) T { return a << maskedCount(a, n) }
+
+// MaskedShr is Swift's masking `&>>`: the count is reduced modulo the bit width of T.
+func MaskedShr[T Integer, U Integer](a T, n U) T { return a >> maskedCount(a, n) }
+
+func maskedCount[T Integer, U Integer](a T, n U) uint64 {
+	return uint64(n) & (uint64(unsafe.Sizeof(a))*8 - 1)
 }
 
 // negatedCount returns -n for a negative shift count, without overflowing at the type's minimum.

@@ -3356,7 +3356,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 	}
 	l, r := as[0].node, as[1].node
 	switch op {
-	case "&&", "||", "??", "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=":
+	case "&&", "||", "??", "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "&<<=", "&>>=":
 	default:
 		e.pinOperands(l, r)
 	}
@@ -3379,7 +3379,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 	}
 	switch op {
-	case "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=":
+	case "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "&<<=", "&>>=":
 		s, _ := e.compoundAssign(n)
 		return "func() struct{} { " + s + "; return struct{}{} }()"
 	case "&&", "||":
@@ -3531,6 +3531,8 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		return infix(e.expr(l), op, e.expr(r))
 	case "&+", "&-", "&*":
 		return infix(e.expr(l), op[1:], e.expr(r))
+	case "&<<", "&>>":
+		return "swiftrt." + maskingShifts[op] + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 	}
 	return e.m.Unsup("operator:"+op, e.where, e.exprGoType(n))
 }
@@ -3657,6 +3659,9 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 			if fn, ok := map[string]string{"+": "Add", "-": "Sub", "*": "Mul", "/": "Div", "%": "Rem"}[base]; ok {
 				return "swiftrt." + fn + e.intTypeArg(lt) + "(" + cur + ", " + rs + ")"
 			}
+		}
+		if fn, ok := maskingShifts[base]; ok {
+			return "swiftrt." + fn + e.intTypeArg(lt) + "(" + cur + ", " + rs + ")"
 		}
 		if (base == "<<" || base == ">>") && lt.Kind == types.Named && isIntegerName(lt.Name) && !isNonNegativeLiteral(as[1].node) {
 			return "swiftrt." + map[string]string{"<<": "Shl", ">>": "Shr"}[base] + e.intTypeArg(lt) + "(" + cur + ", " + rs + ")"
@@ -4485,6 +4490,10 @@ func (e *fileEmitter) bitWidthOwner(n ast.Node) string {
 	}
 	return e.m.GoType(t, e.generics)
 }
+
+// maskingShifts name the runtime functions for Swift's masking shifts, which reduce the count modulo the
+// left operand's bit width.
+var maskingShifts = map[string]string{"&<<": "MaskedShl", "&>>": "MaskedShr"}
 
 // intTypeArg is "[T]" for a checked-arithmetic call on a fixed-width integer type other than Int, so
 // untyped literal operands take the operation's type.
