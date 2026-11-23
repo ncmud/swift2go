@@ -333,3 +333,26 @@ func BenchmarkCopyNested(b *testing.B) {
 		v = Copy(v)
 	}
 }
+
+func TestCopyKeepsATaskHandleInAnInterface(t *testing.T) {
+	release := make(chan struct{})
+	var task any = TaskInitOperation(func() int { <-release; return 7 })
+	copied := Copy(task)
+	close(release)
+	if copied.(*TaskHandle) != task.(*TaskHandle) {
+		t.Fatal("Copy made a second handle for the task")
+	}
+	if got := TaskValue(copied); got != 7 {
+		t.Fatalf("TaskValue of the copy = %v, want 7", got)
+	}
+}
+
+func TestCopyKeepsACheckedContinuationInAnInterface(t *testing.T) {
+	got := WithCheckedContinuation(func(c any) {
+		copied := Copy(c)
+		go CheckedContinuationResumeReturning(copied, "resumed")
+	})
+	if got != "resumed" {
+		t.Fatalf("WithCheckedContinuation = %v, want the value the copy resumed with", got)
+	}
+}

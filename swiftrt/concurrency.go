@@ -16,6 +16,9 @@ type TaskHandle struct {
 	err   error
 }
 
+// SwiftClass marks a task handle as a reference: every copy of a Swift `Task` names the same task.
+func (*TaskHandle) SwiftClass() {}
+
 // TaskInitOperation is Swift `Task { ... }`, run on a goroutine. op is a `func()` or a `func() T`; an
 // error the operation throws is kept for TaskValue, and any other panic crashes the process as a
 // Swift trap would.
@@ -91,6 +94,9 @@ type CheckedContinuation struct {
 	value   any
 	err     error
 }
+
+// SwiftClass marks a continuation as a reference: every copy resumes the same suspended task.
+func (*CheckedContinuation) SwiftClass() {}
 
 func (c *CheckedContinuation) resume(value any, err error) {
 	if c.resumed.Swap(true) {
