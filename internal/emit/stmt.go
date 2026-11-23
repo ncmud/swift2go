@@ -1473,7 +1473,7 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 				// `switch true { case a != nil: }` compares with the whole condition.
 				return subj + " == (" + e.expr(lit) + ")"
 			}
-			return subj + " == " + e.expr(lit)
+			return infix(subj, "==", e.expr(lit))
 		}
 		return e.m.Unsup("pattern_expr-shape", e.where, "bool")
 	case "pattern_is":
@@ -1554,7 +1554,7 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		if inner == "true" {
 			return subj + " != nil"
 		}
-		return subj + " != nil && " + inner
+		return assocInfix(subj+" != nil", "&&", inner)
 	case "pattern_bool":
 		if p.Bool("value") {
 			return subj
@@ -2225,7 +2225,7 @@ func (e *fileEmitter) optionalCase(p ast.Node, subj string, st *types.Type, dere
 		return "", false
 	}
 	inner := e.patternTest(p, val, t.Args[0])
-	return subj + " != nil && " + inner, true
+	return assocInfix(subj+" != nil", "&&", inner), true
 }
 
 // optionalUnwrap binds the payload of a `.some(p)` pattern, or of a wrapped-enum case matched against an

@@ -1,0 +1,38 @@
+and-shl 128 8 36 5
+wrapmul-shl 81608 10100 172
+mul-shl 81608 4 0 163216
+shl-and 32 10201 10
+generic 128 172 203
+or-and 238 238 238 124 124 166
+or-shl 478 248 606 0
+or-xor 211 191 275 235 179
+add-and 238 125 275
+cmp false true true true true
+logic true true true true false
+lowered false false false true false
+computed true false true
+unary 37 -240 -20402 -303 -812 26 160 202 1 -1
+float 11.5 0.0 -10.0 0.9375 1.5 6.5 -3.5 -2.25
+coalesce 3 3 202 239 true 5 10
+range 4 3 239
+range-loop 27
+cast 8 false 15 148 80 40 9900
+ternary 202 202 60 202 175
+chain 12 true 3 22 true
+interp 128 239 -20402 true 188
+c-and-shl 128
+c-or-and-shl 234
+c-xor-or 183
+c-wrapadd-mul 6262
+c-wrapsub-or 77
+c-wrapmul-add 20604
+c-shl-add 3232
+c-and-not 0
+c-u8 229
+c-float-mul 13.75
+c-float-div 0.4166666666666667
+c-float-neg 6.5
+c-subscript [202, 247, -65]
+c-dict 327 4
+c-setter 8
+c-string atextb

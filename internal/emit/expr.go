@@ -3383,7 +3383,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		s, _ := e.compoundAssign(n)
 		return "func() struct{} { " + s + "; return struct{}{} }()"
 	case "&&", "||":
-		return e.expr(l) + " " + op + " " + e.expr(r)
+		return assocInfix(e.expr(l), op, e.expr(r))
 	case "..<", "...":
 		typ := map[string]string{"..<": "Range", "...": "ClosedRange"}[op] + "[" + e.m.GoType(lt, e.generics) + "]"
 		if lo, hi, ok := integerLiterals(l, r); ok && lo <= hi {
@@ -3398,13 +3398,13 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			// A range pattern matches the values it contains.
 			return "swiftrt." + e.m.Recv(lt) + "Contains(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
-		return e.expr(l) + " == " + e.expr(r)
+		return infix(e.expr(l), "==", e.expr(r))
 	case "==", "!=":
 		if rl, rr := e.m.Recv(lt), e.m.Recv(e.m.typeOf(r.Type())); (rl == "String" || rl == "Substring") && (rr == "String" || rr == "Substring") && rl != rr {
-			return e.stringish(l) + " " + op + " " + e.stringish(r)
+			return infix(e.stringish(l), op, e.stringish(r))
 		}
 		if r.Kind() == "nil_literal_expr" || l.Kind() == "nil_literal_expr" {
-			return e.expr(l) + " " + op + " " + e.expr(r)
+			return infix(e.expr(l), op, e.expr(r))
 		}
 		if op == "!=" && lt.Kind == types.Named && e.m.declaresMember(lt.Name, "==") {
 			// The standard library's != negates the type's own ==.
@@ -3429,7 +3429,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			}
 			return fn + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
-		return e.expr(l) + " " + op + " " + e.expr(r)
+		return infix(e.expr(l), op, e.expr(r))
 	case "<", "<=", ">", ">=":
 		if rt := e.m.typeOf(r.Type()); lt.Kind == types.Named && rt != nil && rt.Kind == types.Named && isIntegerName(lt.Name) && isIntegerName(rt.Name) && lt.Name != rt.Name {
 			return "swiftrt.IntCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
@@ -3449,7 +3449,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		if lt.Kind == types.Tuple {
 			return e.tupleCompare(n, lt, op, l, r)
 		}
-		return e.expr(l) + " " + op + " " + e.expr(r)
+		return infix(e.expr(l), op, e.expr(r))
 	case "+", "-", "*":
 		if rl := e.m.Recv(lt); (op == "+" || op == "-") && (rl == "UnsafeMutablePointer" || rl == "UnsafePointer") {
 			// Pointer arithmetic moves a pointer into C memory by a number of elements.
@@ -3481,10 +3481,10 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		if e.m.GoType(lt, e.generics) == "swiftrt.Date" && e.m.GoType(e.m.typeOf(r.Type()), e.generics) != "swiftrt.Date" {
 			// Date ± TimeInterval is a Date.
-			return "(" + e.expr(l) + " " + op + " swiftrt.Date(" + e.expr(r) + "))"
+			return "(" + infix(e.expr(l), op, "swiftrt.Date("+e.expr(r)+")") + ")"
 		}
 		if op == "+" && (e.m.Recv(lt) == "String" || e.m.Recv(lt) == "Substring") {
-			cat := e.stringish(l) + " + " + e.stringish(r)
+			cat := assocInfix(e.stringish(l), "+", e.stringish(r))
 			if e.m.Recv(e.m.typeOf(n.Type())) == "Substring" {
 				return "swiftrt.SubstringInitString(" + cat + ")"
 			}
@@ -3526,11 +3526,11 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		if lt.Kind == types.Named && isIntegerName(lt.Name) && (!isNonNegativeLiteral(r) || op == "<<" && !e.constShiftFits(lt, l, r)) {
 			return "swiftrt." + map[string]string{"<<": "Shl", ">>": "Shr"}[op] + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
-		return e.expr(l) + " " + op + " " + e.expr(r)
+		return infix(e.expr(l), op, e.expr(r))
 	case "&", "|", "^":
-		return e.expr(l) + " " + op + " " + e.expr(r)
+		return infix(e.expr(l), op, e.expr(r))
 	case "&+", "&-", "&*":
-		return e.expr(l) + " " + op[1:] + " " + e.expr(r)
+		return infix(e.expr(l), op[1:], e.expr(r))
 	}
 	return e.m.Unsup("operator:"+op, e.where, e.exprGoType(n))
 }
@@ -3542,7 +3542,7 @@ func (e *fileEmitter) floatOperands(lt *types.Type, l, r, op string) string {
 	if gt := e.m.GoType(lt, e.generics); (gt == "float64" || gt == "float32") && isConstText(l) && isConstText(r) {
 		l = "swiftrt.FloatValue[" + gt + "](" + l + ")"
 	}
-	return l + " " + op + " " + r
+	return infix(l, op, r)
 }
 
 var constText = regexp.MustCompile(`^[0-9.eE+\-*/() ]+$`)
@@ -3651,7 +3651,7 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 			return "swiftrt.Int128" + fn + "(" + cur + ", " + rs + ")"
 		}
 		if len(base) == 2 && base[0] == '&' && strings.ContainsAny(base[1:], "+-*") {
-			return cur + " " + base[1:] + " " + rightOperand(rs, base[1:])
+			return infix(cur, base[1:], rs)
 		}
 		if lt.Kind == types.Named && isIntegerName(lt.Name) {
 			if fn, ok := map[string]string{"+": "Add", "-": "Sub", "*": "Mul", "/": "Div", "%": "Rem"}[base]; ok {
@@ -3665,13 +3665,13 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 			return "append(" + cur + ", " + rs + "...)"
 		}
 		if base == "+" && e.m.Recv(lt) == "String" {
-			return cur + " + " + rs
+			return assocInfix(cur, "+", rs)
 		}
 		if (base == "+" || base == "-") && e.m.GoType(lt, e.generics) == "swiftrt.Date" {
 			// Date ± TimeInterval is a Date.
-			return cur + " " + base + " swiftrt.Date(" + rs + ")"
+			return infix(cur, base, "swiftrt.Date("+rs+")")
 		}
-		return cur + " " + base + " " + rightOperand(rs, base)
+		return infix(cur, base, rs)
 	}
 	if info, _ := e.lookup(d.Str("decl_usr")); info == nil {
 		if call, ok := e.setterCall(l, combine(e.expr(l))); ok {
@@ -3788,7 +3788,7 @@ func (e *fileEmitter) prefix(n ast.Node) string {
 	x := e.expr(as[0].node)
 	switch op {
 	case "!":
-		return "!" + x
+		return "!" + unaryOperand(x)
 	case "-":
 		if e.exprGoType(as[0].node) == "swiftrt.Int128" {
 			return "swiftrt.Int128Neg(" + x + ")"
@@ -3796,13 +3796,13 @@ func (e *fileEmitter) prefix(n ast.Node) string {
 		if t := e.m.typeOf(as[0].node.Type()); t != nil && t.Kind == types.Named && isIntegerName(t.Name) && stripConv(as[0].node).Kind() != "integer_literal_expr" {
 			return "swiftrt.Neg(" + x + ")"
 		}
-		return "-" + x
+		return "-" + unaryOperand(x)
 	case "~":
 		if lit := stripConv(as[0].node); lit.Kind() == "integer_literal_expr" {
 			// A literal operand needs its type: ^1 as an untyped constant is -2.
 			return "^" + e.exprGoType(as[0].node) + "(" + x + ")"
 		}
-		return "^" + x
+		return "^" + unaryOperand(x)
 	case "..<":
 		return "(swiftrt.PartialRangeUpTo[" + e.m.GoType(e.m.typeOf(as[0].node.Type()), e.generics) + "]{Hi: " + x + "})"
 	case "...":
