@@ -414,6 +414,13 @@ type initFromDecodable interface{ SwiftInitFrom(*Decoder) }
 // type: it codes its RawValue field alone.
 type rawCodable interface{ SwiftRawCodable() }
 
+// keyedEncoder is a struct with properties that the program's own overload of
+// `KeyedEncodingContainer.encode(_:forKey:)` encodes: SwiftEncodeKeyed encodes the field through it, under
+// key, and reports whether the field is one.
+type keyedEncoder interface {
+	SwiftEncodeKeyed(c *KeyedEncodingContainer, field, key string) bool
+}
+
 // EncodeValue turns a Swift value into a JSON-shaped tree.
 func EncodeValue(v any) any {
 	if v == nil {
@@ -532,9 +539,13 @@ func EncodeValue(v any) any {
 				}
 			}
 		}
+		keyed, _ := v.(keyedEncoder)
 		for _, i := range fields {
 			fv := rv.Field(i)
 			if fv.Kind() == reflect.Pointer && fv.IsNil() {
+				continue
+			}
+			if keyed != nil && keyed.SwiftEncodeKeyed(&KeyedEncodingContainer{out}, t.Field(i).Name, codingKey(t.Field(i))) {
 				continue
 			}
 			out.set(codingKey(t.Field(i)), EncodeValue(fv.Interface()))

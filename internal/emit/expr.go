@@ -138,6 +138,9 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 			}
 			return "*new(" + gt + ")"
 		}
+		if c := e.witnessCarrier(e.m.typeOf(n.Type()), e.m.typeOf(sub.Type())); c != "" {
+			return c + "(" + e.expr(sub) + ")"
+		}
 		if t := e.m.typeOf(sub.Type()); t != nil && t.Kind == types.Named && e.m.HasMutatingMethods(t.Name) && !e.m.isProtocol(t.Name) {
 			// An existential is already an interface value; boxing it again would lose its identity.
 			return "swiftrt.Ref(" + e.expr(sub) + ")"
@@ -1039,7 +1042,7 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 			}
 			return pfx + info.GoName
 		case info.OwnerKind == "protocol":
-			return e.expr(base) + ".Get" + info.GoName + "()"
+			return e.witnessRecv(base, e.expr(base)) + ".Get" + info.GoName + "()"
 		case info.FreeSelf():
 			return pfx + info.GoName + "(" + e.expr(base) + ")"
 		case info.Computed:
@@ -2606,7 +2609,7 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 				if inner.Kind() == "inout_expr" {
 					inner = inner.Child("sub_expr")
 				}
-				recv = e.expr(inner)
+				recv = e.witnessRecv(inner, e.expr(inner))
 				if t := e.m.typeOf(inner.Type()); t != nil && t.Kind == types.Named && e.m.HasMutatingMethods(t.Name) {
 					if base.Kind() == "inout_expr" {
 						recv = "&" + e.lvalue(inner)
@@ -2621,7 +2624,7 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 			}
 			return pfx + info.GoName + targs + "(" + strings.Join(append([]string{recv}, ss...), ", ") + ")"
 		default:
-			call := e.recvExpr(base) + "." + e.superTarget(info, base) + "(" + strings.Join(ss, ", ") + ")"
+			call := e.witnessRecv(base, e.recvExpr(base)) + "." + e.superTarget(info, base) + "(" + strings.Join(ss, ", ") + ")"
 			if info.OwnerKind != "protocol" && !info.ProtoExt {
 				// A witness for a requirement typed by an associated type returns any.
 				if _, erased := e.m.assocErasure(info.Node, info.Owner); erased {

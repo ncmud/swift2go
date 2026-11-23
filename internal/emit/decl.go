@@ -78,6 +78,8 @@ type fileEmitter struct {
 	sliceDry    bool                // sliceBase only reports whether a start index can be told
 	localFuncs  map[string]ast.Node // functions declared inside the file's function bodies, by USR
 	keptParams  map[string]bool     // type parameters callers name though no parameter or result does
+	witnessOf   map[string]string   // type parameter → the witnessed protocol it conforms to, its Go bound being any
+	registered  map[string]bool     // carriers of generic foreign types this file registers, by Go type and carrier
 }
 
 // blankStringLiterals is Go source with the contents of its string and rune literals and its
@@ -136,6 +138,11 @@ func (e *fileEmitter) emitFile() string {
 	for _, it := range e.file.Items {
 		e.guarded(it.Kind(), func() { e.topDecl(it, "") })
 		emitHoisted()
+		ast.Walk(map[string]any(it), func(n ast.Node) {
+			if n.Kind() == "declref_expr" {
+				e.registerWitnesses(n.Child("decl"))
+			}
+		})
 	}
 	e.guarded("top_level_code_decl", e.topLevelCode)
 	emitHoisted()
@@ -412,7 +419,7 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 		e.w("\t// SwiftSub is the most-derived object when this value is embedded in a subclass.\n\tSwiftSub any\n")
 	}
 	keys := codingKeys(n)
-	var fieldKeys []string
+	var fieldKeys, keyedEncodes []string
 	wrapped := wrappedProperties(n)
 	for _, mem := range n.List("members") {
 		if mem.Kind() != "var_decl" {
@@ -448,6 +455,10 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 		} else if name != mem.Name() {
 			tag += " key:\"" + name + "\""
 		}
+		if t := e.m.typeOf(mem.Str("interface_type")); t != nil && t.Kind == types.Named && len(t.Args) == 1 && e.m.keyedOverloads()[t.Name].encode != "" && !strings.Contains(tag, `key:"-"`) {
+			keyedEncodes = append(keyedEncodes, fmt.Sprintf("\tcase %q:\n\t\t%s[string, %s](c, self.%s, key)\n\t\treturn true\n",
+				vi.GoName, e.m.keyedOverloads()[t.Name].encode, e.m.GoType(t.Args[0], e.generics), vi.GoName))
+		}
 		if name != mem.Name() {
 			if t := e.m.typeOf(mem.Str("interface_type")); t != nil && t.Kind == types.Named && e.m.keyedOverloads()[t.Name].decode != "" {
 				// Its wrapper's own keyed decode overload, which Go cannot call for every wrapped type, reads a
@@ -459,6 +470,11 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	}
 	e.w("}\n\n")
 	recvT := info.GoName + e.m.typeParamUse(q)
+	if len(keyedEncodes) > 0 {
+		// A synthesized encode(to:) calls the module's own overload of KeyedEncodingContainer.encode(_:forKey:)
+		// for a property of the type the overload takes, which Swift resolves statically.
+		e.w("func (self %s) SwiftEncodeKeyed(c *swiftrt.KeyedEncodingContainer, field, key string) bool {\n\tswitch field {\n%s\t}\n\treturn false\n}\n\n", recvT, strings.Join(keyedEncodes, ""))
+	}
 	if order := codingKeyOrder(n); len(order) > 1 && !slices.Equal(order, fieldKeys) {
 		// A synthesized encode(to:) writes the keys in the order the CodingKeys cases are declared.
 		e.w("func (%s) SwiftCodingKeyOrder() []string { return %#v }\n\n", recvT, order)
@@ -1135,6 +1151,8 @@ func (e *fileEmitter) extensionDecl(n ast.Node) {
 		e.retroactiveConformances(n, q)
 		if q == "Swift.Optional" {
 			e.optionalWitnessTypes(n)
+		} else {
+			e.foreignWitnessTypes(n, q)
 		}
 	}
 	if self.Kind != "protocol_ext" {
@@ -1279,6 +1297,7 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 	e.typeParams = nil
 	e.typeBounds = map[string]string{}
 	e.keptParams = map[string]bool{}
+	e.witnessOf = map[string]string{}
 	own := map[string]bool{}
 	for _, gp := range fn.Child("generic_signature").Strings("generic_params") {
 		name := e.m.demangle(gp)
@@ -1351,6 +1370,12 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 					e.typeBounds[g[param]] = "comparable"
 				}
 			}
+			continue
+		}
+		if own[param] && e.m.isLocalProtocol(proto) && !erasesMetaGeneric(e.m, fn, param) && e.m.witnessed(proto) {
+			// Foreign types conform to the protocol through carriers, so the parameter is unbounded and
+			// requirements reach its values through swiftrt.Witness.
+			e.witnessOf[g[param]] = e.m.GoType(&types.Type{Kind: types.Named, Name: proto}, nil)
 			continue
 		}
 		if own[param] && e.m.isLocalProtocol(proto) && erasesMetaGeneric(e.m, fn, param) {

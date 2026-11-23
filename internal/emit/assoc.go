@@ -306,6 +306,9 @@ func (e *fileEmitter) optionalWitnessRegistrations(n ast.Node, q string) {
 // witness of its Optional conformance when its bound is a protocol Optional conforms to, or else its
 // MetaZero.
 func (e *fileEmitter) staticCarrier(tp string) string {
+	if bound := e.witnessOf[tp]; bound != "" {
+		return "swiftrt.StaticWitness[" + tp + ", " + bound + "]()"
+	}
 	if bound := e.typeBounds[tp]; bound != "" {
 		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
 			for proto := range mod.optConforms {
