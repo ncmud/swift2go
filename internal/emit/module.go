@@ -678,6 +678,8 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 			m.index(n.List("members"), q, kind)
 		case "typealias":
 			m.typeAliases[m.qualify(owner, n.Name())] = n.Str("type")
+		case "top_level_code_decl":
+			m.indexLocalTypes(n.Child("body"))
 		case "func_decl", "constructor_decl", "var_decl", "enum_element_decl", "subscript_decl":
 			switch n.Kind() {
 			case "func_decl", "constructor_decl":
@@ -739,7 +741,6 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 	}
 }
 
-// indexLocalTypes indexes types declared inside a function body; they are hoisted to package level.
 // typesNamedApart names the file-private and function-local types that share their name with another type
 // at the top level of the module or inside a function, which Go, with one package scope, cannot tell apart.
 func typesNamedApart(files []ast.File) map[string]bool {
@@ -783,7 +784,7 @@ func typesNamedApart(files []ast.File) map[string]bool {
 				members(n.List("members"), false)
 			case "extension_decl":
 				members(n.List("members"), false)
-			case "func_decl", "constructor_decl", "var_decl", "subscript_decl":
+			case "func_decl", "constructor_decl", "var_decl", "subscript_decl", "top_level_code_decl":
 				locals(n)
 			}
 		}
@@ -800,6 +801,8 @@ func typesNamedApart(files []ast.File) map[string]bool {
 	return names
 }
 
+// indexLocalTypes indexes types declared inside a function body or top-level code; they are hoisted to
+// package level.
 func (m *Module) indexLocalTypes(body ast.Node) {
 	if body == nil {
 		return

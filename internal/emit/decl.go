@@ -120,15 +120,19 @@ func (e *fileEmitter) emitFile() string {
 	var body strings.Builder
 	saved := e.b
 	e.b = strings.Builder{}
-	for _, it := range e.file.Items {
-		e.guarded(it.Kind(), func() { e.topDecl(it, "") })
+	emitHoisted := func() {
 		for len(e.hoisted) > 0 {
 			h := e.hoisted[0]
 			e.hoisted = e.hoisted[1:]
 			e.guarded(h.Kind(), func() { e.topDecl(h, "") })
 		}
 	}
+	for _, it := range e.file.Items {
+		e.guarded(it.Kind(), func() { e.topDecl(it, "") })
+		emitHoisted()
+	}
 	e.guarded("top_level_code_decl", e.topLevelCode)
+	emitHoisted()
 	body.WriteString(e.b.String())
 	body.WriteString(e.extraDecls.String())
 	e.b = saved

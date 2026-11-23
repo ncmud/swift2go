@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"syscall"
-
-	"golang.org/x/sys/unix"
 )
 
 // More C error numbers, with the host platform's values.
@@ -34,24 +32,24 @@ const (
 	CMacroSIGSTOP int32 = int32(syscall.SIGSTOP)
 	CMacroSIGCONT int32 = int32(syscall.SIGCONT)
 
-	CMacroWNOHANG   int32 = syscall.WNOHANG
-	CMacroWUNTRACED int32 = syscall.WUNTRACED
+	CMacroWNOHANG   int32 = sysWNOHANG
+	CMacroWUNTRACED int32 = sysWUNTRACED
 
-	CMacroF_GETFD    int32 = unix.F_GETFD    //nolint:revive // C name
-	CMacroF_SETFD    int32 = unix.F_SETFD    //nolint:revive // C name
-	CMacroF_GETFL    int32 = unix.F_GETFL    //nolint:revive // C name
-	CMacroF_SETFL    int32 = unix.F_SETFL    //nolint:revive // C name
-	CMacroFD_CLOEXEC int32 = unix.FD_CLOEXEC //nolint:revive // C name
+	CMacroF_GETFD    int32 = sysF_GETFD    //nolint:revive // C name
+	CMacroF_SETFD    int32 = sysF_SETFD    //nolint:revive // C name
+	CMacroF_GETFL    int32 = sysF_GETFL    //nolint:revive // C name
+	CMacroF_SETFL    int32 = sysF_SETFL    //nolint:revive // C name
+	CMacroFD_CLOEXEC int32 = sysFD_CLOEXEC //nolint:revive // C name
 
-	CMacroF_OK int32 = unix.F_OK //nolint:revive // C name
-	CMacroR_OK int32 = unix.R_OK //nolint:revive // C name
-	CMacroW_OK int32 = unix.W_OK //nolint:revive // C name
-	CMacroX_OK int32 = unix.X_OK //nolint:revive // C name
+	CMacroF_OK int32 = sysF_OK //nolint:revive // C name
+	CMacroR_OK int32 = sysR_OK //nolint:revive // C name
+	CMacroW_OK int32 = sysW_OK //nolint:revive // C name
+	CMacroX_OK int32 = sysX_OK //nolint:revive // C name
 
-	CMacroLOCK_SH int32 = unix.LOCK_SH //nolint:revive // C name
-	CMacroLOCK_EX int32 = unix.LOCK_EX //nolint:revive // C name
-	CMacroLOCK_NB int32 = unix.LOCK_NB //nolint:revive // C name
-	CMacroLOCK_UN int32 = unix.LOCK_UN //nolint:revive // C name
+	CMacroLOCK_SH int32 = sysLOCK_SH //nolint:revive // C name
+	CMacroLOCK_EX int32 = sysLOCK_EX //nolint:revive // C name
+	CMacroLOCK_NB int32 = sysLOCK_NB //nolint:revive // C name
+	CMacroLOCK_UN int32 = sysLOCK_UN //nolint:revive // C name
 )
 
 // CFStrdup is C `strdup(_:)`: a new C string holding a copy of s.
@@ -85,7 +83,7 @@ func CFRealpath(path *any, resolved *any) *any {
 // CFAccess is C `access(_:_:)`: 0 when the caller may use the file in the ways mode asks, or -1
 // with errno set.
 func CFAccess(path *any, mode int32) int32 {
-	if err := unix.Access(cStringArg(path), uint32(mode)); err != nil {
+	if err := sysAccess(cStringArg(path), uint32(mode)); err != nil {
 		return failed[int32](err)
 	}
 	return 0
@@ -94,7 +92,7 @@ func CFAccess(path *any, mode int32) int32 {
 // CFFlock is C `flock(_:_:)`: it applies or removes an advisory lock on the open file and
 // returns 0, or -1 with errno set.
 func CFFlock(fd, operation int32) int32 {
-	if err := unix.Flock(int(fd), int(operation)); err != nil {
+	if err := sysFlock(int(fd), int(operation)); err != nil {
 		return failed[int32](err)
 	}
 	return 0
@@ -103,7 +101,7 @@ func CFFlock(fd, operation int32) int32 {
 // FcntlIntIntInt is C `fcntl(_:_:_:)` with an integer argument: the command's result, or -1 with
 // errno set.
 func FcntlIntIntInt(fd, cmd, arg int32) int32 {
-	r, err := unix.FcntlInt(uintptr(fd), int(cmd), int(arg))
+	r, err := sysFcntlInt(uintptr(fd), int(cmd), int(arg))
 	if err != nil {
 		return failed[int32](err)
 	}
@@ -117,7 +115,7 @@ func CFPipe(fds *[]int32) int32 {
 		Trap("pipe needs an array of two descriptors")
 	}
 	var p [2]int
-	if err := unix.Pipe(p[:]); err != nil {
+	if err := sysPipe(p[:]); err != nil {
 		return failed[int32](err)
 	}
 	(*fds)[0], (*fds)[1] = int32(p[0]), int32(p[1])
@@ -241,7 +239,7 @@ func CFExecv(path *any, argv any) int32 {
 		}
 		env = append(env, extra...)
 	}
-	err := syscall.Exec(cStringArg(path), cStringList(argv), env)
+	err := sysExec(cStringArg(path), cStringList(argv), env)
 	if handoff != nil {
 		handoff.AbortExec()
 	}
@@ -328,8 +326,8 @@ func (a *spawnFileActions) childFiles() []uintptr {
 			files[fd] = src
 			continue
 		}
-		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
-		if err != nil || flags&unix.FD_CLOEXEC != 0 {
+		flags, err := sysFcntlInt(uintptr(fd), sysF_GETFD, 0)
+		if err != nil || flags&sysFD_CLOEXEC != 0 {
 			files[fd] = closedInChild
 		} else {
 			files[fd] = uintptr(fd)
@@ -355,7 +353,7 @@ func CFPosix_spawn(pid *int32, path *any, fileActions **any, attributes any, arg
 		actions = &spawnFileActions{}
 	}
 	attr.Files = actions.childFiles()
-	child, err := syscall.ForkExec(cStringArg(path), cStringList(argv), attr)
+	child, err := sysForkExec(cStringArg(path), cStringList(argv), attr)
 	if err != nil {
 		var errno syscall.Errno
 		if errors.As(err, &errno) {

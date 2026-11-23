@@ -4,9 +4,8 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
 // The names below are the ones a package compiled for Linux calls where Darwin's Objective-C and C
@@ -99,9 +98,9 @@ func CFSetsockopt(fd, level, name int32, value any, _ uint32) int32 { //nolint:r
 	}
 	v, ok := int32Pointee(value)
 	if !ok {
-		return failed[int32](unix.EINVAL)
+		return failed[int32](syscall.EINVAL)
 	}
-	if err := unix.SetsockoptInt(int(fd), int(level), int(name), int(v)); err != nil {
+	if err := sysSetsockoptInt(int(fd), int(level), int(name), int(v)); err != nil {
 		return failed[int32](err)
 	}
 	return 0
