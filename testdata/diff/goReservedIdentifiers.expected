@@ -1,0 +1,16 @@
+element 0 1
+element 1 two
+element 2 3.5
+s:31,two,3.5 len=9 cap=4 count=3
+3 s:3 3 3 -1
+true kind true true deferred [0, 10, 20] 30 [1, 2, 3] 7 9 r 65
+[3, 3] 5 label pkg 1
+69.875
+int
+string
+func
+chan
+range
+select
+nested 3
+first int 1

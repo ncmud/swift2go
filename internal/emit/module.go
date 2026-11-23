@@ -1298,7 +1298,22 @@ func operatorWord(n string) string {
 	return b.String()
 }
 
-var goKeywords = map[string]bool{"break": true, "case": true, "chan": true, "const": true, "continue": true, "default": true, "defer": true, "else": true, "fallthrough": true, "for": true, "func": true, "go": true, "goto": true, "if": true, "import": true, "interface": true, "map": true, "package": true, "range": true, "return": true, "select": true, "struct": true, "switch": true, "type": true, "var": true, "string": true, "int": true, "len": true, "cap": true, "new": true, "make": true, "copy": true, "append": true, "error": true, "rune": true, "byte": true, "bool": true, "nil": true, "true": true, "false": true, "max": true, "min": true, "print": true, "println": true, "close": true, "delete": true, "panic": true, "recover": true, "clear": true, "iota": true}
+// goKeywords are Go's keywords and predeclared identifiers. A Swift name spelled as one is renamed, since
+// a local named `any` or `int` would shadow the type the emitted code names in the same scope.
+var goKeywords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true, "continue": true, "default": true, "defer": true,
+	"else": true, "fallthrough": true, "for": true, "func": true, "go": true, "goto": true, "if": true,
+	"import": true, "interface": true, "map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true, "var": true,
+	"any": true, "bool": true, "byte": true, "comparable": true, "complex64": true, "complex128": true,
+	"error": true, "float32": true, "float64": true, "int": true, "int8": true, "int16": true, "int32": true,
+	"int64": true, "rune": true, "string": true, "uint": true, "uint8": true, "uint16": true, "uint32": true,
+	"uint64": true, "uintptr": true,
+	"true": true, "false": true, "iota": true, "nil": true,
+	"append": true, "cap": true, "clear": true, "close": true, "complex": true, "copy": true, "delete": true,
+	"imag": true, "len": true, "make": true, "max": true, "min": true, "new": true, "panic": true,
+	"print": true, "println": true, "real": true, "recover": true,
+}
 
 func goSafe(n string) string {
 	n = strings.Trim(n, "`")
