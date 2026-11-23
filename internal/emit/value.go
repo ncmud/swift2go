@@ -359,6 +359,10 @@ func (e *fileEmitter) localOrigin(n ast.Node, loaded bool) origin {
 	if ref.frame.written[name] {
 		return originCaptured
 	}
+	if ref.frame.deferredLet(name) {
+		// Its value was bound without a copy, as a `let` declared with it would have been.
+		return originBorrowedLet
+	}
 	if ref.cross {
 		// No closure writes it, and the function that declares it is not running: it holds still.
 		return originBorrowedLet
@@ -397,6 +401,13 @@ func (e *fileEmitter) sharedPlace(n ast.Node) origin {
 		return originBorrowedLet
 	}
 	return originShared
+}
+
+// deferredLet reports whether name in f is a `let` declared once without a value, which a later
+// assignment gives one.
+func (f *valueFrame) deferredLet(name string) bool {
+	_, isParam := f.params[name]
+	return !isParam && f.lets[name] == 1 && !f.vars[name] && f.inits[name] == nil
 }
 
 // ownsLet reports whether the `let` named name in f holds storage of its own: it is declared once, by a
