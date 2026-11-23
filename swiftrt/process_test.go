@@ -66,15 +66,15 @@ func TestCAbortPanics(t *testing.T) {
 
 func TestAtomicUpdates(t *testing.T) {
 	a := AtomicInit[uint32](0b0101)
-	if got := AtomicBitwiseOrOrdering(a, 0b0010, AtomicUpdateOrderingRelaxed); got.OldValue != 0b0101 || got.NewValue != 0b0111 {
+	if got := AtomicBitwiseOrOrdering(a, 0b0010, AtomicUpdateOrderingRelaxed); got.F0 != 0b0101 || got.F1 != 0b0111 {
 		t.Fatalf("bitwiseOr = %+v", got)
 	}
 	if old := AtomicExchangeOrdering(a, 0, AtomicUpdateOrderingRelaxed); old != 0b0111 || AtomicLoadOrdering(a, AtomicLoadOrderingRelaxed) != 0 {
 		t.Fatalf("exchange returned %#b", old)
 	}
 	b := AtomicInit[int8](127)
-	if got := AtomicWrappingAddOrdering(b, 1, AtomicUpdateOrderingRelaxed); got.NewValue != -128 {
-		t.Fatalf("wrappingAdd(127, 1) = %d", got.NewValue)
+	if got := AtomicWrappingAddOrdering(b, 1, AtomicUpdateOrderingRelaxed); got.F1 != -128 {
+		t.Fatalf("wrappingAdd(127, 1) = %d", got.F1)
 	}
 }
 

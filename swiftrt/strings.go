@@ -112,8 +112,9 @@ func SubstringIndices(s Substring) []int {
 // StringIndices is String.indices.
 func StringIndices(s string) []int { return SubstringIndices(Substring{s, 0, len(s)}) }
 
-// StringContains is String.contains(_:) for a Character.
-func StringContains(s string, c Character) bool {
+// StringContains is String.contains(_:) for a Character, or for a String or Substring searched for as text.
+func StringContains[C ~string | Substring](s string, other C) bool {
+	c := stringOf(other)
 	if graphemeLen(c) != len(c) {
 		return strings.Contains(s, c)
 	}
@@ -254,18 +255,39 @@ func StringSplitSeparatorMaxSplitsOmittingEmptySubsequences(s string, sep Charac
 	var out []Substring
 	start := 0
 	splits := 0
-	for _, i := range StringIndices(s) {
+	// A separator of more than one Character, as `split(separator: "\n\r")` passes, is a run of Characters to
+	// match: Swift splits on each non-overlapping occurrence that starts and ends on Character boundaries.
+	multi := graphemeLen(sep) != len(sep)
+	indices := StringIndices(s)
+	var boundary map[int]bool
+	if multi {
+		boundary = make(map[int]bool, len(indices)+1)
+		for _, i := range indices {
+			boundary[i] = true
+		}
+		boundary[len(s)] = true
+	}
+	skipTo := 0
+	for _, i := range indices {
 		if splits >= maxSplits {
 			break
 		}
-		c := StringSubscriptInt(s, i)
-		if c == sep {
-			if !(omit && i == start) {
-				out = append(out, Substring{s, start, i})
-				splits++
-			}
-			start = i + len(c)
+		if i < skipTo {
+			continue
 		}
+		if multi {
+			if !strings.HasPrefix(s[i:], sep) || !boundary[i+len(sep)] {
+				continue
+			}
+		} else if StringSubscriptInt(s, i) != sep {
+			continue
+		}
+		if !(omit && i == start) {
+			out = append(out, Substring{s, start, i})
+			splits++
+		}
+		start = i + len(sep)
+		skipTo = start
 	}
 	if !(omit && start == len(s)) {
 		out = append(out, Substring{s, start, len(s)})

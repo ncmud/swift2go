@@ -366,7 +366,11 @@ func structInfoOf(t reflect.Type) *structInfo {
 		if key == "" || key == "-" || !fd.IsExported() {
 			continue
 		}
-		info.fields = append(info.fields, structField{i, key, fd.Type.Kind() == reflect.Pointer})
+		// `coding:"ifPresent"` marks a property the program's own `KeyedDecodingContainer.decode(_:forKey:)`
+		// decodes for its type, as a property wrapper's that reads a missing key as its default does: a
+		// missing key leaves the initial value.
+		optional := fd.Type.Kind() == reflect.Pointer || fd.Tag.Get("coding") == "ifPresent"
+		info.fields = append(info.fields, structField{i, key, optional})
 	}
 	cached, _ := structInfos.LoadOrStore(t, info)
 	return cached.(*structInfo)
@@ -401,6 +405,10 @@ func registeredEncoderFor(t reflect.Type) func(any, *Encoder) {
 	}
 	return nil
 }
+
+// initFromDecodable is a generic type with its own `init(from:)`, which it runs as this method: a
+// generic type has no single Go type to register with RegisterDecoder.
+type initFromDecodable interface{ SwiftInitFrom(*Decoder) }
 
 // rawCodable is an OptionSet whose Codable conformance is the one Swift gives every RawRepresentable
 // type: it codes its RawValue field alone.
@@ -562,6 +570,10 @@ func decodeInto(dst reflect.Value, raw any, path []string) {
 		return
 	}
 	if dst.CanAddr() {
+		if r, ok := dst.Addr().Interface().(initFromDecodable); ok {
+			r.SwiftInitFrom(&Decoder{Value: raw, CodingPath: slices.Clone(path)})
+			return
+		}
 		if r, ok := dst.Addr().Interface().(boundsDecodable); ok {
 			r.decodeBounds(raw, path)
 			return

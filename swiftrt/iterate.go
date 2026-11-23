@@ -42,6 +42,9 @@ func Iterate[T any](seq any) []T {
 		}
 		return out
 	case reflect.Struct:
+		if out, ok := iterateIntegerRange[T](rv); ok {
+			return out
+		}
 		if f := rv.FieldByName("Items"); f.IsValid() {
 			return Iterate[T](f.Interface())
 		}
@@ -64,4 +67,37 @@ func rangeInts(lo, hi int) []int {
 		out = append(out, i)
 	}
 	return out
+}
+
+// iterateIntegerRange lists a Range or ClosedRange of any integer type, such as `0..<n` of UInt64.
+func iterateIntegerRange[T any](rv reflect.Value) ([]T, bool) {
+	name := rv.Type().Name()
+	closed := strings.HasPrefix(name, "ClosedRange[")
+	if !closed && !strings.HasPrefix(name, "Range[") || rv.Type().PkgPath() != reflect.TypeFor[Range[int]]().PkgPath() {
+		return nil, false
+	}
+	lo, hi := rv.FieldByName("Lo"), rv.FieldByName("Hi")
+	et := reflect.TypeFor[T]()
+	var out []T
+	switch {
+	case lo.CanInt():
+		end := hi.Int()
+		for i := lo.Int(); i < end || closed && i == end; i++ {
+			out = append(out, reflect.ValueOf(i).Convert(et).Interface().(T)) //nolint:forcetypeassert // converted to T
+			if closed && i == end {
+				break
+			}
+		}
+	case lo.CanUint():
+		end := hi.Uint()
+		for i := lo.Uint(); i < end || closed && i == end; i++ {
+			out = append(out, reflect.ValueOf(i).Convert(et).Interface().(T)) //nolint:forcetypeassert // converted to T
+			if closed && i == end {
+				break
+			}
+		}
+	default:
+		return nil, false
+	}
+	return out, true
 }

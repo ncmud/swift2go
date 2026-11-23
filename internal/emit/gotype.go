@@ -452,6 +452,13 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 	switch t.Kind {
 	case types.Array, types.Dict, types.Func, types.Optional:
 		return false
+	case types.Tuple:
+		// Go's == compares a tuple struct field by field, which would compare an Optional's pointers.
+		for _, a := range t.Args {
+			if !m.isGoComparable(a) {
+				return false
+			}
+		}
 	case types.Named:
 		switch t.Name {
 		case "Swift.Array", "Swift.Dictionary", "Swift.Set", "Swift.Optional", "Swift.String.UnicodeScalarView", "Swift.Substring":
@@ -474,6 +481,35 @@ func (m *Module) isGoComparable(t *types.Type) bool {
 		}
 	}
 	return true
+}
+
+// fieldsGoComparable reports whether Go's == compiles for values of t: a struct's stored properties are all
+// comparable in turn, where isGoComparable conservatively reports no struct comparable.
+func (m *Module) fieldsGoComparable(t *types.Type, depth int) bool {
+	if t == nil || depth > 8 {
+		return false
+	}
+	if t.Kind != types.Named {
+		return m.isGoComparable(t)
+	}
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[t.Name] != "struct_decl" {
+			continue
+		}
+		if len(t.Args) > 0 {
+			return false
+		}
+		for _, d := range mod.decls {
+			if d.Owner != t.Name || d.Kind != "var_decl" || d.Static || d.Computed || d.Node == nil {
+				continue
+			}
+			if !mod.fieldsGoComparable(mod.typeOf(d.Node.Str("interface_type")), depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	return m.isGoComparable(t)
 }
 
 // payloadEnumComparable reports whether Go's == can compare the sealed interface a payload enum is

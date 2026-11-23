@@ -182,8 +182,12 @@ func AsyncStreamMakeStreamOf[T any](_ TypeT[T]) struct {
 }
 
 // ContinuationYield is Swift `AsyncStream.Continuation.yield(_:)`: it buffers v for the consumer,
-// or drops it once the stream has finished.
-func ContinuationYield[T any](c AsyncStreamContinuation[T], v T) {
+// or drops it once the stream has finished. With no value it is `yield()` of a Void stream.
+func ContinuationYield[T any](c AsyncStreamContinuation[T], value ...T) {
+	var v T
+	if len(value) > 0 {
+		v = value[0]
+	}
 	c.s.mu.Lock()
 	defer c.s.mu.Unlock()
 	if c.s.finished {

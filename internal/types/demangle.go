@@ -97,7 +97,7 @@ func demangleInto(syms, out []string, distinct map[string]bool) error {
 		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(syms))
 	}
 	for i, s := range syms {
-		raw := privateName.ReplaceAllString(nameApart(lines[i], distinct), "$1")
+		raw := privateName.ReplaceAllString(nameApart(stripClosures(lines[i]), distinct), "$1")
 		out[i] = localWrappers(s, raw, normalizeLocal(raw))
 	}
 	return nil
@@ -152,6 +152,38 @@ func (d *Demangler) Get(s string) string {
 func (d *Demangler) Lookup(s string) (string, bool) {
 	v, ok := d.cache[s]
 	return v, ok
+}
+
+var closureStart = regexp.MustCompile(`(?:implicit )?closure #\d+ `)
+
+// stripClosures removes the closures that enclose a function-local type from its context, "Foo #1 in closure #1
+// () throws -> () in Mod.Type.fn() -> ()" becoming "Foo #1 in Mod.Type.fn() -> ()", since the type belongs to
+// the function the closures are written in.
+func stripClosures(s string) string {
+	for {
+		loc := closureStart.FindStringIndex(s)
+		if loc == nil {
+			return s
+		}
+		i := loc[1]
+		if i < len(s) && s[i] == '(' {
+			i = skipBalanced(s, i)
+		}
+		depth := 0
+		for i < len(s) && (depth > 0 || !strings.HasPrefix(s[i:], " in ")) {
+			switch s[i] {
+			case '(', '[', '<':
+				depth++
+			case ')', ']', '>':
+				depth--
+			}
+			i++
+		}
+		if i >= len(s) {
+			return s
+		}
+		s = s[:loc[0]] + s[i+len(" in "):]
+	}
 }
 
 var localStart = regexp.MustCompile(`(\w+) #\d+ in (?:static )?(\w+)(\.)?`)

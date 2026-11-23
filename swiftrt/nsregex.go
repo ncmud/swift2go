@@ -45,18 +45,48 @@ type Regex struct {
 // backreferences, possessive quantifiers) runs on regexp2's backtracking engine; one neither engine
 // accepts (ICU-only escapes) panics as unsupported.
 func NSRegularExpressionInitPattern(pattern string) *Regex {
-	re, err := icuRegexCompile(pattern, false)
-	if err != nil {
-		if icuOnlySyntax(pattern, err) {
-			bt, btErr := regexp2.Compile(pattern, regexp2.Unicode)
-			if btErr != nil {
-				panic("swiftrt: regular expression not supported by RE2 or regexp2: " + pattern + ": " + err.Error())
-			}
-			return &Regex{Pattern: pattern, bt: bt}
-		}
+	r, ok := compileICU(pattern, false)
+	if !ok {
 		panic(Throw(NSError{Domain: "NSCocoaErrorDomain", Code: 2048, Msg: "The operation could not be completed. The value is invalid."}))
 	}
-	return &Regex{Pattern: pattern, re: re}
+	return r
+}
+
+// compileICU compiles an ICU pattern on RE2, or on regexp2's backtracking engine when it uses ICU syntax RE2
+// lacks. It reports false for a pattern that is invalid, and panics for one neither engine accepts.
+func compileICU(pattern string, caseInsensitive bool) (*Regex, bool) {
+	re, err := icuRegexCompile(pattern, caseInsensitive)
+	if err == nil {
+		return &Regex{Pattern: pattern, re: re}, true
+	}
+	if !icuOnlySyntax(pattern, err) {
+		return nil, false
+	}
+	opts := regexp2.RegexOptions(regexp2.Unicode)
+	if caseInsensitive {
+		opts |= regexp2.IgnoreCase
+	}
+	bt, btErr := regexp2.Compile(pattern, opts)
+	if btErr != nil {
+		panic("swiftrt: regular expression not supported by RE2 or regexp2: " + pattern + ": " + err.Error())
+	}
+	return &Regex{Pattern: pattern, bt: bt}, true
+}
+
+// replaceAll is s with every match replaced by the ICU template.
+func (r *Regex) replaceAll(s, template string) string {
+	if r.bt == nil {
+		return r.re.ReplaceAllString(s, icuTemplate(template))
+	}
+	var b strings.Builder
+	last := 0
+	for _, loc := range r.findAll(s) {
+		b.WriteString(s[last:loc[0]])
+		expandICUTemplate(&b, template, s, loc)
+		last = loc[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 // findAll is the submatch byte offsets of every non-overlapping match in s, as
@@ -290,18 +320,7 @@ func NSRegularExpressionStringByReplacingMatchesInOptionsRangeWithTemplate(re *R
 		panic(fmt.Sprintf("swiftrt: NSRegularExpression.MatchingOptions %#x are not supported", options.RawValue))
 	}
 	lo, sub := nsRegexSearchRange(s, r)
-	if re.bt == nil {
-		return s[:lo] + re.re.ReplaceAllString(sub, icuTemplate(template)) + s[lo+len(sub):]
-	}
-	var b strings.Builder
-	last := 0
-	for _, loc := range re.findAll(sub) {
-		b.WriteString(sub[last:loc[0]])
-		expandICUTemplate(&b, template, sub, loc)
-		last = loc[1]
-	}
-	b.WriteString(sub[last:])
-	return s[:lo] + b.String() + s[lo+len(sub):]
+	return s[:lo] + re.replaceAll(sub, template) + s[lo+len(sub):]
 }
 
 // expandICUTemplate writes an ICU replacement template for one match: `$n` is capture group n (as
@@ -331,4 +350,16 @@ func expandICUTemplate(b *strings.Builder, template, s string, loc []int) {
 			b.WriteByte(c)
 		}
 	}
+}
+
+// NSTextCheckingResultNumberOfRanges is Foundation `NSTextCheckingResult.numberOfRanges`: the whole match and
+// each capture group.
+func NSTextCheckingResultNumberOfRanges(m TextCheckingResult) int { return len(m.Ranges) }
+
+// IntUtf16OffsetIn is `String.Index.utf16Offset(in:)`: the UTF-16 code units of s before i.
+func IntUtf16OffsetIn(i int, s string) int {
+	if i < 0 || i > len(s) {
+		Trap("String index is out of bounds")
+	}
+	return utf16Offset(s, i)
 }

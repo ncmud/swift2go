@@ -79,6 +79,27 @@ type CPosix_spawn_file_actions_t = *any //nolint:revive // C name
 // CPosix_spawn_file_actions_tInit is `posix_spawn_file_actions_t()`, not yet initialized.
 func CPosix_spawn_file_actions_tInit() CPosix_spawn_file_actions_t { return nil } //nolint:revive // C name
 
+// The socket macros: an integer macro on Darwin, and on Linux, where glibc declares the socket types
+// as the enum `__socket_type`, the enum's cases.
+const (
+	CMacroAF_UNIX     int32 = sysAF_UNIX     //nolint:revive // C name
+	CMacroAF_LOCAL    int32 = sysAF_UNIX     //nolint:revive // C name
+	CMacroSOCK_STREAM int32 = sysSOCK_STREAM //nolint:revive // C name
+	CMacroSOCK_DGRAM  int32 = sysSOCK_DGRAM  //nolint:revive // C name
+)
+
+// CX__socket_type is glibc's `enum __socket_type`, which Swift imports as a struct with a UInt32 raw value.
+type CX__socket_type uint32 //nolint:revive // C name
+
+// glibc's `__socket_type` cases.
+const (
+	CE__socket_typeSOCK_STREAM CX__socket_type = sysSOCK_STREAM //nolint:revive // C name
+	CE__socket_typeSOCK_DGRAM  CX__socket_type = sysSOCK_DGRAM  //nolint:revive // C name
+)
+
+// CX__socket_typeRawValue is `__socket_type.rawValue`.
+func CX__socket_typeRawValue(t CX__socket_type) uint32 { return uint32(t) } //nolint:revive // C name
+
 // C library macros as Linux defines them, where Darwin's differ or are missing.
 const (
 	CMacroCLOCK_MONOTONIC       = CEAClockid_t_CLOCK_MONOTONIC //nolint:revive // C name

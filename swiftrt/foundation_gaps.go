@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -675,4 +676,45 @@ func DataInitBytesCount(p any, n int) []byte {
 		Trap("Data(bytes:count:) reads past the end of the buffer")
 	}
 	return slices.Clone(buf)
+}
+
+// WithExtendedLifetime is `withExtendedLifetime(_:_:)`: it runs body and keeps x reachable until body returns.
+func WithExtendedLifetime(x any, body func()) {
+	body()
+	runtime.KeepAlive(x)
+}
+
+// DateComponentsInitYearMonthDayHour is `DateComponents(year:month:day:hour:)`.
+func DateComponentsInitYearMonthDayHour(y, m, d, h *int) DateComponents {
+	c := DateComponentsInitYearMonthDay(y, m, d)
+	c.Hour = h
+	return c
+}
+
+// DataInitRepeatingCount is `Data(repeating:count:)`.
+func DataInitRepeatingCount(b uint8, n int) []byte {
+	out := make([]byte, max(n, 0))
+	for i := range out {
+		out[i] = b
+	}
+	return out
+}
+
+// CFNSTemporaryDirectory is Foundation `NSTemporaryDirectory()`: the temporary directory, ending in a slash.
+func CFNSTemporaryDirectory() string {
+	d := os.TempDir()
+	if !strings.HasSuffix(d, "/") {
+		d += "/"
+	}
+	return d
+}
+
+// URLFragment is `URL.fragment`: the text after "#", or nil when the URL has none.
+func URLFragment(u URL) *string {
+	i := strings.IndexByte(u.Raw, '#')
+	if i < 0 {
+		return nil
+	}
+	f := u.Raw[i+1:]
+	return &f
 }

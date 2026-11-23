@@ -25,6 +25,23 @@ func TestNormalizeLocal(t *testing.T) {
 	}
 }
 
+func TestStripClosures(t *testing.T) {
+	cases := map[string]string{
+		"Reach #1 in closure #1 () throws -> () in Mod.S.pacing() throws -> Swift.Int":                      "Reach #1 in Mod.S.pacing() throws -> Swift.Int",
+		"[Reach #1 in closure #2 (Swift.Int) -> [Swift.Int] in closure #1 () -> () in Mod.f() -> ()]":       "[Reach #1 in Mod.f() -> ()]",
+		"Key #1 in implicit closure #1 (Mod.A) -> (Swift.Int, Swift.String) in static Mod.T.g(Mod.A) -> ()": "Key #1 in static Mod.T.g(Mod.A) -> ()",
+		"Swift.Int": "Swift.Int",
+	}
+	for in, want := range cases {
+		if got := stripClosures(in); got != want {
+			t.Errorf("stripClosures(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := normalizeLocal(stripClosures("[Reach #1 in closure #1 () throws -> () in Mod.S.pacing() throws -> Swift.Int]")); got != "[Mod.Reach]" {
+		t.Errorf("got %q", got)
+	}
+}
+
 func TestLocalWrappers(t *testing.T) {
 	raw := "Named #1 in static Mod.Lines.existingName(Mod.Instance) -> Swift.String?"
 	cases := map[string]string{

@@ -126,9 +126,13 @@ func currentScope() *cancelScope {
 	return nil
 }
 
-// TaskIsCancelled is Swift `Task.isCancelled`: whether the current task has been cancelled. It is
-// false outside any task.
-func TaskIsCancelled() bool {
+// TaskIsCancelled is Swift `Task.isCancelled`: whether the current task has been cancelled, false outside
+// any task. Given a Task value it is that task's `isCancelled`.
+func TaskIsCancelled(task ...any) bool {
+	if len(task) > 0 {
+		// `task.isCancelled` on a Task value.
+		return taskHandle(task[0]).scope.isCancelled()
+	}
 	s := currentScope()
 	return s != nil && s.isCancelled()
 }

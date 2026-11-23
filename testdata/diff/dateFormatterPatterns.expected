@@ -1,0 +1,20 @@
+LLLL | November | February
+LLLL yyyy | November 2026 | February 2026
+LLL | Nov | Feb
+MMMM d, yyyy | November 29, 2026 | February 22, 2026
+MMM dd,yyyy HH:mm | Nov 29,2026 15:44 | Feb 22,2026 02:22
+EEE MMM dd HH:mm:ss yyyy | Sun Nov 29 15:44:05 2026 | Sun Feb 22 02:22:25 2026
+EEEE, MMMM d | Sunday, November 29 | Sunday, February 22
+yy/MM/dd HH:mm:ss | 26/11/29 15:44:05 | 26/02/22 02:22:25
+yyyyMMdd-HHmmss | 20261129-154405 | 20260222-022225
+h:mm a zzz | 3:44 PM GMT | 2:22 AM EST
+'at' h 'o''clock' | at 3 o'clock | at 2 o'clock
+yyyy-MM-dd'T'HH:mm:ss.SSSZ | 2026-11-29T15:44:05.250+0000 | 2026-02-22T02:22:25.500-0500
+ZZZZZ | Z | -05:00
+M/d/yy | 11/29/26 | 2/22/26
+D | 333 | 53
+K k | 3 15 | 2 2
+MMMMM EEEEE | N S | F S
+GGG y | AD 2026 | AD 2026
+Nov 29, 10:44 am EST
+Feb 22, 2:22 am

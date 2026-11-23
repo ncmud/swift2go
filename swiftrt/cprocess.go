@@ -108,6 +108,20 @@ func FcntlIntIntInt(fd, cmd, arg int32) int32 {
 	return int32(r)
 }
 
+// CFSocketpair is C `socketpair(_:_:_:_:)`: it puts a connected pair of new sockets in the first two
+// elements of fds and returns 0, or -1 with errno set.
+func CFSocketpair(domain, typ, protocol int32, fds *[]int32) int32 {
+	if len(*fds) < 2 {
+		Trap("socketpair needs an array of two descriptors")
+	}
+	p, err := sysSocketpair(int(domain), int(typ), int(protocol))
+	if err != nil {
+		return failed[int32](err)
+	}
+	(*fds)[0], (*fds)[1] = int32(p[0]), int32(p[1]) //nolint:gosec // descriptors fit
+	return 0
+}
+
 // CFPipe is C `pipe(_:)`: it puts the read and write descriptors of a new pipe in the first two
 // elements of fds and returns 0, or -1 with errno set.
 func CFPipe(fds *[]int32) int32 {

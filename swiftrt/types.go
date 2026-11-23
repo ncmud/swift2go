@@ -67,3 +67,13 @@ func typeName(t reflect.Type) string {
 	}
 	return t.Name()
 }
+
+// MetaZero is a value of T that carries T's static requirements: T's zero value, or for a pointer type a
+// pointer to a zero value, so that a value method of the type it points to can run.
+func MetaZero[T any]() T {
+	var z T
+	if t := reflect.TypeFor[T](); t.Kind() == reflect.Pointer {
+		return reflect.New(t.Elem()).Interface().(T) //nolint:forcetypeassert // reflect.New(Elem) is a T
+	}
+	return z
+}

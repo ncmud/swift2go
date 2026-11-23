@@ -45,33 +45,38 @@ type fileEmitter struct {
 	post          []string                // writebacks to emit after the current statement
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
-	typedErasure  map[uintptr]bool        // erasures converted to the interface explicitly, for Go's type inference
-	initRet       string                  // what `return` yields inside an init: "self", "&self", or "true" in a class initializer body
-	initFail      string                  // what `return nil` yields inside a failable init
-	initOwner     string                  // the class whose initializer body is being emitted
-	resultType    string
-	optPtrs       map[string]bool // Go expressions that are exactly a swiftrt.Opt followed by .Ptr()
-	throws        bool
-	opaque        map[string]string // opaque_value_expr identity → Go expression
-	where         string
-	inoutParams   map[string]bool
-	typeParams    []string
-	typeBounds    map[string]string // type parameter → Go constraint, when not `any`
-	hoisted       []ast.Node
-	erased        map[int]bool        // parameters paramList types as any, by index
-	scopes        *valueScopes        // the file's local variables, resolved to their declarations
-	bindOrigin    origin              // where the subject of the pattern being bound lives
-	opened        map[string]ast.Node // opaque_value_expr identity → the existential it opens
-	snapshots     map[uintptr]string  // receivers already emitted as a copy, by node
-	storeInto     *types.Type         // the collection a mutating library call's arguments are stored into
-	argSink       *sink               // where the call being emitted puts its arguments, when not lent
-	partSink      sink                // where the parts of the aggregate partsOf is building go
-	partsOf       uintptr             // the literal or memberwise call owned is emitting, by node
-	keeps         int                 // owned is emitting a call whose result is stored or returned
-	lent          map[uintptr]bool    // closures a library call holds only inside its result
-	sliceLos      map[string]string   // local ArraySlice constant → the Go variable holding its start index
-	sliceDry      bool                // sliceBase only reports whether a start index can be told
-	localFuncs    map[string]ast.Node // functions declared inside the file's function bodies, by USR
+	// unitValueFirst marks a unitCallee whose first argument is a value, not a body: TaskLocal.withValue's.
+	unitValueFirst bool
+	typedErasure   map[uintptr]bool // erasures converted to the interface explicitly, for Go's type inference
+	initRet        string           // what `return` yields inside an init: "self", "&self", or "true" in a class initializer body
+	initFail       string           // what `return nil` yields inside a failable init
+	initOwner      string           // the class whose initializer body is being emitted
+	resultType     string
+	// voidValue is set while emitting the branches of an if or switch expression of type Void, whose
+	// branch values, such as a @discardableResult call's, are discarded.
+	voidValue   bool
+	optPtrs     map[string]bool // Go expressions that are exactly a swiftrt.Opt followed by .Ptr()
+	throws      bool
+	opaque      map[string]string // opaque_value_expr identity → Go expression
+	where       string
+	inoutParams map[string]bool
+	typeParams  []string
+	typeBounds  map[string]string // type parameter → Go constraint, when not `any`
+	hoisted     []ast.Node
+	erased      map[int]bool        // parameters paramList types as any, by index
+	scopes      *valueScopes        // the file's local variables, resolved to their declarations
+	bindOrigin  origin              // where the subject of the pattern being bound lives
+	opened      map[string]ast.Node // opaque_value_expr identity → the existential it opens
+	snapshots   map[uintptr]string  // receivers already emitted as a copy, by node
+	storeInto   *types.Type         // the collection a mutating library call's arguments are stored into
+	argSink     *sink               // where the call being emitted puts its arguments, when not lent
+	partSink    sink                // where the parts of the aggregate partsOf is building go
+	partsOf     uintptr             // the literal or memberwise call owned is emitting, by node
+	keeps       int                 // owned is emitting a call whose result is stored or returned
+	lent        map[uintptr]bool    // closures a library call holds only inside its result
+	sliceLos    map[string]string   // local ArraySlice constant → the Go variable holding its start index
+	sliceDry    bool                // sliceBase only reports whether a start index can be told
+	localFuncs  map[string]ast.Node // functions declared inside the file's function bodies, by USR
 }
 
 // blankStringLiterals is Go source with the contents of its string and rune literals and its
@@ -354,6 +359,41 @@ func (e *fileEmitter) findVar(typeNode ast.Node, name string) *DeclInfo {
 	return nil
 }
 
+// unconstrainedFunc reports whether the Go source declares the function name with type parameters that are
+// all `any`, so a method of the generic type can call it with the type's own parameters.
+func unconstrainedFunc(src, name string) bool {
+	i := strings.LastIndex(src, "func "+name+"[")
+	if i < 0 {
+		return false
+	}
+	params, _, ok := strings.Cut(src[i+len("func "+name+"["):], "]")
+	if !ok {
+		return false
+	}
+	for _, p := range strings.Split(params, ",") {
+		if !strings.HasSuffix(strings.TrimSpace(p), " any") {
+			return false
+		}
+	}
+	return true
+}
+
+// wrappedProperties names the properties of type n that a property wrapper attribute wraps.
+func wrappedProperties(n ast.Node) map[string]bool {
+	out := map[string]bool{}
+	for _, mem := range n.List("members") {
+		if mem.Kind() != "var_decl" {
+			continue
+		}
+		for _, a := range mem.List("attrs") {
+			if a.Kind() == "custom_attr" {
+				out[mem.Name()] = true
+			}
+		}
+	}
+	return out
+}
+
 func (e *fileEmitter) typeDecl(n ast.Node) {
 	info := e.info(n)
 	if info == nil {
@@ -372,6 +412,7 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	}
 	keys := codingKeys(n)
 	var fieldKeys []string
+	wrapped := wrappedProperties(n)
 	for _, mem := range n.List("members") {
 		if mem.Kind() != "var_decl" {
 			continue
@@ -389,14 +430,28 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 			continue
 		}
 		tag := "swift:\"" + mem.Name() + "\""
+		// A property wrapper's storage, `_name`, codes under the wrapped property's name.
+		name := mem.Name()
+		if w, ok := strings.CutPrefix(name, "_"); ok && mem.Bool("implicit") && wrapped[w] {
+			name = w
+		}
 		if keys != nil {
-			if key, ok := keys[mem.Name()]; !ok {
+			if key, ok := keys[name]; !ok {
 				tag += " key:\"-\""
 			} else {
 				fieldKeys = append(fieldKeys, key)
 				if key != mem.Name() {
 					tag += " key:\"" + key + "\""
 				}
+			}
+		} else if name != mem.Name() {
+			tag += " key:\"" + name + "\""
+		}
+		if name != mem.Name() {
+			if t := e.m.typeOf(mem.Str("interface_type")); t != nil && t.Kind == types.Named && e.m.keyedOverloads()[t.Name].decode != "" {
+				// Its wrapper's own keyed decode overload, which Go cannot call for every wrapped type, reads a
+				// missing key; the runtime keeps the property's initial value then.
+				tag += " coding:\"ifPresent\""
 			}
 		}
 		e.w("\t%s %s `%s`\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics), tag)
@@ -1580,6 +1635,11 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 	if ps := n.Child("params").List("params"); self != nil && info.FreeSelf() && n.Name() == "encode" && len(ps) == 1 && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Encoder" && e.m.IsPayloadEnum(e.selfQualified(self)) {
 		// An enum emitted as a Go interface has no Encode method for the runtime to find.
 		e.w("func init() {\nswiftrt.RegisterEncoder(func(v %s, e *swiftrt.Encoder) { %s(v, e) })\n}\n\n", self.GoName, info.GoName)
+	} else if self != nil && self.Kind == "struct_decl" && info.FreeSelf() && !info.Static && !info.Mutating && n.Name() == "encode" && len(ps) == 1 &&
+		e.m.demangle(ps[0].Str("interface_type")) == "Swift.Encoder" && e.selfTypeArgs(self) != "" && unconstrainedFunc(e.b.String(), info.GoName) {
+		// The encode(to:) of a generic struct, emitted as a function: give the runtime the method it looks for.
+		recvT := self.GoName + e.selfTypeArgs(self)
+		e.w("func (self %s) Encode(encoder *swiftrt.Encoder) { %s%s(self, encoder) }\n\n", recvT, info.GoName, e.selfTypeArgs(self))
 	}
 	if e.m.Test && isTestFunc(n) {
 		e.goTest(n, info, self)
@@ -2221,8 +2281,13 @@ func (e *fileEmitter) ctorDecl(n ast.Node, self *DeclInfo, typeNode ast.Node) {
 		e.w("return %s\n", e.initRet)
 	}
 	e.w("}\n\n")
-	if ps := n.Child("params").List("params"); len(ps) == 1 && !failable && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Decoder" && !n.Implicit() && !strings.Contains(ret, "[") {
-		e.w("func init() { swiftrt.RegisterDecoder(func(d *swiftrt.Decoder) %s { return %s(d) }) }\n\n", ret, info.GoName)
+	if ps := n.Child("params").List("params"); len(ps) == 1 && !failable && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Decoder" && !n.Implicit() {
+		if !strings.Contains(ret, "[") {
+			e.w("func init() { swiftrt.RegisterDecoder(func(d *swiftrt.Decoder) %s { return %s(d) }) }\n\n", ret, info.GoName)
+		} else if self.Kind != "class_decl" {
+			// A generic type has no one Go type to register: the runtime finds its init(from:) as a method.
+			e.w("func (self *%s) SwiftInitFrom(d *swiftrt.Decoder) { *self = %s%s(d) }\n\n", t, info.GoName, e.selfTypeArgs(self))
+		}
 	}
 }
 
@@ -2724,6 +2789,15 @@ func (e *fileEmitter) staticForwarders(q, proto string, conformed []string, pm *
 		}
 		if res == "[]any" {
 			target = "swiftrt.ToAnySlice(" + target + ")"
+		}
+		ft := e.m.typeOf(r.Str("interface_type"))
+		for ft != nil && ft.Kind == types.Func && ft.Result != nil && ft.Result.Kind == types.Func {
+			ft = ft.Result
+		}
+		if e.m.HasMutatingMethods(q) && res == "any" && ft != nil && ft.Kind == types.Func && ft.Result != nil && ft.Result.Kind == types.Generic {
+			// A requirement returning Self: generic code holds this type through a pointer, as its mutating
+			// methods need, so hand it one.
+			target = "swiftrt.Ref(" + target + ")"
 		}
 		e.w("func (self %s) %s(%s) %s { %s%s }\n\n", recv, staticReqName(req), params, res, ret, target)
 	}
