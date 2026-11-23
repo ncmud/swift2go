@@ -54,10 +54,18 @@ type DecodingErrorKeyNotFound struct {
 // DecodingErrorDataCorrupted is `DecodingError.dataCorrupted(_:)`.
 type DecodingErrorDataCorrupted struct{ F0 CodingContext }
 
-func (e DecodingErrorTypeMismatch) Error() string                 { return e.F1.render("typeMismatch") }
-func (e DecodingErrorValueNotFound) Error() string                { return e.F1.render("valueNotFound") }
-func (e DecodingErrorKeyNotFound) Error() string                  { return e.F1.render("keyNotFound") }
-func (e DecodingErrorDataCorrupted) Error() string                { return e.F0.render("dataCorrupted") }
+func (e DecodingErrorTypeMismatch) Error() string {
+	return e.F1.describe("DecodingError.typeMismatch", "Expected value of type "+codingTypeName(e.F0))
+}
+func (e DecodingErrorValueNotFound) Error() string {
+	return e.F1.describe("DecodingError.valueNotFound", "Expected value of type "+codingTypeName(e.F0))
+}
+func (e DecodingErrorKeyNotFound) Error() string {
+	return e.F1.describe("DecodingError.keyNotFound", "Key '"+keyString(e.F0)+"' not found in keyed decoding container")
+}
+func (e DecodingErrorDataCorrupted) Error() string {
+	return e.F0.describe("DecodingError.dataCorrupted", "Data was corrupted")
+}
 func (e DecodingErrorTypeMismatch) CodingContext() CodingContext  { return e.F1 }
 func (e DecodingErrorValueNotFound) CodingContext() CodingContext { return e.F1 }
 func (e DecodingErrorKeyNotFound) CodingContext() CodingContext   { return e.F1 }

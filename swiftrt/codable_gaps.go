@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -68,12 +69,50 @@ func codingPathStrings(path any) []string {
 	return Iterate[string](path)
 }
 
-func (c CodingContext) render(kind string) string {
-	msg := kind + ": " + c.DebugDescription
-	if len(c.CodingPath) > 0 {
-		msg += " (at " + strings.Join(c.CodingPath, ".") + ")"
+// describe is Swift's description of a coding error with this context: the case and a summary,
+// then the coding path, the debug description and the underlying error, each left out when empty,
+// as in "DecodingError.typeMismatch: Expected value of type Int. Path: items[0].n. Debug
+// description: Expected to decode Int but found a string instead.".
+func (c CodingContext) describe(kind, summary string) string {
+	parts := []string{summary}
+	if path := codingPathDescription(c.CodingPath); path != "" {
+		parts = append(parts, "Path: "+path)
 	}
-	return msg
+	if c.DebugDescription != "" {
+		parts = append(parts, "Debug description: "+c.DebugDescription)
+	}
+	if c.UnderlyingError != nil {
+		parts = append(parts, "Underlying error: "+Str(c.UnderlyingError))
+	}
+	return kind + ": " + strings.Join(parts, ". ")
+}
+
+// codingPathDescription writes a coding path as Swift's coding error descriptions do: keys joined
+// with dots, and an array index as "[n]" after the key before it.
+func codingPathDescription(path []string) string {
+	var b strings.Builder
+	for i, k := range path {
+		if n := CodingKeyIntValue(k); n != nil {
+			b.WriteString("[" + strconv.Itoa(*n) + "]")
+			continue
+		}
+		if i > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(k)
+	}
+	return b.String()
+}
+
+// codingTypeName is the name a coding error's summary gives the type it carries.
+func codingTypeName(t any) string {
+	switch x := t.(type) {
+	case reflect.Type:
+		return decodeTypeName(x)
+	case Type:
+		return decodeTypeName(x.Reflect())
+	}
+	return Str(t)
 }
 
 // ContextCodingPath is `DecodingError.Context.codingPath`, as coding keys.
@@ -118,7 +157,7 @@ func DecodingErrorDataCorruptedErrorForKeyInDebugDescription(key any, c KeyedDec
 
 // EncodingErrorInvalidValueAny is `EncodingError.invalidValue(_:_:)`.
 func EncodingErrorInvalidValueAny(v any, c CodingContext) error {
-	return CodingError{c.render("invalidValue " + Str(v))}
+	return CodingError{c.describe("EncodingError.invalidValue", StringInitReflecting(v)+" ("+decodeTypeName(reflect.TypeOf(v))+")")}
 }
 
 // UnkeyedDecodingContainer is Swift `UnkeyedDecodingContainer`.
