@@ -166,6 +166,27 @@ func (e URLError) Error() string {
 
 func (e URLError) Unwrap() error { return e.Err }
 
+// urlErrorDescriptions are the localized descriptions Apple's URLSession gives the errors it reports.
+var urlErrorDescriptions = map[int]string{
+	URLErrorCancelled:              "cancelled",
+	URLErrorBadURL:                 "bad URL",
+	URLErrorTimedOut:               "The request timed out.",
+	URLErrorUnsupportedURL:         "unsupported URL",
+	URLErrorCannotFindHost:         "A server with the specified hostname could not be found.",
+	URLErrorCannotConnectToHost:    "Could not connect to the server.",
+	URLErrorNetworkConnectionLost:  "The network connection was lost.",
+	URLErrorSecureConnectionFailed: "An SSL error has occurred and a secure connection to the server cannot be made.",
+}
+
+// localizedDescription is the error's `localizedDescription`, as URLSession on Apple platforms
+// words it.
+func (e URLError) localizedDescription() string {
+	if d, ok := urlErrorDescriptions[e.Code]; ok {
+		return d
+	}
+	return "The operation couldn’t be completed. (NSURLErrorDomain error " + strconv.Itoa(e.Code) + ".)"
+}
+
 func urlErrorCode(err error) int {
 	_, isDNS := errors.AsType[*net.DNSError](err)
 	netErr, isNet := errors.AsType[net.Error](err)

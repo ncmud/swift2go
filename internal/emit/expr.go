@@ -3229,6 +3229,14 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 				return "swiftrt.InstantAdvanced(" + e.expr(l) + ", " + by + ")"
 			}
 		}
+		if e.m.GoType(lt, e.generics) == "swiftrt.DispatchTime" && e.m.GoType(e.m.typeOf(r.Type()), e.generics) == "float64" {
+			// DispatchTime ± Double seconds is a DispatchTime.
+			by := e.expr(r)
+			if op == "-" {
+				by = "-(" + by + ")"
+			}
+			return "swiftrt.DispatchTimeAddSeconds(" + e.expr(l) + ", " + by + ")"
+		}
 		if e.m.GoType(lt, e.generics) == "swiftrt.Date" && e.m.GoType(e.m.typeOf(r.Type()), e.generics) != "swiftrt.Date" {
 			// Date ± TimeInterval is a Date.
 			return "(" + e.expr(l) + " " + op + " swiftrt.Date(" + e.expr(r) + "))"

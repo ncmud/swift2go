@@ -447,6 +447,35 @@ type DispatchTime uint64
 // DispatchTimeNow is Dispatch `DispatchTime.now()`.
 func DispatchTimeNow() DispatchTime { return DispatchTime(time.Since(processStart).Nanoseconds()) }
 
+// DispatchTimeAddSeconds is Dispatch `DispatchTime + Double` (and `-`, with the seconds negated): the
+// time that many seconds later, with the nanoseconds clamped as libdispatch clamps them. A time
+// before the clock's start is its start, and DispatchTimeDistantFuture stays where it is.
+func DispatchTimeAddSeconds(t DispatchTime, seconds float64) DispatchTime {
+	if t == DispatchTimeDistantFuture {
+		return t
+	}
+	ns := seconds * float64(time.Second)
+	switch {
+	case math.IsNaN(ns):
+		return t
+	case ns >= math.MaxInt64:
+		return DispatchTimeDistantFuture
+	case ns <= math.MinInt64:
+		return 0
+	}
+	delta := int64(ns)
+	if delta < 0 {
+		if uint64(-delta) > uint64(t) {
+			return 0
+		}
+		return t - DispatchTime(-delta)
+	}
+	if sum := t + DispatchTime(delta); sum >= t && sum < DispatchTimeDistantFuture {
+		return sum
+	}
+	return DispatchTimeDistantFuture
+}
+
 // DispatchTimeUptimeNanoseconds is Dispatch `DispatchTime.uptimeNanoseconds`.
 func DispatchTimeUptimeNanoseconds(t DispatchTime) uint64 { return uint64(t) }
 

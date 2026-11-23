@@ -150,6 +150,9 @@ func NSFileHandleInitFileDescriptorCloseOnDealloc(fd int32, _ bool) FileHandle {
 // NSFileHandleStandardError is Foundation `FileHandle.standardError`.
 var NSFileHandleStandardError = FileHandle{File: os.Stderr}
 
+// NSFileHandleStandardOutput is Foundation `FileHandle.standardOutput`.
+var NSFileHandleStandardOutput = FileHandle{File: os.Stdout}
+
 // NSFileHandleWrite is Foundation `FileHandle.write(_:)`: it writes all of data and, like
 // `try! write(contentsOf:)` on Linux, traps when the write fails.
 func NSFileHandleWrite(h FileHandle, data []byte) {
@@ -382,11 +385,18 @@ func NSFileManagerRemoveItemAtPath(_ FileManager, path string) {
 	}
 }
 
+// NSFileManagerMoveItemAtPathToPath is Foundation `FileManager.moveItem(atPath:toPath:)`, which
+// moves as NSFileManagerMoveItemAtTo does.
+func NSFileManagerMoveItemAtPathToPath(_ FileManager, src, dst string) { moveItem(src, dst) }
+
 // NSFileManagerMoveItemAtTo is Foundation `FileManager.moveItem(at:to:)`: it renames the item,
 // copying it across file systems when it must. It throws NSCocoaErrorDomain 516 when the
 // destination exists and 4 when the source does not.
 func NSFileManagerMoveItemAtTo(_ FileManager, src, dst URL) {
-	from, to := fileURLPath(src), fileURLPath(dst)
+	moveItem(fileURLPath(src), fileURLPath(dst))
+}
+
+func moveItem(from, to string) {
 	if _, err := os.Lstat(from); err != nil {
 		panic(Throw(cocoaWriteError(from, err)))
 	}
