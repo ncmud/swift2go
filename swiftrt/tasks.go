@@ -341,3 +341,25 @@ func OptAnyAsRef[T any](p *any) T {
 	}
 	return MustAs[T](*p)
 }
+
+// UnsafeCurrentTask is Swift `UnsafeCurrentTask`: the task running on the goroutine that asked for it.
+type UnsafeCurrentTask struct{ scope *cancelScope }
+
+// WithUnsafeCurrentTaskBody is Swift `withUnsafeCurrentTask(body:)`: body gets the current task, or nil
+// outside any task.
+func WithUnsafeCurrentTaskBody[T any](body func(*any) T) T {
+	s := currentScope()
+	if s == nil {
+		return body(nil)
+	}
+	var task any = UnsafeCurrentTask{s}
+	return body(&task)
+}
+
+// UnsafeCurrentTaskCancel is `UnsafeCurrentTask.cancel()`.
+func UnsafeCurrentTaskCancel(task any) { task.(UnsafeCurrentTask).scope.cancel() } //nolint:forcetypeassert // generated code passes the task withUnsafeCurrentTask gave
+
+// UnsafeCurrentTaskIsCancelled is `UnsafeCurrentTask.isCancelled`.
+func UnsafeCurrentTaskIsCancelled(task any) bool {
+	return task.(UnsafeCurrentTask).scope.isCancelled() //nolint:forcetypeassert // generated code passes the task withUnsafeCurrentTask gave
+}

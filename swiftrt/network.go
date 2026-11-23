@@ -119,6 +119,26 @@ type HTTPURLResponse struct {
 
 func (HTTPURLResponse) isURLResponse() {}
 
+// NSHTTPURLResponseOptInitUrlStatusCodeHttpVersionHeaderFields is `HTTPURLResponse(url:statusCode:httpVersion:headerFields:)`.
+// The HTTP version is not kept.
+func NSHTTPURLResponseOptInitUrlStatusCodeHttpVersionHeaderFields(url URL, statusCode int, _ *string, headerFields *map[string]string) *HTTPURLResponse {
+	r := &HTTPURLResponse{Url: &url, StatusCode: statusCode, header: http.Header{}}
+	if headerFields != nil {
+		for k, v := range *headerFields {
+			r.header.Set(k, v)
+		}
+	}
+	return r
+}
+
+// NSURLResponseUrl is `URLResponse.url`.
+func NSURLResponseUrl(r URLResponse) *URL {
+	if h, ok := r.(HTTPURLResponse); ok {
+		return h.Url
+	}
+	return nil
+}
+
 // NSHTTPURLResponseStatusCode is `HTTPURLResponse.statusCode`.
 func NSHTTPURLResponseStatusCode(r HTTPURLResponse) int { return r.StatusCode }
 
@@ -359,3 +379,18 @@ func (s URLSession) Data(request URLRequest) struct {
 } {
 	return NSURLSessionDataFor(s, request)
 }
+
+// NSHTTPURLResponseValueForHTTPHeaderField is `HTTPURLResponse.value(forHTTPHeaderField:)` under the name the
+// emitter gives the Objective-C class's method.
+func NSHTTPURLResponseValueForHTTPHeaderField(r HTTPURLResponse, field string) *string {
+	return HTTPURLResponseValueForHTTPHeaderField(r, field)
+}
+
+// HTTPURLResponseOptInitUrlStatusCodeHttpVersionHeaderFields is `HTTPURLResponse(url:statusCode:httpVersion:headerFields:)`
+// under the name the emitter gives the swift-corelibs-foundation class's initializer.
+func HTTPURLResponseOptInitUrlStatusCodeHttpVersionHeaderFields(url URL, statusCode int, version *string, headerFields *map[string]string) *HTTPURLResponse {
+	return NSHTTPURLResponseOptInitUrlStatusCodeHttpVersionHeaderFields(url, statusCode, version, headerFields)
+}
+
+// URLResponseUrl is `URLResponse.url` under the swift-corelibs-foundation name.
+func URLResponseUrl(r URLResponse) *URL { return NSURLResponseUrl(r) }

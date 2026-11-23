@@ -412,6 +412,7 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	e.generics = e.typeGenerics(q)
 	defer func() { e.generics = saveG }()
 	e.w("type %s%s struct {\n", info.GoName, e.m.typeParamDecl(q))
+	fieldsStart := e.b.Len()
 	if sup := e.m.Superclass(info.GoName); sup != "" {
 		e.w("\t%s\n", sup)
 	}
@@ -467,6 +468,11 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 			}
 		}
 		e.w("\t%s %s `%s`\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics), tag)
+	}
+	if n.Kind() == "class_decl" && e.b.Len() == fieldsStart {
+		// Go may give every zero-size allocation the same address; each instance of a class needs its own
+		// identity for ===, ObjectIdentifier and weak references.
+		e.w("\t_ byte\n")
 	}
 	e.w("}\n\n")
 	recvT := info.GoName + e.m.typeParamUse(q)

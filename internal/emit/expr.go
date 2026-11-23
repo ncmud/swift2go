@@ -2411,6 +2411,14 @@ func (e *fileEmitter) call(n ast.Node) string {
 		fn = stripConv(fn.Child("rhs"))
 	}
 	as := e.args(n.Child("args"))
+	if fn.Kind() == "autoclosure_expr" && len(as) == 0 && len(fn.Child("params").List("params")) == 0 && fn.Child("single_expr_body") != nil {
+		// An autoclosure applied where it is made, as `async let x = f()` initializes x: the body itself.
+		body := fn.Child("single_expr_body")
+		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Tuple && len(t.Args) == 0 {
+			return "func() struct{} {\n" + e.expr(body) + "\nreturn struct{}{}\n}()"
+		}
+		return e.expr(body)
+	}
 	if d := fn.Child("decl"); fn.Kind() == "declref_expr" && d.Str("decl_usr") == "" {
 		if lg, ok := e.localGenerics[d.Str("base_name")]; ok {
 			ss, _ := e.argStrings(as, false)
@@ -2465,7 +2473,7 @@ func (e *fileEmitter) call(n ast.Node) string {
 			return e.mappedCallExpr(mp, d, "", as, false, false)
 		}
 		sig := parseDeclSig(dem)
-		if sig.base == "withTaskCancellationHandler" {
+		if sig.base == "withTaskCancellationHandler" || sig.base == "withUnsafeCurrentTask" {
 			// The operation's result is the call's type parameter, Void as often as not.
 			e.unitCallee = true
 		}
@@ -2705,7 +2713,7 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		}
 		// An array of Optionals holds pointers, which Go's == compares by address.
 		// So is an array of values Go cannot compare with ==, such as structs that hold slices.
-		if bt := e.m.typeOf(base.Type()); bt != nil && bt.Kind == types.Array && len(bt.Args) == 1 && (bt.Args[0].Kind == types.Optional || !e.m.fieldsGoComparable(bt.Args[0], 0)) {
+		if bt := e.m.typeOf(base.Type()); bt != nil && (bt.Kind == types.Array || e.m.Recv(bt) == "Slice") && len(bt.Args) == 1 && (bt.Args[0].Kind == types.Optional || !e.m.fieldsGoComparable(bt.Args[0], 0)) {
 			ss, _ := e.argStrings(as, false)
 			return "swiftrt.SliceContainsEqual(" + e.expr(base) + ", " + ss[0] + ")"
 		}
@@ -4114,7 +4122,7 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 
 // dynamicStatics are foreign static properties Swift recomputes on every read, so Go calls them.
 var dynamicStatics = map[string]bool{
-	"ContinuousClockNow": true, "NSThreadCallStackSymbols": true, "TaskIsCancelled": true, "TimeZoneGmt": true,
+	"ContinuousClockNow": true, "NSThreadCallStackSymbols": true, "NSThreadCurrent": true, "NSThreadIsMainThread": true, "TaskIsCancelled": true, "TimeZoneGmt": true,
 	"TimeZoneCurrent": true, "TimeZoneAutoupdatingCurrent": true, "CalendarCurrent": true,
 	"CalendarAutoupdatingCurrent": true, "LocaleCurrent": true, "InstantNow": true,
 	"ContinuousClockInstantNow": true, "SuspendingClockInstantNow": true, "DateNow": true,
