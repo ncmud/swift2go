@@ -708,7 +708,7 @@ func (m *Module) sharesStorage(t *types.Type, visiting map[string]bool) bool {
 					// Nothing can change a frozen struct's storage in place, so its copies may share it.
 					break
 				}
-				for _, d := range mod.decls {
+				for _, d := range mod.sortedDecls() {
 					if d.Owner != t.Name || d.Node == nil || shares {
 						continue
 					}
@@ -743,7 +743,7 @@ func (m *Module) frozenStruct(name string) bool {
 	if m.frozen == nil {
 		m.frozen = map[string]bool{}
 		mutable := map[string]bool{}
-		for _, d := range m.decls {
+		for _, d := range m.sortedDecls() {
 			if d.Kind != "var_decl" || d.Static || d.Computed || d.Node == nil || d.Owner == "" || m.typeKinds[d.Owner] != "struct_decl" {
 				continue
 			}
@@ -1597,7 +1597,7 @@ func (e *fileEmitter) enumElementByName(st *types.Type, p ast.Node) *DeclInfo {
 	}
 	name := p.Child("element").Child("base_name").Str("name")
 	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-		for _, info := range mod.decls {
+		for _, info := range mod.sortedDecls() {
 			if info.Kind == "enum_element_decl" && info.Node.Name() == name && info.Owner == st.Name {
 				if mod.Pkg != e.m.Pkg {
 					e.m.importPkg(mod)
@@ -2300,7 +2300,7 @@ func (e *fileEmitter) reserveAppends(n ast.Node, src string) {
 					}
 				}
 			}
-			for _, c := range v {
+			for _, c := range ast.Fields(v) {
 				switch c.(type) {
 				case map[string]any, []any:
 					walk(c)

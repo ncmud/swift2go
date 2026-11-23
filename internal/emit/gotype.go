@@ -499,7 +499,7 @@ func (m *Module) fieldsGoComparable(t *types.Type, depth int) bool {
 		if len(t.Args) > 0 {
 			return false
 		}
-		for _, d := range mod.decls {
+		for _, d := range mod.sortedDecls() {
 			if d.Owner != t.Name || d.Kind != "var_decl" || d.Static || d.Computed || d.Node == nil {
 				continue
 			}
@@ -524,7 +524,7 @@ func (m *Module) payloadEnumComparable(name string) bool {
 	}
 	m.enumComparable[name] = false
 	for _, mod := range append([]*Module{m}, m.Deps...) {
-		for _, d := range mod.decls {
+		for _, d := range mod.sortedDecls() {
 			if d.Kind != "enum_element_decl" || d.Owner != name || d.Node == nil {
 				continue
 			}
@@ -628,7 +628,7 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 		}
 		seen[t.Name] = true
 		k := true
-		for _, d := range m.decls {
+		for _, d := range m.sortedDecls() {
 			if d.Kind == "var_decl" && d.Owner == t.Name && !d.Static && !d.Computed && d.Node != nil {
 				if !m.goKeyable(m.typeOf(d.Node.Str("interface_type")), seen) {
 					k = false
@@ -664,7 +664,7 @@ func (m *Module) declaresMember(q, name string) bool {
 		}
 		if mod.methodNames == nil {
 			mod.methodNames = map[string]bool{}
-			for _, d := range mod.decls {
+			for _, d := range mod.sortedDecls() {
 				if d.Kind == "func_decl" && d.Node != nil && !d.Node.Implicit() {
 					mod.methodNames[d.Owner+" "+d.Node.Name()] = true
 				}

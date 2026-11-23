@@ -223,7 +223,7 @@ func (m *Module) scan(n any, ctor, loaded bool, r *region) {
 				}
 			}
 		}
-		for _, c := range v {
+		for _, c := range ast.Fields(v) {
 			switch c.(type) {
 			case map[string]any, []any:
 				m.scan(c, ctor, loaded, r)
@@ -325,7 +325,7 @@ func (m *Module) findInPlaceWrites(n map[string]any, parents []map[string]any) {
 		}
 	}
 	parents = append(parents, n)
-	for _, c := range n {
+	for _, c := range ast.Fields(n) {
 		switch v := c.(type) {
 		case map[string]any:
 			m.findInPlaceWrites(v, parents)

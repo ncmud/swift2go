@@ -594,7 +594,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				continue
 			}
 			for _, pm := range append([]*Module{e.m}, e.m.Deps...) {
-				for _, d := range pm.decls {
+				for _, d := range pm.sortedDecls() {
 					if d.ProtoExt && d.Owner == other && d.Kind == "func_decl" && funcSignatureKey(d.Node) == funcSignatureKey(impl) && e.m.extensionApplies(d.Node, q, other, pm) {
 						return true
 					}
@@ -1000,7 +1000,7 @@ func (e *fileEmitter) payloadEnum(n ast.Node, info *DeclInfo, cases []ast.Node) 
 	g := e.typeGenerics(q)
 	e.w("type %s%s interface{ is%s() }\n\n", info.GoName, decl, info.GoName)
 	describe := ""
-	for _, d := range e.m.decls {
+	for _, d := range e.m.sortedDecls() {
 		if d.Owner == q && d.Kind == "var_decl" && !d.Static && d.OnPayloadEnum && d.Node.Name() == "description" {
 			describe = d.GoName
 		}
@@ -1142,7 +1142,7 @@ func (e *fileEmitter) extensionDecl(n ast.Node) {
 	t := e.m.typeOf(n.Str("extended_type"))
 	q := t.Name
 	var self *DeclInfo
-	for _, info := range e.m.decls {
+	for _, info := range e.m.sortedDecls() {
 		if (info.Kind == "struct_decl" || info.Kind == "class_decl" || info.Kind == "enum_decl") && e.m.typeQName(info) == q {
 			self = info
 		}
@@ -1883,7 +1883,7 @@ func (e *fileEmitter) conditionSkip(call ast.Node) string {
 }
 
 func (m *Module) zeroArgInit(self *DeclInfo) string {
-	for _, info := range m.decls {
+	for _, info := range m.sortedDecls() {
 		if info.Kind == "constructor_decl" && info.Owner == m.typeQName(self) && len(info.Node.Child("params").List("params")) == 0 {
 			return info.GoName
 		}
