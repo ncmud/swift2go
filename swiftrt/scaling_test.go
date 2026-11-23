@@ -770,3 +770,38 @@ func TestScalingTaskLocal(t *testing.T) {
 		}},
 	})
 }
+
+// TestIterateSetCost checks that reading a Set into a slice through Iterate, as the emitter does for a
+// Set it cannot type, gives SetElements' order and formats no element per comparison: an Int64 Set
+// allocates about one key per element, and a Set of structs describes each element once.
+func TestIterateSetCost(t *testing.T) {
+	const n = 4096
+	ints := make(map[int64]struct{}, n)
+	type zoned struct {
+		Zone int
+		Name string
+	}
+	structs := make(map[zoned]struct{}, n)
+	for i := range n {
+		ints[int64(i)*7919%1_000_003] = struct{}{}
+		structs[zoned{i % 17, strconv.Itoa(i)}] = struct{}{}
+	}
+	if got, want := Iterate[int64](ints), SetElements(ints); !slices.Equal(got, want) {
+		t.Fatal("Iterate ordered an Int64 Set unlike SetElements")
+	}
+	if got, want := Iterate[zoned](structs), SetElements(structs); !slices.Equal(got, want) {
+		t.Fatal("Iterate ordered a Set of structs unlike SetElements")
+	}
+	for _, c := range []struct {
+		name  string
+		bound float64 // allocations per element
+		run   func()
+	}{
+		{"an Int64 Set", 1.1, func() { _ = Iterate[int64](ints) }},
+		{"a Set of structs", 6, func() { _ = Iterate[zoned](structs) }},
+	} {
+		if per := testing.AllocsPerRun(5, c.run) / n; per > c.bound {
+			t.Errorf("Iterate over %s made %.1f allocations per element, want at most %v", c.name, per, c.bound)
+		}
+	}
+}

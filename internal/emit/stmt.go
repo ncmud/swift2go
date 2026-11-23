@@ -1116,7 +1116,9 @@ func (e *fileEmitter) forEach(n ast.Node) {
 	if inner := unwrapPattern(p); inner != nil && (inner.Kind() == "pattern_is" || inner.Kind() == "pattern_enum_element" || inner.Kind() == "pattern_optional_some" || inner.Kind() == "pattern_expr") {
 		et := e.m.typeOf(p.Type())
 		src := source(seq)
-		if e.m.Recv(st) != "Slice" {
+		if e.m.Recv(st) == "Set" && len(st.Args) == 1 {
+			src = e.elements(st, src)
+		} else if e.m.Recv(st) != "Slice" {
 			src = "swiftrt.Iterate[" + e.m.GoType(et, e.generics) + "](" + src + ")"
 		}
 		tmp := e.newTmp("el")
