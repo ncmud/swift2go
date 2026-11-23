@@ -224,7 +224,8 @@ func UTF8ViewLast(v any) *uint8 {
 	if len(b) == 0 {
 		return nil
 	}
-	return &b[len(b)-1]
+	last := b[len(b)-1]
+	return &last
 }
 
 // UTF8ViewLastIndexOf is `UTF8View.lastIndex(of:)`.

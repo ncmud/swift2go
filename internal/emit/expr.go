@@ -1160,10 +1160,16 @@ func (e *fileEmitter) recvArg(base ast.Node) string {
 }
 
 // ownedArray is the array n, about to have an element written in place, as storage of its own: its
-// copies may share its storage until one of them writes (swiftrt.Mut). An element of a Go map cannot
-// be addressed, so an array inside one is written through a copy of the element that the statement
-// stores back.
-func (e *fileEmitter) ownedArray(n ast.Node) string {
+// copies may share its storage until one of them writes (swiftrt.Mut).
+func (e *fileEmitter) ownedArray(n ast.Node) string { return e.ownedPlace(n, "swiftrt.Mut") }
+
+// ownedOptional is the value-type Optional n, about to be written through, as a pointer to a value of
+// its own: copies of an Optional share the value it points at (swiftrt.MutPtr).
+func (e *fileEmitter) ownedOptional(n ast.Node) string { return e.ownedPlace(n, "swiftrt.MutPtr") }
+
+// ownedPlace calls fn with the address of the place n. An element of a Go map cannot be addressed, so
+// a place inside one is reached through a copy of the element that the statement stores back.
+func (e *fileEmitter) ownedPlace(n ast.Node, fn string) string {
 	outer := len(e.post)
 	if root := e.goMapElementRoot(n); root != nil {
 		if rlv := e.lvalue(root); strings.HasSuffix(rlv, "]") {
@@ -1175,7 +1181,71 @@ func (e *fileEmitter) ownedArray(n ast.Node) string {
 			defer delete(e.lvSubst, key)
 		}
 	}
-	return "swiftrt.Mut(&" + e.lvalue(n) + ")"
+	return fn + "(&" + e.lvalue(n) + ")"
+}
+
+// isValueOptional reports whether n is a value type's Optional, which copies may share (swiftrt.Copy):
+// a write through it must reach a value of its own.
+func (e *fileEmitter) isValueOptional(n ast.Node) bool {
+	t := e.m.typeOf(n.Type())
+	if t == nil || t.Kind != types.Optional || len(t.Args) != 1 || t.Args[0].Kind == types.Optional {
+		return false
+	}
+	gt := e.m.GoType(t.Args[0], e.generics)
+	return !e.m.isReferenceGo(t.Args[0], gt) && strings.HasPrefix(e.m.GoType(t, e.generics), "*")
+}
+
+// isOptionalPlace reports whether the value-type Optional n is a place a write through it changes: a
+// variable, a stored or settable property, an element. A getter without a setter makes a new
+// Optional instead.
+func (e *fileEmitter) isOptionalPlace(n ast.Node) bool {
+	place := stripLoads(n)
+	switch place.Kind() {
+	case "member_ref_expr":
+		// The program's stored or settable property; a library's property (`first`) is a getter.
+		info, _ := e.lookup(place.Child("decl").Str("decl_usr"))
+		return info != nil && info.Kind == "var_decl" && (!info.Computed || info.Settable)
+	case "subscript_expr":
+		// An element of an array or a dictionary; the program's own subscripts are getters here.
+		info, _ := e.lookup(place.Child("decl").Str("decl_usr"))
+		recv := e.m.Recv(e.m.typeOf(place.Child("base").Type()))
+		return info == nil && (recv == "Slice" || recv == "Map")
+	case "declref_expr":
+		// A local, or a global or static stored property; a computed one is a getter.
+		usr := place.Child("decl").Str("decl_usr")
+		if usr == "" {
+			return true
+		}
+		info, _ := e.lookup(usr)
+		return info != nil && info.Kind == "var_decl" && (!info.Computed || info.Settable)
+	case "tuple_element_expr":
+		return e.isOptionalPlace(place.Child("base"))
+	case "force_value_expr":
+		return true
+	}
+	return false
+}
+
+// optionalToWrite is the value-type Optional n, about to be written through, as a pointer to a value of
+// its own: the place's own Optional, moved by swiftrt.MutPtr, or a copy of an Optional that is not a
+// place.
+func (e *fileEmitter) optionalToWrite(n ast.Node) string {
+	if e.isOptionalPlace(n) {
+		return e.ownedOptional(n)
+	}
+	return "swiftrt.OwnOptional(" + e.expr(n) + ")"
+}
+
+// once is lv, the Go form of a place a statement names more than once (`x = append(x, v)`), as a
+// form that moves an Optional the place passes through (swiftrt.MutPtr) only once: the statement then
+// writes the value MutPtr made.
+func (e *fileEmitter) once(lv string) string {
+	if !strings.Contains(lv, "swiftrt.MutPtr(") && !strings.Contains(lv, "swiftrt.OwnOptional(") {
+		return lv
+	}
+	p := e.newTmp("place")
+	e.w("%s := &%s\n", p, lv)
+	return "(*" + p + ")"
 }
 
 // goMapElementRoot finds the element of a Swift dictionary held in a Go map that the place n is part
@@ -1389,6 +1459,9 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 				e.w("%s := %s\nswiftrt.Force(swiftrt.MapGet(%s, %s))\n", k, e.expr(ds.Child("args").List("args")[0].Child("expr")), m, k)
 				return m + "[" + k + "]"
 			}
+		}
+		if sub := n.Child("sub_expr"); e.isValueOptional(sub) {
+			return "(*" + e.optionalToWrite(sub) + ")"
 		}
 		return "(*" + e.expr(n.Child("sub_expr")) + ")"
 	case "discard_assignment_expr":
@@ -1642,7 +1715,21 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 				}
 			}
 		}
-		fmt.Fprintf(&pre, "%s := %s\nif %s == nil { %s }\n", v, e.expr(sub), v, chainReturn)
+		src := ""
+		if mutates && e.isValueOptional(sub) && e.goMapElementRoot(sub) == nil {
+			// The chain writes through the Optional: give it a value of its own first.
+			saved, savedPost := e.b, e.post
+			e.b, e.post = strings.Builder{}, nil
+			src = e.optionalToWrite(sub)
+			pre.WriteString(e.b.String())
+			for _, p := range e.post {
+				post.WriteString(p + "\n")
+			}
+			e.b, e.post = saved, savedPost
+		} else {
+			src = e.expr(sub)
+		}
+		fmt.Fprintf(&pre, "%s := %s\nif %s == nil { %s }\n", v, src, v, chainReturn)
 		u := e.unwrap(v, sub)
 		if strings.HasPrefix(u, "*") {
 			u = "(" + u + ")"
@@ -2811,13 +2898,13 @@ func (e *fileEmitter) nativeMethod(recv, base string, self ast.Node, kept []arg,
 		}
 		return lv + " += string(" + ss[0] + ")", true
 	case recv == "Slice" && base == "append" && len(kept) == 1 && kept[0].label == "" && self.Kind() == "inout_expr":
-		lv := e.lvalue(self.Child("sub_expr"))
+		lv := e.once(e.lvalue(self.Child("sub_expr")))
 		return lv + " = append(" + lv + ", " + ss[0] + ")", true
 	case recv == "Slice" && base == "append" && len(kept) == 1 && kept[0].label == "contentsOf" && self.Kind() == "inout_expr" && e.m.Recv(e.m.typeOf(kept[0].node.Type())) == "Slice":
-		lv := e.lvalue(self.Child("sub_expr"))
+		lv := e.once(e.lvalue(self.Child("sub_expr")))
 		return lv + " = append(" + lv + ", " + ss[0] + "...)", true
 	case recv == "Slice" && base == "append" && len(kept) == 1 && kept[0].label == "contentsOf" && self.Kind() == "inout_expr":
-		lv := e.lvalue(self.Child("sub_expr"))
+		lv := e.once(e.lvalue(self.Child("sub_expr")))
 		elem := "any"
 		if t := e.m.typeOf(self.Child("sub_expr").Type()); t != nil && len(t.Args) == 1 {
 			elem = e.m.GoType(t.Args[0], e.generics)
@@ -3563,6 +3650,7 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 	}
 	lv := e.lvalue(l)
 	if lt.Kind == types.Named && isIntegerName(lt.Name) || base == "+" && (e.m.Recv(lt) == "Slice" || e.m.Recv(lt) == "Data") || len(base) == 2 && base[0] == '&' || e.m.GoType(lt, e.generics) == "swiftrt.Int128" {
+		lv = e.once(lv)
 		return lv + " = " + combine(lv), true
 	}
 	if base == "+" && e.m.GoType(lt, e.generics) == "string" && goAddressable(l, lv) {

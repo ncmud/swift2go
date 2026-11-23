@@ -62,18 +62,18 @@ func TestCopyUnsharesEveryValuePart(t *testing.T) {
 		t.Fatalf("copy differs from original: %+v", c)
 	}
 
-	*c.Inner.Opt = 100
+	*MutPtr(&c.Inner.Opt) = 100
 	Mut(&c.Inner.List)[0] = 100
 	Mut(&Mut(&c.Nested)[1])[0] = 100
 	byKey := c.ByKey["k"]
 	Mut(&byKey.List)[0] = 100
-	*byKey.Opt = 100
+	*MutPtr(&byKey.Opt) = 100
 	c.ByKey["k"] = byKey
 	c.ByKey["new"] = copyInner{}
 	inAny := c.Any.(copyInner)
 	Mut(&inAny.List)[0] = 100
 	c.Any = inAny
-	Mut(&c.OptBox.List)[0] = 100
+	Mut(&MutPtr(&c.OptBox).List)[0] = 100
 	Mut(&c.Pair[1].List)[0] = 100
 
 	want.Ref, want.private = orig.Ref, orig.private
@@ -91,7 +91,7 @@ func TestCopyOriginalMutationsStayOutOfTheCopy(t *testing.T) {
 	want := newCopyOuter()
 	want.Ref, want.private = c.Ref, c.private
 
-	*orig.Inner.Opt = 100
+	*MutPtr(&orig.Inner.Opt) = 100
 	Mut(&orig.Inner.List)[0] = 100
 	Mut(&Mut(&orig.Nested)[0])[0] = 100
 	byKey := orig.ByKey["k"]
@@ -100,7 +100,7 @@ func TestCopyOriginalMutationsStayOutOfTheCopy(t *testing.T) {
 	inAny := orig.Any.(copyInner)
 	Mut(&inAny.List)[0] = 100
 	orig.Any = inAny
-	Mut(&orig.OptBox.List)[0] = 100
+	Mut(&MutPtr(&orig.OptBox).List)[0] = 100
 	Mut(&orig.Pair[0].List)[0] = 100
 
 	if !reflect.DeepEqual(c, want) {
@@ -153,7 +153,7 @@ func TestCopyTopLevelContainers(t *testing.T) {
 
 	one := 1
 	p := Copy(&one)
-	*p = 9
+	*MutPtr(&p) = 9
 	if one != 1 {
 		t.Fatal("optional pointer shares its target")
 	}

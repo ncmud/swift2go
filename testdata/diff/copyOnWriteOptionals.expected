@@ -1,0 +1,13 @@
+optional [1, 2, 7] 7 [10, 2, 3] 2
+optional scalar 2 7
+numbers 6 1 10
+class [1, 2] 1 [1] 99 5 4
+inout [10] 1 [0] 0
+computed 5 [1] 1 [] -1
+library getter true true
+conditions [1, 2, 3] 4 [2, 3] [2, 3]
+array [[5, 6], []] [[5], []] 6 -1
+dict [1, 2] 2 [1] 1
+enums ["[1, 2, 3]", "n[\"a\"]", "[9]"] ["[1, 2]", "n[\"a\"]", "empty"]
+protocols [2, 5] [0, 5] 3
+any [1, 2, 3] [100, 2, 3]

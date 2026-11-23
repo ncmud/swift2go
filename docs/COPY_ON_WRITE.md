@@ -1,4 +1,4 @@
-# Copy-on-write for arrays
+# Copy-on-write for arrays and optionals
 
 Swift arrays are values, but copying one costs nothing: copies share one buffer, and a mutation first
 checks `isKnownUniquelyReferenced` and copies the buffer only when another copy still holds it. Go has
@@ -23,6 +23,8 @@ A slice header carries a length and a capacity, and the two now say who may writ
 - **Owned**: `len < cap`. The holder of this header is the only one that can write the storage. Spare
   capacity is the mark.
 - **Possibly shared**: `len == cap`. Copies may share this storage, so no one writes it in place.
+
+Optionals of value types are pointers and carry no mark; see below.
 
 The mark can be wrong in one direction only. A new array with no spare capacity (a literal, the result
 of `map`, Go's `append` filling its capacity exactly) is treated as shared, although it is not; its
@@ -62,32 +64,49 @@ of arrays, the new storage holds the same inner headers as the old one. That is 
 headers are themselves marked shared, which is what frozen means. An array whose elements own spare
 capacity is never shared by `Copy`, so the case cannot arise.
 
-## Which arrays can be shared
+## Optionals and protocol values
 
-Sharing depends on every write going through `Mut`. Go code that writes storage some other way must not
-see shared storage, so `Copy` keeps copying, as before, any array whose element type holds:
+A value type's Optional is a pointer, `*T`. A pointer has no spare capacity to carry a mark, so
+`Copy` treats every Optional as possibly shared and the writer always moves: a write through an
+Optional goes through `swiftrt.MutPtr(&opt)`, which points `opt` at a new copy of the value and
+returns it. `Copy` then shares an Optional whose value is frozen, and copies one that holds an owned
+array. The emitter calls `MutPtr` wherever Swift writes through an Optional of a value type:
 
-- a non-class pointer (a value type's Optional), a map (a Dictionary or Set), or an interface (a protocol
-  value or an enum with associated values), whose contents can be written without `Mut`;
-- an exported field without a `swift` tag in a named struct: a field of a runtime or overlay type, such
-  as `OrderedSet.Items`, which Go code writes in place.
+- a force unwrap that is written (`opt!.x = v`, `opt! += 1`, `opt!.append(v)`, `f(&opt!)`): the
+  pointer is taken once, before the statement, since a statement such as `x = append(x, v)` names its
+  destination twice;
+- an optional chain that writes (`opt?.x = v`, `opt?.mutate()`): the chain binds the Optional
+  through `MutPtr`.
 
-The copy of such an array gets one spare element of capacity, so `Mut` never looks it up. When `Mut`
-meets one without spare capacity, it checks the element type (a map lookup by type word) and leaves the
-array where it is. Arrays of numbers, strings, class references, closures, and structs and tuples of
-those, nested in arrays to any depth, are shared.
+Class references are pointers too, but they are references in Swift and never pass through `MutPtr`.
 
-Dictionaries, sets and value-type optionals are still copied whole by `Copy`. The values they hold
-follow the array rules, so a `[String: [Int]]` copy allocates a new map but shares frozen arrays.
+An interface (a protocol value, `Any`, an enum with associated values) is shared when the value it
+holds is frozen: Go code cannot write an interface's value in place. One exception: a struct whose
+protocol has mutating requirements is held by pointer (`swiftrt.Ref`), and its methods write through
+that pointer, so `Copy` always copies what such a pointer points at.
+
+## What is never shared
+
+Sharing depends on every write going through `Mut` or `MutPtr`. `Copy` keeps copying whole:
+
+- maps: a Dictionary or a Set, which Go writes in place;
+- an exported field without a `swift` tag in one of the runtime's own structs, such as
+  `OrderedSet.Items`, which its Go methods write in place.
+
+A type holding either is unshareable, and so is an array of it. The copy of such an array gets one
+spare element of capacity, so `Mut` never looks it up. When `Mut` meets one without spare capacity, it
+checks the element type (a map lookup by type word) and leaves the array where it is. The values
+inside a copied map follow the rules above, so a `[String: [Int]]` copy allocates a new map but shares
+its frozen arrays.
 
 ## What the effects pass still decides
 
 The effects pass and the origin and sink rules in `value.go` are unchanged. They decide *where* a value
 needs `Copy`: on a store, a return, a capture, and on a loan whose source can change during the loan.
-Copy-on-write changes what a `Copy` costs, not where one goes. A `Copy` of frozen arrays is now a walk
-over the slice headers with no allocation, and a copy that is never written is never paid for. The
+Copy-on-write changes what a `Copy` costs, not where one goes. A `Copy` of frozen arrays and optionals is now a
+walk over the slice headers and pointers with no allocation, and a copy that is never written is never paid for. The
 effects pass still saves the walk itself, and it still decides alone for the storage that is not shared:
-dictionaries, sets, optionals and protocol values.
+dictionaries and sets.
 
 ## Soundness
 
@@ -112,10 +131,15 @@ marked shared and the storage is frozen.**
 `Copy` and `Mut` never write into storage that may be shared: `Copy` only reads the value it copies, and
 `Mut` replaces only its own header. Concurrent readers of shared storage therefore race with nothing.
 
+- An Optional's value is only ever written through `MutPtr`, which never writes the value it was
+  given, so an Optional shared by two copies keeps its value for both.
+
 What it cannot do is notice that a copy died. A Swift array whose other copy has been released is
 uniquely referenced again; in Go both sides keep the shared mark, so each side's first write after the
 copy moves its storage, where Swift would move only one. A copy that is written once costs the same as
-before; a copy whose original is also written afterwards costs one extra copy.
+before; a copy whose original is also written afterwards costs one extra copy. An Optional is moved on
+every statement that writes through it, which Swift never does; a loop that writes through the same
+Optional on each pass allocates on each pass.
 
 ## Cost
 

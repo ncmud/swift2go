@@ -49,3 +49,23 @@ func shrink[S ~[]E, E any](s S, n int) S {
 	}
 	return s[:n]
 }
+
+// MutPtr returns *p ready to be written through, after moving the value it points at to storage of its
+// own. A value type's Optional is a pointer, and copies of an Optional share what it points at (Copy),
+// so every write through one goes through MutPtr: `swiftrt.MutPtr(&opt).Field = v`. A pointer carries no
+// mark of being owned, so each write moves the value; the returned pointer can be written repeatedly.
+func MutPtr[T any](p **T) *T {
+	if *p == nil {
+		return nil
+	}
+	own := new(T)
+	*own = **p
+	*p = own
+	return own
+}
+
+// OwnOptional is a copy of the Optional p that is its own to write through, for a write through an
+// Optional that is not a place, such as a getter's result.
+func OwnOptional[T any](p *T) *T {
+	return MutPtr(&p)
+}
