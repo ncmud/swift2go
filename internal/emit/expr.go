@@ -1054,7 +1054,7 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		case info.OwnerKind == "protocol":
 			return e.witnessRecv(base, e.expr(base)) + ".Get" + info.GoName + "()"
 		case info.FreeSelf():
-			return pfx + info.GoName + "(" + e.expr(base) + ")"
+			return pfx + info.GoName + e.uninferableTypeArgs(info, d) + "(" + e.expr(base) + ")"
 		case info.Computed:
 			return e.expr(base) + "." + e.superTarget(info, base) + "()"
 		default:
@@ -3651,7 +3651,7 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 			return "swiftrt.Int128" + fn + "(" + cur + ", " + rs + ")"
 		}
 		if len(base) == 2 && base[0] == '&' && strings.ContainsAny(base[1:], "+-*") {
-			return cur + " " + base[1:] + " " + rs
+			return cur + " " + base[1:] + " " + rightOperand(rs, base[1:])
 		}
 		if lt.Kind == types.Named && isIntegerName(lt.Name) {
 			if fn, ok := map[string]string{"+": "Add", "-": "Sub", "*": "Mul", "/": "Div", "%": "Rem"}[base]; ok {
@@ -3671,7 +3671,7 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 			// Date ± TimeInterval is a Date.
 			return cur + " " + base + " swiftrt.Date(" + rs + ")"
 		}
-		return cur + " " + base + " " + rs
+		return cur + " " + base + " " + rightOperand(rs, base)
 	}
 	if info, _ := e.lookup(d.Str("decl_usr")); info == nil {
 		if call, ok := e.setterCall(l, combine(e.expr(l))); ok {
@@ -4774,16 +4774,34 @@ func (e *fileEmitter) caseOrderedEnum(t *types.Type) bool {
 // uninferableTypeArgs renders explicit type arguments for a call of a local generic function when
 // one of its type parameters occurs in no parameter type, so Go could not infer it (`Failure` in
 // `func f<Failure>(…) -> Outcome<Failure>`). It applies to functions whose parameters all stay Go
-// type parameters: a non-generic owner and no constraint that erases or reshapes one.
+// type parameters: a non-generic owner and no constraint that erases or reshapes one. A member of an
+// extension of a foreign generic type takes the type's parameters, which its receiver supplies
+// unless the receiver's Go type drops one (a Result's Failure); a computed property's getter keeps
+// all of them.
 // typeParamKeepingProtocols are the standard library protocols a type parameter can conform to and
 // stay a plain `any` parameter in Go.
-var typeParamKeepingProtocols = map[string]bool{"Swift.Error": true, "Swift.Sendable": true, "Swift.Decodable": true, "Swift.Encodable": true}
+var typeParamKeepingProtocols = map[string]bool{"Swift.Error": true, "Swift.Sendable": true, "Swift.Decodable": true, "Swift.Encodable": true, "Swift.Copyable": true, "Swift.Escapable": true}
 
 func (e *fileEmitter) uninferableTypeArgs(info *DeclInfo, d ast.Node) string {
 	if info.Node == nil || len(e.m.TypeParams(info.Owner)) > 0 {
 		return ""
 	}
-	sig := info.Node.Child("generic_signature")
+	fn, result, getter := info.Node, info.Node.Str("result"), false
+	if info.Kind == "var_decl" {
+		if info.OwnerKind != "foreign" || info.Static {
+			return ""
+		}
+		fn, result, getter = nil, info.Node.Str("interface_type"), true
+		for _, a := range info.Node.List("accessors") {
+			if a.Bool("get") || a.Str("accessor_kind") == "get" {
+				fn = a
+			}
+		}
+		if fn == nil {
+			return ""
+		}
+	}
+	sig := fn.Child("generic_signature")
 	var names []string
 	for _, gp := range sig.Strings("generic_params") {
 		names = append(names, e.m.demangle(gp))
@@ -4802,20 +4820,28 @@ func (e *fileEmitter) uninferableTypeArgs(info *DeclInfo, d ast.Node) string {
 	for _, name := range names {
 		marks[name] = "T_" + name + "_T"
 	}
+	self := ""
+	if info.OwnerKind == "foreign" && !info.Static {
+		self = e.m.GoType(e.m.typeOf(fn.Child("implicit_self_decl").Str("interface_type")), marks)
+	}
 	needed := false
 	for _, name := range names {
 		used := false
-		for _, p := range info.Node.Child("params").List("params") {
+		for _, p := range fn.Child("params").List("params") {
 			if strings.Contains(e.m.GoType(e.m.typeOf(p.Str("interface_type")), marks), marks[name]) {
 				used = true
 			}
 		}
-		if !used {
-			if !strings.Contains(e.m.GoType(e.m.typeOf(info.Node.Str("result")), marks), marks[name]) {
-				// In neither a parameter nor the result: the declaration drops the parameter.
-				return ""
-			}
+		inSelf := strings.Contains(self, marks[name])
+		switch {
+		case used:
+		case getter:
+			needed = needed || !inSelf
+		case strings.Contains(e.m.GoType(e.m.typeOf(result), marks), marks[name]):
 			needed = true
+		case !inSelf:
+			// In neither the receiver, a parameter nor the result: the declaration drops the parameter.
+			return ""
 		}
 	}
 	if !needed {

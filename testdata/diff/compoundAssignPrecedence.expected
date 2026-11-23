@@ -1,0 +1,10 @@
+or-xor 1
+xor-or 60
+and-xor 0
+or-and-xor 153
+wrapping-sub 80
+wrapping-mul 35
+double-sub 7.0
+setter-sub 135
+setter-double-sub 7.0
+shift 4
