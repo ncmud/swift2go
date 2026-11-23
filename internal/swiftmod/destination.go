@@ -1,10 +1,13 @@
 package swiftmod
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -234,7 +237,8 @@ func readJSON(path string, v any) error {
 // BuildDependencies runs `swift build` for d in pkgDir, with its products in buildDir, so that the
 // targets named can be compiled against built modules: it builds each Swift dependency of those
 // targets that is not itself named, and each named target that uses a build-tool plugin, whose
-// outputs are read from the build. extra are more arguments for `swift build`. It builds nothing for the host.
+// outputs are read from the build. extra are more arguments for `swift build`. It builds nothing for the host,
+// and nothing when what those builds read is unchanged since the last time they all succeeded in buildDir.
 func BuildDependencies(pkgDir, buildDir string, d Destination, targets map[string]Target, names []string, extra ...string) error {
 	if d.Host() {
 		return nil
@@ -263,6 +267,19 @@ func BuildDependencies(pkgDir, buildDir string, d Destination, targets map[strin
 			}
 		}
 	}
+	if len(build) == 0 {
+		return nil
+	}
+	stamp := filepath.Join(buildDir, "swift2go-dependencies.stamp")
+	key, err := dependencyKey(pkgDir, d, targets, build, extra)
+	if err != nil {
+		return err
+	}
+	if old, err := os.ReadFile(stamp); err == nil && string(old) == key {
+		fmt.Fprintf(os.Stderr, "swift2go: the %d dependency builds for %s are up to date\n", len(build), d.Triple)
+		return nil
+	}
+	_ = os.Remove(stamp)
 	for _, n := range build {
 		args := slices.Concat([]string{"build", "--build-system", "native", "--scratch-path", buildDir}, d.SwiftBuildArgs(), extra, []string{"--target", n})
 		cmd := exec.Command("swift", args...)
@@ -274,5 +291,62 @@ func BuildDependencies(pkgDir, buildDir string, d Destination, targets map[strin
 			return fmt.Errorf("swift build --target %s for %s: %w", n, d.Triple, err)
 		}
 	}
-	return nil
+	return os.WriteFile(stamp, []byte(key), 0o644)
+}
+
+// dependencyKey identifies what the `swift build` runs of [BuildDependencies] read: the swift
+// executable, the destination and arguments, the package's manifest and resolved versions, and the
+// name, size and modification time of every file of the targets built and of the targets they
+// depend on.
+func dependencyKey(pkgDir string, d Destination, targets map[string]Target, build, extra []string) (string, error) {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00", d.SDK, d.Triple, strings.Join(extra, "\x00"))
+	if swift, err := exec.LookPath("swift"); err == nil {
+		if fi, err := os.Stat(swift); err == nil {
+			fmt.Fprintf(h, "%s\x00%d\x00", swift, fi.ModTime().UnixNano())
+		}
+	}
+	for _, f := range []string{"Package.swift", "Package.resolved"} {
+		data, err := os.ReadFile(filepath.Join(pkgDir, f))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00%s\x00", f, len(data), data)
+	}
+	seen := map[string]bool{}
+	var visit func(string)
+	visit = func(n string) {
+		t, ok := targets[n]
+		if !ok || seen[n] {
+			return
+		}
+		seen[n] = true
+		for _, dep := range t.AllDeps() {
+			visit(dep)
+		}
+	}
+	for _, n := range build {
+		visit(n)
+	}
+	names := slices.Sorted(maps.Keys(seen))
+	for _, n := range names {
+		t := targets[n]
+		dir := filepath.Join(t.Dir, t.Path)
+		fmt.Fprintf(h, "target %s %s\x00", n, dir)
+		err := filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
+			if err != nil || e.IsDir() {
+				return err
+			}
+			fi, err := e.Info()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "%s\x00%d\x00%d\x00", path, fi.Size(), fi.ModTime().UnixNano())
+			return nil
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

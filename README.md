@@ -134,7 +134,9 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage \
 - Before transpiling, swift2go runs `swift build --build-system native` for the SDK, with its products
   in the `-build` directory, for each Swift dependency of the listed targets that is not itself listed,
   and for each listed target that uses a build-tool plugin. Give the platform a build directory of its
-  own. Macro plugins are built for the host there and loaded from it.
+  own. Macro plugins are built for the host there and loaded from it. The builds are skipped when the
+  swift executable, the SDK, the manifest, `Package.resolved` and the files of the targets built and of their
+  dependencies are unchanged since they last all succeeded there (`swift2go-dependencies.stamp`).
 - `-Xcc <flag>` (repeatable) passes a flag to the C compiler, in swift2go's compiler runs and in the
   `swift build` it runs: for example `-Xcc -I<dir>` for headers that a system library target needs and
   the SDK lacks.
