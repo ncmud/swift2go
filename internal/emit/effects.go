@@ -279,3 +279,89 @@ func (m *Module) localPlace(n ast.Node, ctor bool) bool {
 	}
 	return false
 }
+
+// replacedWhole reports whether the stored property with this USR is a private property of a class
+// that code only ever replaces whole: no write reaches into its storage, as appending to an array,
+// assigning an element or passing it inout would. A value read from it then keeps its storage
+// however the property changes, so lending the value needs no copy.
+func (m *Module) replacedWhole(usr string) bool {
+	if m.inPlace == nil {
+		m.inPlace = map[string]bool{}
+		for _, f := range m.Files {
+			for _, it := range f.Items {
+				m.findInPlaceWrites(map[string]any(it), nil)
+			}
+		}
+	}
+	info := m.decls[usr]
+	if info == nil || info.Kind != "var_decl" || info.Static || info.Computed || info.Observed || info.Weak || info.Lazy || info.Node == nil || info.OwnerKind != "class_decl" {
+		return false
+	}
+	if a := info.Node.Str("access"); a != "private" && a != "fileprivate" {
+		return false
+	}
+	return !m.inPlace[usr]
+}
+
+// findInPlaceWrites adds to m.inPlace each property that the code under n writes into: the property
+// reached by a member reference that is neither loaded nor the whole destination of an assignment.
+// parents holds n's ancestors, nearest last.
+func (m *Module) findInPlaceWrites(n map[string]any, parents []map[string]any) {
+	node := ast.Node(n)
+	if node.Kind() == "accessor_decl" && node.Bool("implicit") {
+		// A stored property's synthesized accessors reach its storage as the language defines.
+		return
+	}
+	if node.Kind() == "member_ref_expr" {
+		if usr := node.Child("decl").Str("decl_usr"); usr != "" && !m.inPlace[usr] && writesInto(n, parents) {
+			m.inPlace[usr] = true
+		}
+	} else if node.Kind() != "" && node.Kind() != "var_decl" {
+		// A key path or any other reference to a property by its declaration may write it.
+		if d := node.Child("decl"); d != nil {
+			if usr := d.Str("decl_usr"); usr != "" {
+				m.inPlace[usr] = true
+			}
+		}
+	}
+	parents = append(parents, n)
+	for _, c := range n {
+		switch v := c.(type) {
+		case map[string]any:
+			m.findInPlaceWrites(v, parents)
+		case []any:
+			for _, e := range v {
+				if c, ok := e.(map[string]any); ok {
+					m.findInPlaceWrites(c, parents)
+				}
+			}
+		}
+	}
+}
+
+// writesInto reports whether the member reference ref, under parents, writes into the property's
+// storage rather than reading it or replacing it whole.
+func writesInto(ref map[string]any, parents []map[string]any) bool {
+	cur := ref
+	for i := len(parents) - 1; i >= 0; i-- {
+		p := ast.Node(parents[i])
+		switch p.Kind() {
+		case "load_expr":
+			return false
+		case "assign_expr":
+			if dest := p.Child("dest"); dest != nil && nodeKey(dest) == nodeKey(cur) {
+				return nodeKey(cur) != nodeKey(ref)
+			}
+			return true
+		case "inout_expr", "paren_expr", "force_value_expr", "bind_optional_expr", "optional_evaluation_expr", "tuple_element_expr":
+		case "member_ref_expr", "subscript_expr":
+			if base := p.Child("base"); base == nil || nodeKey(base) != nodeKey(cur) {
+				return true
+			}
+		default:
+			return true
+		}
+		cur = parents[i]
+	}
+	return true
+}
