@@ -43,6 +43,7 @@ type fileEmitter struct {
 	exprSubst     map[uintptr]string      // expressions already evaluated into a temporary, by node identity
 	writes        map[uintptr]bool        // memoized mayWrite results, by node identity
 	post          []string                // writebacks to emit after the current statement
+	forwardVars   map[uintptr]bool        // local variables declared before a local function that captures them, by pattern
 	callee        *DeclInfo               // the local function whose arguments argStrings is rendering
 	unitCallee    bool                    // the foreign callee takes a generic-result body closure
 	// unitValueFirst marks a unitCallee whose first argument is a value, not a body: TaskLocal.withValue's.
@@ -1404,6 +1405,10 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			}
 			dropParam(param)
 			g[param] = e.m.LocalTypeName(proto)
+		} else if own[param] && e.m.isLocalProtocol(proto) {
+			// A protocol of a transpiled dependency bounds the parameter by its interface, so the
+			// requirements are methods of the parameter's values.
+			e.typeBounds[g[param]] = e.m.GoType(&types.Type{Kind: types.Named, Name: proto}, nil)
 		} else if _, ok := g[param]; !ok {
 			g[param] = "any"
 			if e.m.isLocalProtocol(proto) {
@@ -1417,6 +1422,10 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			continue
 		}
 		first := e.m.demangle(r.Str("first_type"))
+		if strings.HasPrefix(e.m.demangle(r.Str("second_type")), first+".") {
+			// The parameter is its own associated type (`F.Element == F` for an OptionSet): nothing to pin.
+			continue
+		}
 		concrete := e.m.GoType(e.m.typeOf(r.Str("second_type")), g)
 		tp, ok := g[first]
 		if !ok {

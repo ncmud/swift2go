@@ -130,3 +130,62 @@ func AnyContains(set, member any) bool {
 	}
 	panic(fmt.Sprintf("swiftrt.AnyContains: %T is not an option set", set))
 }
+
+// AnyInsert is `OptionSet.insert(_:)` on a type parameter's option set: it sets member's bits in set and
+// reports whether any of them was clear.
+func AnyInsert[T any](set *T, member T) struct {
+	F0 bool
+	F1 T
+} {
+	had := AnyContains(*set, member)
+	osBits(set, member, func(s, m uint64) uint64 { return s | m })
+	return struct {
+		F0 bool
+		F1 T
+	}{!had, member}
+}
+
+// AnyRemove is `OptionSet.remove(_:)` on a type parameter's option set: it clears member's bits in set
+// and returns the bits of member that were set, or nil when none was.
+func AnyRemove[T any](set *T, member T) *T {
+	in := *set
+	osBits(&in, member, func(s, m uint64) uint64 { return s & m })
+	osBits(set, member, func(s, m uint64) uint64 { return s &^ m })
+	if reflect.ValueOf(AnyRawValue(in)).IsZero() {
+		return nil
+	}
+	return &in
+}
+
+// AnyRawValue is `rawValue` of a type parameter's value: an option set's raw bits or a raw-value enum's raw value.
+func AnyRawValue(v any) any {
+	if r, ok := v.(interface{ RawValue() any }); ok {
+		return r.RawValue()
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Struct {
+		if f := rv.FieldByName("RawValue"); f.IsValid() {
+			return f.Interface()
+		}
+	}
+	if m := rv.MethodByName("RawValue"); m.IsValid() && m.Type().NumIn() == 0 && m.Type().NumOut() == 1 {
+		return m.Call(nil)[0].Interface()
+	}
+	panic(fmt.Sprintf("swiftrt.AnyRawValue: %T has no raw value", v))
+}
+
+// osBits replaces the raw bits of the option set *set with op of them and member's.
+func osBits[T any](set *T, member T, op func(s, m uint64) uint64) {
+	s, m := reflect.ValueOf(set).Elem().FieldByName("RawValue"), reflect.ValueOf(member).FieldByName("RawValue")
+	if !s.IsValid() || !m.IsValid() {
+		panic(fmt.Sprintf("swiftrt: %T is not an option set", member))
+	}
+	switch s.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		s.SetInt(int64(op(uint64(s.Int()), uint64(m.Int()))))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		s.SetUint(op(s.Uint(), m.Uint()))
+	default:
+		panic(fmt.Sprintf("swiftrt: %T is not an option set", member))
+	}
+}

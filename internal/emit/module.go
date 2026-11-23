@@ -607,6 +607,13 @@ var objcMember = regexp.MustCompile(`^c:objc\((?:cs|pl)\)(\w+)\((im|cm|py|cpy)\)
 func (m *Module) objcDemangle(usr string) string {
 	match := objcMember.FindStringSubmatch(usr)
 	name := m.objcNames[usr]
+	for _, dep := range m.Deps {
+		if name != "" {
+			break
+		}
+		// A dependency's default argument names a member only that module's sources spell.
+		name = dep.objcNames[usr]
+	}
 	if match == nil || name == "" {
 		return ""
 	}
