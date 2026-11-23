@@ -87,27 +87,37 @@ go run github.com/ncmud/swift2go/cmd/swift2go -incremental -pkg path/to/SwiftPac
   Go; the targets that import it wait for it before they dump. Each file is still dumped in a frontend
   job of its own: a job with several primary files writes their implicit accessors and synthesized
   members in an order that depends on the other files of the job.
-- A file is dumped again when its content changes. The target's other files keep their cached ASTs
-  as long as the changed files' fingerprints hold. A fingerprint covers a file's declarations with
-  their types, attributes and conformances, but not the bodies of functions, initializers and
-  accessors, nor the expressions that give variables their initial values. The body or value that
-  decides an opaque type (`some P`) counts.
-- When a fingerprint changes, a file is added or removed, or the compiler or its flags change, every
-  file of the target is dumped again. A target's `.swiftmodule` is emitted again only when its
-  fingerprints or its dependencies' change, and every file of a target that imports it is then dumped
-  again.
-- A Go file is emitted again only when its Swift file's AST changed, or when something it read from
-  other files did: whether a function it calls can write shared state, the initial value of a
-  property whose default it spells out, or the names and once-per-package declarations that earlier
-  files took. The other Go files are left as they are, so the output still matches a clean run's, and
-  a file emitted with the content it already has is not written.
-  `out/.cache/<Target>/emit.gob` records what each Go file read.
-- Every Go file of a target is emitted again when the declarations of the target or of a target it
-  depends on change, when a function body declares a type or stops declaring one, when an initial
-  value changes whether a static or global is initialized lazily, and when the swift2go binary
-  changes.
-- `SWIFT2GO_CHECK_INCREMENTAL=1` emits the files a run would keep as well, and fails the target if any
-  of them would differ from the kept file.
+- A target's interface is a table of digests, one for each top-level declaration, each member of a
+  type, and each type as a whole. A digest covers the declarations' types, attributes and
+  conformances, but not the bodies of functions, initializers and accessors, nor the expressions that
+  give variables their initial values; the body or value that decides an opaque type (`some P`)
+  counts. `private` and `fileprivate` declarations count only for their own file. A type as a whole
+  covers its kind, inheritance, conformances and generic signature, a struct's stored properties, an
+  enum's cases and a protocol's requirements.
+- A file is dumped again when its content changes, or when it mentions a declaration whose digest
+  changed, in its own target or in one it imports: the member's or declaration's name, or for a
+  change to a type as a whole, or to a member Swift calls without naming it (an initializer, a
+  subscript, an operator a synthesized conformance supplies), the type's name. A file mentions the
+  identifiers and operators of its source and those its typed AST records, which include the types
+  the compiler inferred. A change to a typealias, an operator or a precedence group counts for every
+  file. The files dumped again can change more declarations, and the files that mention those are
+  dumped too.
+- A file is added or removed, or the compiler or its flags change: every file of the target is dumped
+  again. A target's `.swiftmodule` is emitted again when the exported part of its table or of a
+  dependency's changes.
+- A Go file is emitted again when its Swift file's AST changed, when it mentions a declaration whose
+  emit table entry changed, or when something else it read from other files did: whether a function
+  it calls can write shared state, the initial value of a property whose default it spells out, or the
+  names and once-per-package declarations that earlier files took. The emit table adds to each
+  declaration's digest what indexing decided for it, such as its Go name, and to each struct and enum
+  the layout of the value types it holds. The other Go files are left as they are, so the output
+  still matches a clean run's, and a file emitted with the content it already has is not written.
+  `out/.cache/<Target>/emit.gob` records what each Go file read and which tables it was written
+  against.
+- Every Go file of a target is emitted again when a file is added or removed, when an overlay or a
+  mapping changes, and when the swift2go binary changes.
+- `SWIFT2GO_CHECK_INCREMENTAL=1` dumps and emits the files a run would keep as well, and fails the
+  target if any of them would differ from the kept file.
 - The package graph that `swift package describe` reports is cached in `out/.cache/describe.gob` until
   the toolchain, a manifest, a `Package.resolved` or the names of the files in a target's directory change.
 - An incremental run does not write `out/ast/<Target>.json`.

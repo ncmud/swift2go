@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/ncmud/swift2go/internal/ast"
+	"github.com/ncmud/swift2go/internal/deps"
 	"github.com/ncmud/swift2go/internal/types"
 )
 
@@ -164,6 +165,9 @@ type Module struct {
 	// Interface identifies the module's declarations, as the AST cache fingerprints them. An
 	// incremental run sets it on the module and its dependencies.
 	Interface string
+	// SwiftTable is the module's declarations as the AST cache read them (see [deps.Scan]), which an
+	// incremental run sets.
+	SwiftTable deps.Table
 	// EmitCache is the file in which [Module.WriteGo] records what each Go file it writes depends on.
 	// When set, WriteGo keeps a Go file whose Swift file and dependencies are unchanged since that
 	// record, instead of emitting it again.
@@ -178,6 +182,9 @@ type Module struct {
 	Reused int
 	// Stale lists the Go files WriteGo would have kept with content that emitting them changes.
 	Stale []string
+
+	table     deps.Table // the module's emit table, set by WriteGo in an incremental run
+	tableHash string
 
 	rec      *fileRecord // what the emission of the current file reads and changes
 	indexing string      // the file New is indexing
@@ -1369,8 +1376,24 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 		return nil, err
 	}
 	env := m.emitEnv(overlay)
+	if env != "" {
+		m.table = m.emitTable()
+		m.tableHash = m.table.Hash()
+	}
 	cache := readEmitCache(m.EmitCache, env)
-	next := &emitCache{Env: env, Files: map[string]*fileRecord{}}
+	var changed []deps.Key
+	if cache != nil {
+		var ok bool
+		if changed, ok = m.changedKeys(cache); !ok {
+			cache = nil
+		}
+	}
+	next := &emitCache{Env: env, Files: map[string]*fileRecord{}, Tables: map[string]string{}}
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.table != nil {
+			next.Tables[mod.Name] = mod.tableHash
+		}
+	}
 	mods := m.chain()
 	if env != "" {
 		// Effects read by the first file that needs them would be recorded as that file's own reads.
@@ -1394,7 +1417,7 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 		kept := false
 		if cache != nil {
 			r := cache.Files[name]
-			kept = m.reusable(r, f, out, mods)
+			kept = m.reusable(r, f, out, mods, changed)
 			if kept && !m.CheckEmitCache {
 				m.replay(r, mods)
 				next.Files[name] = r
@@ -1474,7 +1497,10 @@ func (m *Module) WriteGo(dir string) ([]string, error) {
 	case m.EmitCache == "":
 	case env == "":
 		_ = os.Remove(m.EmitCache)
-	case cache == nil || len(next.Files) != len(cache.Files) || m.Reused < len(next.Files) || m.CheckEmitCache:
+	case cache == nil || len(next.Files) != len(cache.Files) || m.Reused < len(next.Files) || m.CheckEmitCache || !maps.Equal(cache.Tables, next.Tables):
+		if err := m.tableStore().Save(m.table); err != nil {
+			return nil, err
+		}
 		if err := writeEmitCache(m.EmitCache, next); err != nil {
 			return nil, err
 		}

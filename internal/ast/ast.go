@@ -135,6 +135,10 @@ type File struct {
 	Items    []Node
 	// Hash identifies the document the file was decoded from; "" when the loader did not hash it.
 	Hash string
+	// Names lists, sorted, the identifiers and operators the file's source and typed AST mention, when
+	// the loader read them; an incremental emission keeps the file's Go while it mentions no changed
+	// declaration.
+	Names []string
 }
 
 // Load decodes the concatenated per-file JSON documents of one dump.
