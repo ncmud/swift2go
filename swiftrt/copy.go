@@ -12,8 +12,11 @@ type SwiftClass interface{ SwiftClass() }
 
 var swiftClassType = reflect.TypeFor[SwiftClass]()
 
-// Copy gives v Swift value semantics: structs, arrays, dictionaries and optional structs are copied
-// deeply, while class references keep their identity.
+// Copy gives v Swift value semantics: the result and v can each be changed without the other seeing
+// it. Class references keep their identity. An array whose storage nothing can write in place (see
+// [Mut]) stays shared, as Swift shares an array's buffer between copies; the first write through
+// either copy makes that copy's own storage. Other storage is copied now: dictionaries, sets,
+// optionals of value types, protocol values, and arrays that some copy owns and writes in place.
 func Copy[T any](v T) T {
 	p := planOf(reflect.TypeFor[T]())
 	if p.fix == nil {
@@ -30,10 +33,23 @@ func copyWithPlan[T any](v T, p *copyPlan) T {
 	return v
 }
 
-// copyPlan unshares the value of one type in place. A nil fix means Go assignment alone copies the
-// value as Swift would: it holds no slice, map, interface or non-class pointer.
+// copyPlan unshares the value of one type in place.
 type copyPlan struct {
+	// fix makes the value at the pointer, a copy already, independent of the value it was copied
+	// from. A nil fix means Go assignment alone copies the value as Swift would: it holds no slice,
+	// map, interface or non-class pointer.
 	fix func(unsafe.Pointer)
+	// frozen reports whether every array in the value at the pointer may be shared as it is: each
+	// one's length equals its capacity, all the way down. Only a shareable plan has one; nil means
+	// the type holds no array.
+	frozen func(unsafe.Pointer) bool
+	// shareable says the type holds storage only in arrays of Swift values, which every in-place
+	// write reaches through Mut. A non-class pointer, a map, an interface, or a slice field that a
+	// runtime type of its own writes in place makes a type unshareable, and its arrays are always
+	// copied.
+	shareable bool
+	// kids are the plans of the parts, for working out shareable over recursive types.
+	kids []*copyPlan
 }
 
 var (
@@ -105,6 +121,12 @@ func needsDeepCopy(t reflect.Type) bool {
 	return planFor(t).fix != nil
 }
 
+// shareableElems reports whether an array of t may share its storage with copies of it (see
+// [copyPlan.shareable]).
+func shareableElems(t reflect.Type) bool {
+	return planOf(t).shareable
+}
+
 func planFor(t reflect.Type) *copyPlan {
 	if p, ok := planCache.Load(t); ok {
 		return p.(*copyPlan)
@@ -113,10 +135,31 @@ func planFor(t reflect.Type) *copyPlan {
 	defer planMu.Unlock()
 	building := map[reflect.Type]*copyPlan{}
 	p := buildPlan(t, building)
+	settleShareable(building)
 	for bt, bp := range building {
 		planCache.Store(bt, bp)
 	}
 	return p
+}
+
+// settleShareable finishes the plans just built: a plan is shareable only if every plan it reaches
+// is, which a recursive type can only tell once all of its plans exist. Every new plan starts
+// shareable unless its own kind rules that out.
+func settleShareable(building map[reflect.Type]*copyPlan) {
+	for changed := true; changed; {
+		changed = false
+		for _, p := range building {
+			if !p.shareable {
+				continue
+			}
+			for _, k := range p.kids {
+				if !k.shareable {
+					p.shareable, changed = false, true
+					break
+				}
+			}
+		}
+	}
 }
 
 // buildPlan computes the plan for t. building holds the plans under construction, so recursive
@@ -128,26 +171,33 @@ func buildPlan(t reflect.Type, building map[reflect.Type]*copyPlan) *copyPlan {
 	if p, ok := building[t]; ok {
 		return p
 	}
-	p := &copyPlan{}
+	p := &copyPlan{shareable: true}
 	building[t] = p
 	switch t.Kind() {
 	case reflect.Slice:
-		p.fix = sliceFix(t, buildPlan(t.Elem(), building))
+		elem := buildPlan(t.Elem(), building)
+		p.kids = []*copyPlan{elem}
+		p.fix = sliceFix(t, elem)
+		p.frozen = sliceFrozen(t, elem)
 	case reflect.Map:
+		p.shareable = false
 		p.fix = mapFix(t, buildPlan(t.Elem(), building))
 	case reflect.Interface:
+		p.shareable = false
 		p.fix = interfaceFix(t)
 	case reflect.Pointer:
 		if !t.Implements(swiftClassType) {
+			p.shareable = false
 			p.fix = pointerFix(t, buildPlan(t.Elem(), building))
 		}
 	case reflect.Array:
 		elem := buildPlan(t.Elem(), building)
 		if isDeep(elem, t.Elem(), building) {
-			p.fix = arrayFix(t, elem)
+			p.kids = []*copyPlan{elem}
+			p.fix, p.frozen = arrayFix(t, elem)
 		}
 	case reflect.Struct:
-		p.fix = structFix(t, building)
+		structPlan(t, p, building)
 	}
 	return p
 }
@@ -176,7 +226,7 @@ type fieldFix struct {
 	plan   *copyPlan
 }
 
-func structFix(t reflect.Type, building map[reflect.Type]*copyPlan) func(unsafe.Pointer) {
+func structPlan(t reflect.Type, p *copyPlan, building map[reflect.Type]*copyPlan) {
 	var fields []fieldFix
 	deep := false
 	for f := range t.Fields() {
@@ -187,25 +237,68 @@ func structFix(t reflect.Type, building map[reflect.Type]*copyPlan) func(unsafe.
 		deep = true
 		// A Swift stored property is copied whatever its Go name (`_items` is unexported); other
 		// unexported fields are the runtime's own and stay shared.
-		if _, swiftProperty := f.Tag.Lookup("swift"); f.IsExported() || swiftProperty {
-			fields = append(fields, fieldFix{f.Offset, fp})
+		_, swiftProperty := f.Tag.Lookup("swift")
+		if !f.IsExported() && !swiftProperty {
+			continue
 		}
+		if !swiftProperty && t.Name() != "" {
+			// An exported field of a runtime or overlay type (OrderedSet.Items) is written in place
+			// by Go code that does not go through Mut: it is never shared.
+			p.shareable = false
+			fp = ownedPlan(f.Type, fp)
+		}
+		fields = append(fields, fieldFix{f.Offset, fp})
+		p.kids = append(p.kids, fp)
 	}
 	if !deep {
-		return nil
+		return
 	}
-	return func(ptr unsafe.Pointer) {
+	p.fix = func(ptr unsafe.Pointer) {
 		for _, f := range fields {
 			if f.plan.fix != nil {
 				f.plan.fix(unsafe.Add(ptr, f.offset))
 			}
 		}
 	}
+	p.frozen = func(ptr unsafe.Pointer) bool {
+		for _, f := range fields {
+			if f.plan.frozen != nil && !f.plan.frozen(unsafe.Add(ptr, f.offset)) {
+				return false
+			}
+		}
+		return true
+	}
 }
 
-func arrayFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
+// ownedPlan is a plan for a field of type t, whose usual plan is p, that Go code writes in place
+// without Mut: a slice is always copied, into storage with a spare element so that Mut leaves it be.
+func ownedPlan(t reflect.Type, p *copyPlan) *copyPlan {
+	if t.Kind() != reflect.Slice || p.fix == nil {
+		return p
+	}
+	elem := p.kids[0]
+	elemType := typeWord(t.Elem())
+	size := t.Elem().Size()
+	return &copyPlan{kids: p.kids, fix: func(ptr unsafe.Pointer) {
+		h := (*sliceHeader)(ptr)
+		if h.data == nil {
+			return
+		}
+		n := h.len
+		data := unsafeNewArray(elemType, n+1)
+		typedslicecopy(elemType, sliceHeader{data, n, n}, sliceHeader{h.data, n, n})
+		if elem.fix != nil {
+			for i := range n {
+				elem.fix(unsafe.Add(data, uintptr(i)*size))
+			}
+		}
+		*h = sliceHeader{data, n, n + 1}
+	}}
+}
+
+func arrayFix(t reflect.Type, elem *copyPlan) (fix func(unsafe.Pointer), frozen func(unsafe.Pointer) bool) {
 	n, size := t.Len(), t.Elem().Size()
-	return func(ptr unsafe.Pointer) {
+	fix = func(ptr unsafe.Pointer) {
 		if elem.fix == nil {
 			return
 		}
@@ -213,25 +306,74 @@ func arrayFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 			elem.fix(unsafe.Add(ptr, uintptr(i)*size))
 		}
 	}
+	frozen = func(ptr unsafe.Pointer) bool {
+		if elem.frozen == nil {
+			return true
+		}
+		for i := range n {
+			if !elem.frozen(unsafe.Add(ptr, uintptr(i)*size)) {
+				return false
+			}
+		}
+		return true
+	}
+	return fix, frozen
 }
 
+// sliceFrozen is the frozen test of a slice type: the slice shares its storage, and every element
+// can be shared as it is too.
+func sliceFrozen(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) bool {
+	size := t.Elem().Size()
+	return func(ptr unsafe.Pointer) bool {
+		h := (*sliceHeader)(ptr)
+		if h.len != h.cap {
+			return false
+		}
+		if elem.frozen == nil {
+			return true
+		}
+		for i := range h.len {
+			if !elem.frozen(unsafe.Add(h.data, uintptr(i)*size)) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// sliceFix keeps a frozen slice of shareable elements, which no copy can write in place without Mut
+// copying it first, and copies any other. A copy of shareable elements is frozen itself, so that
+// later copies of it share it; any other copy gets a spare element of capacity, which marks it as its
+// holder's own to write in place (Mut).
 func sliceFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 	size := t.Elem().Size()
 	elemType := typeWord(t.Elem())
+	frozen := sliceFrozen(t, elem)
 	return func(ptr unsafe.Pointer) {
 		h := (*sliceHeader)(ptr)
 		if h.data == nil {
 			return
 		}
+		if elem.shareable && frozen(ptr) {
+			return
+		}
 		n := h.len
-		data := unsafeNewArray(elemType, n)
+		if n == 0 {
+			*h = sliceHeader{unsafeNewArray(elemType, 0), 0, 0}
+			return
+		}
+		c := n
+		if !elem.shareable {
+			c = n + 1
+		}
+		data := unsafeNewArray(elemType, c)
 		typedslicecopy(elemType, sliceHeader{data, n, n}, sliceHeader{h.data, n, n})
 		if elem.fix != nil {
 			for i := range n {
 				elem.fix(unsafe.Add(data, uintptr(i)*size))
 			}
 		}
-		*h = sliceHeader{data, n, n}
+		*h = sliceHeader{data, n, c}
 	}
 }
 
@@ -289,6 +431,11 @@ func interfaceFix(t reflect.Type) func(unsafe.Pointer) {
 		inner := v.Elem()
 		dyn := planOf(inner.Type())
 		if dyn.fix == nil {
+			return
+		}
+		if dyn.shareable && (dyn.frozen == nil || dyn.frozen((*[2]unsafe.Pointer)(ptr)[1])) {
+			// A shareable value that holds an array is larger than a pointer, so the interface's data
+			// word points at it; Go never writes into an interface's value, so the box can be shared.
 			return
 		}
 		nv := reflect.New(inner.Type())

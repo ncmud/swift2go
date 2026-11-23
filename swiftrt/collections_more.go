@@ -12,7 +12,7 @@ func SliceRemoveLastInt[T any](xs *[]T, n int) {
 	if n < 0 || n > len(*xs) {
 		Trap("Can't remove more items from a collection than it contains")
 	}
-	*xs = (*xs)[:len(*xs)-n]
+	*xs = shrink(*xs, len(*xs)-n)
 }
 
 // SliceRemoveFirstInt is Swift `Array.removeFirst(n)`.
@@ -29,15 +29,30 @@ func SlicePopLast[T any](xs *[]T) *T {
 		return nil
 	}
 	v := (*xs)[len(*xs)-1]
-	*xs = (*xs)[:len(*xs)-1]
+	*xs = shrink(*xs, len(*xs)-1)
 	return &v
 }
 
 // SliceRemoveAllWhere is Swift `Array.removeAll(where:)`.
-func SliceRemoveAllWhere[T any](xs *[]T, f func(T) bool) { *xs = slices.DeleteFunc(*xs, f) }
+func SliceRemoveAllWhere[T any](xs *[]T, f func(T) bool) {
+	i := slices.IndexFunc(*xs, f)
+	if i < 0 {
+		return
+	}
+	// Elements before i were kept, so f must not run on them again.
+	s := Mut(xs)
+	*xs = append(s[:i], slices.DeleteFunc(s[i+1:], f)...)
+}
 
 // SliceRemoveAllKeepingCapacity is Swift `Array.removeAll(keepingCapacity:)`.
-func SliceRemoveAllKeepingCapacity[T any](xs *[]T, _ bool) { *xs = (*xs)[:0] }
+func SliceRemoveAllKeepingCapacity[T any](xs *[]T, _ bool) {
+	if len(*xs) == cap(*xs) {
+		// Storage copies may share keeps its elements; the capacity is new storage's.
+		*xs = make([]T, 0, cap(*xs))
+		return
+	}
+	*xs = (*xs)[:0]
+}
 
 // SliceReserveCapacityInt is Swift `Array.reserveCapacity(n)`.
 func SliceReserveCapacityInt[T any](xs *[]T, n int) { *xs = slices.Grow(*xs, n-len(*xs)) }
@@ -123,7 +138,7 @@ func SliceSplitSeparatorOmittingEmptySubsequences[T comparable](xs []T, sep T, o
 	for i, x := range xs {
 		if x == sep {
 			if !(omit && start == i) {
-				out = append(out, xs[start:i])
+				out = append(out, part(xs, start, i))
 			}
 			start = i + 1
 		}
@@ -162,7 +177,7 @@ func SlicePrefixWhile[T any](xs []T, f func(T) bool) []T {
 	for i < len(xs) && f(xs[i]) {
 		i++
 	}
-	return xs[:i]
+	return part(xs, 0, i)
 }
 
 // SlicePrefixInt is Swift `prefix(n)`.
@@ -170,7 +185,7 @@ func SlicePrefixInt[T any](xs []T, n int) []T {
 	if n < 0 {
 		Trap("Can't take a prefix of negative length from a collection")
 	}
-	return xs[:min(n, len(xs))]
+	return part(xs, 0, min(n, len(xs)))
 }
 
 // SliceSuffixInt is Swift `suffix(n)`.
@@ -213,7 +228,7 @@ func SliceFlatMap[T, U any](xs []T, f func(T) []U) []U {
 
 // SliceSortedBy0 is Swift `sorted(by:)` with a strict-weak-order predicate.
 func SliceSortBy[T any](xs *[]T, less func(T, T) bool) {
-	slices.SortStableFunc(*xs, func(a, b T) int {
+	slices.SortStableFunc(Mut(xs), func(a, b T) int {
 		if less(a, b) {
 			return -1
 		}
@@ -225,13 +240,19 @@ func SliceSortBy[T any](xs *[]T, less func(T, T) bool) {
 }
 
 // SliceSort is Swift `sort()`.
-func SliceSort[T cmp.Ordered](xs *[]T) { slices.Sort(*xs) }
+func SliceSort[T cmp.Ordered](xs *[]T) { slices.Sort(Mut(xs)) }
 
 // SliceSwapAt is Swift `swapAt`.
-func SliceSwapAt[T any](xs *[]T, i, j int) { (*xs)[i], (*xs)[j] = (*xs)[j], (*xs)[i] }
+func SliceSwapAt[T any](xs *[]T, i, j int) {
+	s := *xs
+	if i != j {
+		s = Mut(xs)
+	}
+	s[i], s[j] = s[j], s[i]
+}
 
 // SliceReverse is Swift `reverse()`.
-func SliceReverse[T any](xs *[]T) { slices.Reverse(*xs) }
+func SliceReverse[T any](xs *[]T) { slices.Reverse(Mut(xs)) }
 
 // SliceMinBy is Swift `min(by:)`.
 func SliceMinBy[T any](xs []T, less func(T, T) bool) *T {

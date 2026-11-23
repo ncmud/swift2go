@@ -21,7 +21,7 @@ import (
 
 // emitCacheFormat changes whenever what the emit cache stores, or what an entry's reuse depends on,
 // changes.
-const emitCacheFormat = "swift2go-emit-cache-2"
+const emitCacheFormat = "swift2go-emit-cache-3"
 
 // The kinds of state a file's emission reads that other files decide.
 const (

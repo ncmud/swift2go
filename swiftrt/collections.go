@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unsafe"
 )
 
 // SliceCount is Array.count.
@@ -178,7 +179,7 @@ func SliceSubscriptRange[T any](xs []T, r Range[int]) []T {
 	if r.Lo < 0 || r.Hi > len(xs) || r.Lo > r.Hi {
 		Trap("Array index is out of range")
 	}
-	return xs[r.Lo:r.Hi:r.Hi]
+	return part(xs, r.Lo, r.Hi)
 }
 
 // SliceSubscriptClosedRange is Array[a...b].
@@ -199,12 +200,19 @@ func SliceInitString[S ~[]Character](s string) S { return S(StringChars(s)) }
 
 // SliceInitRepeatingCount is Array(repeating:count:).
 func SliceInitRepeatingCount[S ~[]T, T any](v T, n int) S {
-	out := make(S, n)
+	// The spare element of capacity marks the new array as its holder's own (Mut): it is made to be
+	// filled in place.
+	out := make(S, n, n+1)
 	p := planFor(reflect.TypeFor[T]())
+	if p.fix != nil {
+		v = copyWithPlan(v, p)
+	}
+	// A frozen copy of v can be shared by every element, as Swift shares it; otherwise each element is
+	// a value of its own.
+	each := p.fix != nil && !(p.shareable && (p.frozen == nil || p.frozen(unsafe.Pointer(&v)))) //nolint:gosec // v's own layout
 	for i := range out {
 		out[i] = v
-		if p.fix != nil {
-			// Each element is a value of its own.
+		if each {
 			out[i] = copyWithPlan(v, p)
 		}
 	}
@@ -220,7 +228,7 @@ func SliceRemoveLast[T any](xs *[]T) T {
 		Trap("Can't remove last element from an empty collection")
 	}
 	v := (*xs)[len(*xs)-1]
-	*xs = (*xs)[:len(*xs)-1]
+	*xs = shrink(*xs, len(*xs)-1)
 	return v
 }
 
@@ -237,7 +245,7 @@ func SliceRemoveFirst[T any](xs *[]T) T {
 // SliceRemoveAt is Array.remove(at:).
 func SliceRemoveAt[T any](xs *[]T, i int) T {
 	v := (*xs)[i]
-	*xs = slices.Delete(*xs, i, i+1)
+	*xs = slices.Delete(Mut(xs), i, i+1)
 	return v
 }
 

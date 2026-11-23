@@ -132,7 +132,8 @@ func CFPipe(fds *[]int32) int32 {
 	if err := sysPipe(p[:]); err != nil {
 		return failed[int32](err)
 	}
-	(*fds)[0], (*fds)[1] = int32(p[0]), int32(p[1])
+	s := Mut(fds)
+	s[0], s[1] = int32(p[0]), int32(p[1])
 	return 0
 }
 

@@ -1147,6 +1147,60 @@ func (e *fileEmitter) recvArg(base ast.Node) string {
 	return e.expr(base)
 }
 
+// ownedArray is the array n, about to have an element written in place, as storage of its own: its
+// copies may share its storage until one of them writes (swiftrt.Mut). An element of a Go map cannot
+// be addressed, so an array inside one is written through a copy of the element that the statement
+// stores back.
+func (e *fileEmitter) ownedArray(n ast.Node) string {
+	outer := len(e.post)
+	if root := e.goMapElementRoot(n); root != nil {
+		if rlv := e.lvalue(root); strings.HasSuffix(rlv, "]") {
+			tmp := e.newTmp("elem")
+			e.w("%s := %s\n", tmp, rlv)
+			e.post = slices.Insert(e.post, outer, rlv+" = "+tmp)
+			key := fmt.Sprintf("%p", root)
+			e.lvSubst[key] = tmp
+			defer delete(e.lvSubst, key)
+		}
+	}
+	return "swiftrt.Mut(&" + e.lvalue(n) + ")"
+}
+
+// goMapElementRoot finds the element of a Swift dictionary held in a Go map that the place n is part
+// of, reached through stored properties and tuple elements of value types, or nil.
+func (e *fileEmitter) goMapElementRoot(n ast.Node) ast.Node {
+	for n != nil {
+		switch n.Kind() {
+		case "load_expr", "paren_expr", "inout_expr":
+			n = n.Child("sub_expr")
+		case "force_value_expr":
+			if sub := stripLoads(n.Child("sub_expr")); sub != nil && sub.Kind() == "subscript_expr" && e.isGoMap(sub) {
+				return n
+			}
+			return nil
+		case "subscript_expr":
+			if e.isGoMap(n) {
+				return n
+			}
+			return nil
+		case "member_ref_expr", "tuple_element_expr":
+			base := stripLoads(n.Child("base"))
+			if t := e.m.typeOf(base.Type()); t == nil || e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+				return nil
+			}
+			n = base
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// isGoMap reports whether the subscript n reads a Swift dictionary held in a Go map.
+func (e *fileEmitter) isGoMap(n ast.Node) bool {
+	return e.m.Recv(e.m.typeOf(n.Child("base").Type())) == "Map" && !isFuncDict(e.m.Recv(e.m.typeOf(n.Type())))
+}
+
 func (e *fileEmitter) lvalue(n ast.Node) string {
 	if v, ok := e.lvSubst[fmt.Sprintf("%p", n)]; ok {
 		return v
@@ -1250,10 +1304,11 @@ func (e *fileEmitter) lvalue(n ast.Node) string {
 		bt := e.m.typeOf(n.Child("base").Type())
 		args := n.Child("args").List("args")
 		if len(args) == 1 && e.m.Recv(bt) == "Slice" && e.m.Recv(e.m.typeOf(args[0].Child("expr").Type())) == "Int" {
+			arr := e.ownedArray(n.Child("base"))
 			if lo := e.sliceOffset(n.Child("base")); lo != "" {
-				return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "-" + lo + "]"
+				return arr + "[" + e.expr(args[0].Child("expr")) + "-" + lo + "]"
 			}
-			return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "]"
+			return arr + "[" + e.expr(args[0].Child("expr")) + "]"
 		}
 		if len(args) == 1 && e.m.Recv(bt) == "Map" {
 			return e.lvalue(n.Child("base")) + "[" + e.expr(args[0].Child("expr")) + "]"
@@ -1472,10 +1527,15 @@ func (e *fileEmitter) subscript(n ast.Node) string {
 		return "uint8(swiftrt." + recv + "SubscriptInt(" + e.expr(base) + ", " + e.expr(a) + "))"
 	}
 	if recv == "Slice" && at == "Int" {
-		if lo := e.sliceOffset(base); lo != "" {
-			return e.recvExpr(base) + "[" + e.expr(a) + "-" + lo + "]"
+		arr := e.recvExpr(base)
+		if base.Kind() == "inout_expr" {
+			// Swift accesses the array for writing: the element is written in place.
+			arr = e.ownedArray(base.Child("sub_expr"))
 		}
-		return e.recvExpr(base) + "[" + e.expr(a) + "]"
+		if lo := e.sliceOffset(base); lo != "" {
+			return arr + "[" + e.expr(a) + "-" + lo + "]"
+		}
+		return arr + "[" + e.expr(a) + "]"
 	}
 	if recv == "Slice" && strings.Contains(at, "Range") {
 		if lo := e.sliceOffset(base); lo != "" {
