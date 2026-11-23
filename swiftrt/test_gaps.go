@@ -110,3 +110,14 @@ func SliceContainsSubsequence[T any](xs, other []T) bool {
 	}
 	return false
 }
+
+// SliceContainsEqual is `contains(_:)` by Swift's ==, for elements Go's == would compare by address, such as
+// Optionals.
+func SliceContainsEqual[T any](xs []T, v T) bool {
+	for _, x := range xs {
+		if Equal(x, v) {
+			return true
+		}
+	}
+	return false
+}

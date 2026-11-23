@@ -19,7 +19,8 @@ func hkey(v any) string {
 }
 
 // writeKey renders v canonically: equal Swift values render alike, so a nil and an empty
-// collection, and -0.0 and 0.0, share a key. Pointers render by address, as class identity does.
+// collection, and -0.0 and 0.0, share a key. A class reference renders by address, as class identity does,
+// and an Optional of a value type by its value.
 func writeKey(b *strings.Builder, v reflect.Value) {
 	if !v.IsValid() {
 		b.WriteString("nil")
@@ -72,6 +73,16 @@ func writeKey(b *strings.Builder, v reflect.Value) {
 		}
 		writeKey(b, v.Elem())
 	case reflect.Pointer:
+		if v.IsNil() {
+			b.WriteString("nil")
+			return
+		}
+		if !v.Type().Implements(swiftClassType) {
+			// An Optional of a value type: its key is its value's.
+			b.WriteString("?")
+			writeKey(b, v.Elem())
+			return
+		}
 		fmt.Fprintf(b, "0x%x", v.Pointer())
 	case reflect.String:
 		fmt.Fprintf(b, "%q", v.String())
@@ -184,4 +195,33 @@ func customHashKey(v reflect.Value) (string, bool) {
 	var h any = hh
 	hv.Hash(&h)
 	return v.Type().String() + "#" + hh.key.String(), true
+}
+
+// HSetFirst is `Set.first`: some element, or nil for an empty set. It takes the element whose key sorts first,
+// so a run picks the same one each time.
+func HSetFirst[T any](s HSet[T]) *T {
+	var first *string
+	for k := range s.M {
+		if first == nil || k < *first {
+			first = &k
+		}
+	}
+	if first == nil {
+		return nil
+	}
+	v := s.M[*first]
+	return &v
+}
+
+// HSetInit is `Set()`: an empty set.
+func HSetInit[T any]() HSet[T] { return HSet[T]{M: map[string]T{}} }
+
+// HSetContainsWhere is `contains(where:)` on a hashed Set.
+func HSetContainsWhere[T any](s HSet[T], f func(T) bool) bool {
+	for _, v := range s.M {
+		if f(v) {
+			return true
+		}
+	}
+	return false
 }

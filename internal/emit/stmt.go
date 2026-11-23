@@ -1350,9 +1350,13 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 				// A caught error matched against a value of a concrete error type (`catch E.empty`).
 				return "func() bool { v := swiftrt.As[" + lg + "](" + subj + "); return v != nil && *v == " + e.expr(lit) + " }()"
 			}
-			if st != nil && st.Kind == types.Optional {
-				// An Optional subject is a Go pointer: `case "active"` compares the values it points at.
-				if c, ok := e.elementCompare(st, "==", subj, e.expr(lit)); ok {
+			if ot := st; ot != nil && ot.Kind == types.Optional || lt != nil && lt.Kind == types.Optional {
+				// An Optional subject is a Go pointer: `case "active"` compares the values it points at. A
+				// tuple's element arrives without its type, and the pattern, made Optional to match it, tells.
+				if ot == nil || ot.Kind != types.Optional {
+					ot = lt
+				}
+				if c, ok := e.elementCompare(ot, "==", subj, e.expr(lit)); ok {
 					return c
 				}
 			}

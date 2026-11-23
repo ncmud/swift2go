@@ -553,7 +553,8 @@ var foreignTypes = map[string]string{
 // equality: arrays, sets and dictionaries cannot, nor can structs holding them.
 func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 	switch t.Kind {
-	case types.Array, types.Dict:
+	case types.Array, types.Dict, types.Optional:
+		// An Optional is a pointer in Go, which a map would key by its address.
 		return false
 	case types.Tuple:
 		for _, a := range t.Args {
@@ -574,7 +575,16 @@ func (m *Module) goKeyable(t *types.Type, seen map[string]bool) bool {
 			// A custom hash(into:) goes with a custom ==, which Go map keys would not use.
 			return false
 		}
-		if m.typeKinds[t.Name] != "struct_decl" || seen[t.Name] {
+		if m.typeKinds[t.Name] != "struct_decl" {
+			// A dependency's struct is keyable as its own module decides, so every module agrees.
+			for _, d := range m.Deps {
+				if d.typeKinds[t.Name] == "struct_decl" {
+					return d.goKeyable(t, seen)
+				}
+			}
+			return true
+		}
+		if seen[t.Name] {
 			return true
 		}
 		if k, ok := m.keyable[t.Name]; ok {

@@ -3,6 +3,7 @@ package swiftrt
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,7 +18,11 @@ func BindT(t *testing.T) func() {
 	return func() {
 		currentT = prev
 		if r := recover(); r != nil {
-			t.Fatalf("swift test panicked: %v", r)
+			if _, thrown := r.(Thrown); thrown {
+				t.Fatalf("swift test panicked: %v", r)
+			}
+			// A trap or a Go runtime error: the stack says where.
+			t.Fatalf("swift test panicked: %v\n%s", r, debug.Stack())
 		}
 	}
 }

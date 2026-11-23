@@ -2507,6 +2507,11 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		if bg := e.exprGoType(base); strings.HasPrefix(bg, "[]") && bg == e.exprGoType(as[0].node) {
 			return "swiftrt.SliceContainsSubsequence(" + e.expr(base) + ", " + e.expr(as[0].node) + ")"
 		}
+		// An array of Optionals holds pointers, which Go's == compares by address.
+		if bt := e.m.typeOf(base.Type()); bt != nil && bt.Kind == types.Array && len(bt.Args) == 1 && bt.Args[0].Kind == types.Optional {
+			ss, _ := e.argStrings(as, false)
+			return "swiftrt.SliceContainsEqual(" + e.expr(base) + ", " + ss[0] + ")"
+		}
 	}
 	if d.Str("base_name") == "joined" && len(as) == 0 && base != nil {
 		if bt := e.m.typeOf(base.Type()); bt != nil && (bt.Kind == types.Array || e.m.Recv(bt) == "Slice") && len(bt.Args) == 1 {
@@ -2867,6 +2872,16 @@ func (e *fileEmitter) ctorCall(n ast.Node, d ast.Node, as []arg) string {
 				return "swiftrt.MutexInit[" + e.m.GoType(t.Args[0], e.generics) + "](" + strings.Join(ss, ", ") + ")"
 			}
 			return "swiftrt.TaskLocalInit" + suffix + "[" + e.m.GoType(t.Args[0], e.generics) + "](" + strings.Join(ss, ", ") + ")"
+		}
+	}
+	if (recv == "HSet" || recv == "HMap") && len(ss) == 0 {
+		// An empty hashed Set or Dictionary: nothing to infer the element types from.
+		if t := e.m.typeOf(n.Type()); t != nil && len(t.Args) > 0 {
+			var targs []string
+			for _, a := range t.Args {
+				targs = append(targs, e.m.GoType(a, e.generics))
+			}
+			return "swiftrt." + recv + "Init[" + strings.Join(targs, ", ") + "]()"
 		}
 	}
 	if recv == "Slice" || recv == "Map" || recv == "Range" || recv == "ClosedRange" || recv == "Int" || recv == "Float" || recv == "IntOpt" || recv == "FloatOpt" || recv == "Set" || recv == "OptionSet" || recv == "Heap" {

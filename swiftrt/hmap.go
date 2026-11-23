@@ -129,3 +129,6 @@ func (d HMap[K, V]) Elements() []struct {
 } {
 	return HMapElements(d)
 }
+
+// HMapInit is `Dictionary()`: an empty dictionary.
+func HMapInit[K, V any]() HMap[K, V] { return HMap[K, V]{} }

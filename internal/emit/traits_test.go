@@ -25,6 +25,7 @@ func TestTraits(t *testing.T) {
 		"--- SKIP: TestLedgerTestsDisabled",
 		"--- PASS: TestLedgerTestsEnabledByCondition",
 		"--- PASS: TestUnscoped",
+		"--- PASS: TestOuterInnerOuterSuiteScopeReachesNestedSuites",
 	} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("go test output lacks %q:\n%s", want, got)
