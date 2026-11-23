@@ -30,7 +30,7 @@ func TestMappedModules(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
 
 	// Transpiling Glue on its own leaves its .swiftmodule for the next run; its Go output is discarded.
-	if err := run("transpile", []string{"Glue"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, false, swiftmod.Destination{}); err != nil {
+	if err := run("transpile", []string{"Glue"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, false, false, swiftmod.Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(filepath.Join(outDir, "glue")); err != nil {
@@ -38,7 +38,7 @@ func TestMappedModules(t *testing.T) {
 	}
 	const goPkgs = "github.com/ncmud/swift2go/cmd/swift2go/testdata/mapping/go/"
 	maps := mapFlag{"Toy": goPkgs + "toy", "Glue": goPkgs + "glue"}
-	if err := run("transpile", []string{"Toy", "App"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", maps, overlayFlag{}, false, swiftmod.Destination{}); err != nil {
+	if err := run("transpile", []string{"Toy", "App"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", maps, overlayFlag{}, false, false, swiftmod.Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(outDir, "toy")); !os.IsNotExist(err) {
@@ -81,7 +81,7 @@ func TestOverlay(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
 
 	overlays := overlayFlag{"Server": overlayDir}
-	if err := run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlays, false, swiftmod.Destination{}); err != nil {
+	if err := run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlays, false, false, swiftmod.Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	platform, err := os.ReadFile(filepath.Join(outDir, "server", "platform.go"))
@@ -107,7 +107,7 @@ func TestOverlay(t *testing.T) {
 	}
 
 	// An overlay for a target that is not being transpiled is a mistake in the command line.
-	err = run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{"Sever": overlayDir}, false, swiftmod.Destination{})
+	err = run("transpile", []string{"Server"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{"Sever": overlayDir}, false, false, swiftmod.Destination{})
 	if err == nil || !strings.Contains(err.Error(), "not in this run") {
 		t.Errorf("overlay for an unknown target: err = %v", err)
 	}
@@ -129,7 +129,7 @@ func TestExecutable(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(outDir) })
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(pkgDir, ".build")) })
 
-	if err := run("transpile", []string{"Tool"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, false, swiftmod.Destination{}); err != nil {
+	if err := run("transpile", []string{"Tool"}, pkgDir, outDir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, false, false, swiftmod.Destination{}); err != nil {
 		t.Fatal(err)
 	}
 	tool := "./" + filepath.ToSlash(filepath.Join(outDir, "tool"))
@@ -198,7 +198,7 @@ func TestSwiftSDK(t *testing.T) {
 		if !c.dest.Host() {
 			build = t.TempDir()
 		}
-		if err := run("transpile", []string{"Platform"}, pkgDir, outDir, build, "", mapFlag{}, overlayFlag{}, false, c.dest); err != nil {
+		if err := run("transpile", []string{"Platform"}, pkgDir, outDir, build, "", mapFlag{}, overlayFlag{}, false, false, c.dest); err != nil {
 			t.Fatal(err)
 		}
 		check := filepath.Join(outDir, "check")

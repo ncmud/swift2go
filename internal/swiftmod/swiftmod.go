@@ -479,17 +479,19 @@ func StaleModule(t Target, targets map[string]Target, fresh map[string]bool, sea
 
 // DumpAST runs `swiftc -dump-ast -dump-ast-format json` over the target and returns the JSON,
 // one document per source file. Each file is dumped by its own frontend so a compiler crash on
-// one file skips only that file; skipped files are reported on stderr.
+// one file skips only that file; skipped files are reported on stderr. With strict, a file the
+// compiler fails on fails the dump instead; see [Dumper.Strict].
 // modulesDir holds the built .swiftmodule files of the target's dependencies.
 //
 // The dump leaves out the extensions that attached macros generate. A file with such a macro is
 // dumped a second time from a copy, written under expandDir, that holds those extensions as
 // source in place of the macro attributes; the JSON then names the copy as its file.
-func DumpAST(t Target, modulesDir, expandDir string, extra ...string) ([]byte, error) {
+func DumpAST(t Target, modulesDir, expandDir string, strict bool, extra ...string) ([]byte, error) {
 	d, err := NewDumper(t, modulesDir, expandDir, extra...)
 	if err != nil {
 		return nil, err
 	}
+	d.Strict = strict
 	all := make([]int, len(d.Sources))
 	for i := range all {
 		all[i] = i
@@ -513,7 +515,10 @@ func DumpAST(t Target, modulesDir, expandDir string, extra ...string) ([]byte, e
 // frontend command the driver would run for the target.
 type Dumper struct {
 	// Sources are the target's source files, in the order the frontend reads them.
-	Sources   []string
+	Sources []string
+	// Strict makes [Dumper.Dump] fail with the compiler's errors when it fails on a file, instead of
+	// leaving the file without a document.
+	Strict    bool
 	dir       string
 	job       []string
 	expandDir string
@@ -557,6 +562,7 @@ type FileDump struct {
 func (d *Dumper) Dump(primaries []int, copies map[int]string) ([]FileDump, error) {
 	outs := make([][]byte, len(d.Sources))
 	errs := make([]string, len(d.Sources))
+	diags := make([]string, len(d.Sources))
 	expansions := make([]string, len(d.Sources))
 	run := func(sources []string, only []int, more ...string) error {
 		list, err := os.CreateTemp("", "swift2go-sources-*")
@@ -573,7 +579,7 @@ func (d *Dumper) Dump(primaries []int, copies map[int]string) ([]FileDump, error
 			wg.Go(func() {
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				outs[i], expansions[i], errs[i] = dumpFile(job, d.dir, sources[i])
+				outs[i], expansions[i], errs[i], diags[i] = dumpFile(job, d.dir, sources[i])
 			})
 		}
 		wg.Wait()
@@ -605,6 +611,11 @@ func (d *Dumper) Dump(primaries []int, copies map[int]string) ([]FileDump, error
 			return nil, err
 		}
 	}
+	if d.Strict {
+		if err := failures(primaries, errs, diags); err != nil {
+			return nil, err
+		}
+	}
 	dumps := make([]FileDump, len(primaries))
 	for k, i := range primaries {
 		if errs[i] != "" {
@@ -618,9 +629,35 @@ func (d *Dumper) Dump(primaries []int, copies map[int]string) ([]FileDump, error
 	return dumps, nil
 }
 
+// failures reports the files among primaries that the compiler failed on, with each distinct set
+// of the compiler's errors once, since a broken declaration fails every file that uses it.
+func failures(primaries []int, errs, diags []string) error {
+	var files, seen []string
+	var text strings.Builder
+	for _, i := range primaries {
+		if errs[i] == "" {
+			continue
+		}
+		files = append(files, strings.SplitN(errs[i], ": ", 2)[0])
+		if slices.Contains(seen, diags[i]) {
+			continue
+		}
+		seen = append(seen, diags[i])
+		text.WriteString(diags[i])
+		if !strings.HasSuffix(diags[i], "\n") {
+			text.WriteString("\n")
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the compiler failed on %d files (%s):\n%s", len(files), strings.Join(files, ", "), text.String())
+}
+
 // dumpFile runs one frontend job with src as its primary file. It returns the file's JSON AST and
-// what the frontend wrote to stderr, or a description of the failure.
-func dumpFile(job []string, dir, src string) (out []byte, stderrText, failure string) {
+// what the frontend wrote to stderr, or a one-line description of the failure and the compiler's
+// full error output.
+func dumpFile(job []string, dir, src string) (out []byte, stderrText, failure, diag string) {
 	var stdout, stderr bytes.Buffer
 	run := func(more ...string) error {
 		stdout.Reset()
@@ -645,16 +682,17 @@ func dumpFile(job []string, dir, src string) (out []byte, stderrText, failure st
 		out = nil
 	}
 	if err != nil {
-		msg := stderr.String()
+		full := stderr.String()
+		msg := full
 		if k := strings.Index(msg, "Assertion failed"); k >= 0 {
 			msg = msg[k:]
 		}
 		if k := strings.Index(msg, "\n"); k >= 0 {
 			msg = msg[:k]
 		}
-		return nil, "", fmt.Sprintf("%s: %v: %s", src, err, msg)
+		return nil, "", fmt.Sprintf("%s: %v: %s", src, err, msg), full
 	}
-	return out, stderr.String(), ""
+	return out, stderr.String(), "", ""
 }
 
 // frontendJob asks the driver for its first frontend command line and strips the source inputs from it.
