@@ -60,8 +60,44 @@ type DeclInfo struct {
 	file          string // the Swift file that declares it
 }
 
+// keyedOverload names the Go functions of a module's own keyed-container overloads for one generic type:
+// `KeyedEncodingContainer.encode(_:forKey:)` taking a value of it and `KeyedDecodingContainer.decode(_:forKey:)`
+// taking its metatype. Each takes the key type, then the type's argument, as type parameters.
+type keyedOverload struct{ encode, decode string }
+
+// keyedOverloads maps each generic type, by qualified Swift name, to the module's keyed-container overloads for it.
+func (m *Module) keyedOverloads() map[string]keyedOverload {
+	m.keyedOnce.Do(func() {
+		m.keyed = map[string]keyedOverload{}
+		for _, d := range m.decls {
+			if d.Kind != "func_decl" || d.Static || d.GoName == "" {
+				continue
+			}
+			ps := d.Node.Child("params").List("params")
+			if len(ps) != 2 {
+				continue
+			}
+			arg := m.typeOf(ps[0].Str("interface_type"))
+			switch {
+			case d.Owner == "Swift.KeyedEncodingContainer" && d.Node.Name() == "encode" && arg != nil && arg.Kind == types.Named && len(arg.Args) == 1:
+				o := m.keyed[arg.Name]
+				o.encode = d.GoName
+				m.keyed[arg.Name] = o
+			case d.Owner == "Swift.KeyedDecodingContainer" && d.Node.Name() == "decode" && arg != nil && arg.Kind == types.Meta && len(arg.Args) == 1 && arg.Args[0].Kind == types.Named && len(arg.Args[0].Args) == 1:
+				o := m.keyed[arg.Args[0].Name]
+				o.decode = d.GoName
+				m.keyed[arg.Args[0].Name] = o
+			}
+		}
+	})
+	return m.keyed
+}
+
 // Module is one Swift module being transpiled.
 type Module struct {
+	keyedOnce sync.Once
+	keyed     map[string]keyedOverload
+
 	Name            string
 	Pkg             string
 	RTPath          string // import path of swiftrt
@@ -317,9 +353,10 @@ func embeddedField(goType string) string {
 // qualified by the package of a dependency that declares the classes ("world.Player").
 func (m *Module) IsAncestor(anc, goName string) bool {
 	if pkg, name, ok := strings.Cut(goName, "."); ok {
+		// The dependency names its own types bare and every other module's qualified.
 		ancName, found := strings.CutPrefix(anc, pkg+".")
-		if !found {
-			return false
+		if !found && !strings.Contains(anc, ".") {
+			ancName = m.Pkg + "." + anc
 		}
 		for _, d := range m.Deps {
 			if d.Pkg == pkg {

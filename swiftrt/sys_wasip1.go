@@ -25,6 +25,11 @@ const (
 	sysW_OK = 2 //nolint:revive // C name
 	sysX_OK = 1 //nolint:revive // C name
 
+	sysO_NONBLOCK  = 4 //nolint:revive // C name
+	sysAF_UNIX     = 1 //nolint:revive // C name
+	sysSOCK_STREAM = 6 //nolint:revive // C name
+	sysSOCK_DGRAM  = 5 //nolint:revive // C name
+
 	sysLOCK_SH = 1 //nolint:revive // C name
 	sysLOCK_EX = 2 //nolint:revive // C name
 	sysLOCK_NB = 4 //nolint:revive // C name
@@ -84,6 +89,8 @@ func sysFlock(int, int) error { return syscall.ENOSYS }
 func sysFcntlInt(uintptr, int, int) (int, error) { return 0, syscall.ENOSYS }
 
 func sysPipe([]int) error { return syscall.ENOSYS }
+
+func sysSocketpair(int, int, int) ([2]int, error) { return [2]int{}, syscall.ENOSYS }
 
 func sysExec(string, []string, []string) error { return syscall.ENOSYS }
 

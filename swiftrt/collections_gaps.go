@@ -109,7 +109,7 @@ func ClosedRangeAllSatisfy[T Integer](r ClosedRange[T], f func(T) bool) bool {
 }
 
 // ClosedRangeCount is `(lo...hi).count`; it traps when the count overflows Int, like Swift.
-func ClosedRangeCount(r ClosedRange[int]) int { return Add(Sub(r.Hi, r.Lo), 1) }
+func ClosedRangeCount[T Integer](r ClosedRange[T]) int { return Add(int(Sub(r.Hi, r.Lo)), 1) }
 
 // ClosedRangePrefixInt is `(lo...hi).prefix(n)`.
 func ClosedRangePrefixInt(r ClosedRange[int], n int) []int {
@@ -861,3 +861,65 @@ func ReversedCollectionFilter[T any](xs []T, f func(T) bool) []T { return SliceF
 
 // ReversedCollectionPrefixInt is `xs.reversed().prefix(n)`.
 func ReversedCollectionPrefixInt[T any](xs []T, n int) []T { return xs[:min(max(n, 0), len(xs))] }
+
+// StringEnumerated is `String.enumerated()`: each Character with its offset.
+func StringEnumerated(s string) []struct {
+	F0 int
+	F1 Character
+} {
+	return SliceEnumerated(StringChars(s))
+}
+
+// FlattenSequenceReduce is `reduce(_:_:)` on a `joined()` sequence, which the runtime keeps flattened.
+func FlattenSequenceReduce[T, A any](xs []T, init A, f func(A, T) A) A {
+	return SliceReduce(xs, init, f)
+}
+
+// FlattenSequenceFilter is `filter(_:)` on a `joined()` sequence.
+func FlattenSequenceFilter[T any](xs []T, f func(T) bool) []T { return SliceFilter(xs, f) }
+
+// ClosedRangeFlatMap is `(lo...hi).flatMap(f)` over an integer range.
+func ClosedRangeFlatMap[U any, T Integer](r ClosedRange[T], f func(T) []U) []U {
+	out := []U{}
+	eachClosed(r, func(i T) bool { out = append(out, f(i)...); return true })
+	return out
+}
+
+// Tupled4 adapts a four-parameter closure to Swift's single tuple parameter.
+func Tupled4[A, B, C, D, R any](f func(A, B, C, D) R) func(struct {
+	F0 A
+	F1 B
+	F2 C
+	F3 D
+}) R {
+	return func(t struct {
+		F0 A
+		F1 B
+		F2 C
+		F3 D
+	}) R {
+		return f(t.F0, t.F1, t.F2, t.F3)
+	}
+}
+
+// Tupled5 adapts a five-parameter closure to Swift's single tuple parameter.
+func Tupled5[A, B, C, D, E, R any](f func(A, B, C, D, E) R) func(struct {
+	F0 A
+	F1 B
+	F2 C
+	F3 D
+	F4 E
+}) R {
+	return func(t struct {
+		F0 A
+		F1 B
+		F2 C
+		F3 D
+		F4 E
+	}) R {
+		return f(t.F0, t.F1, t.F2, t.F3, t.F4)
+	}
+}
+
+// FlattenSequenceAllSatisfy is `allSatisfy(_:)` on a `joined()` sequence.
+func FlattenSequenceAllSatisfy[T any](xs []T, f func(T) bool) bool { return SliceAllSatisfy(xs, f) }

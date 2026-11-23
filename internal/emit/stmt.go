@@ -164,7 +164,7 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 	case "fail_stmt":
 		e.failInit()
 	case "then_stmt":
-		if r := n.Child("result"); isVoidGo(e.exprGoType(r)) {
+		if r := n.Child("result"); e.voidValue || isVoidGo(e.exprGoType(r)) {
 			e.stmt(r)
 			if e.resultType == "*struct{}" {
 				e.w("return &struct{}{}\n")
@@ -1006,6 +1006,18 @@ func (e *fileEmitter) forEach(n ast.Node) {
 	seq := n.Child("parsed_sequence")
 	p := n.Child("pattern")
 	body := func() {
+		// `for ch: Base in subclasses`: the loop binds each element as its superclass.
+		if tp := p; tp != nil && tp.Kind() == "pattern_typed" {
+			if nm := patternName(tp); nm != "" {
+				if et := e.m.typeOf(n.Child("parsed_sequence").Type()); et != nil && len(et.Args) == 1 {
+					from := strings.TrimPrefix(e.m.GoType(et.Args[0], e.generics), "*")
+					to := strings.TrimPrefix(e.m.GoType(e.m.typeOf(tp.Type()), e.generics), "*")
+					if from != to && e.m.IsAncestor(to, from) {
+						e.w("%s := %s.%s()\n_ = %s\n", goSafe(nm), goSafe(nm), upcastMethod(to), goSafe(nm))
+					}
+				}
+			}
+		}
 		if w := n.Child("where"); w != nil {
 			e.w("if !(%s) { continue }\n", e.expr(w))
 		}
@@ -1247,7 +1259,6 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 		var bindPat ast.Node
 		var bindPats []ast.Node
 		var bindTestStrs []string
-		guarded := false
 		for _, item := range c.List("case_label_items") {
 			if item.Bool("default") {
 				isDefault = true
@@ -1266,9 +1277,6 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 				t = "(" + t + ") && " + e.withBindings(p, tmp, e.expr(g))
 			}
 			tests = append(tests, "("+t+")")
-			if whereExpr(item) != nil {
-				guarded = true
-			}
 			if patternBinds(p) {
 				bindPat = p
 				bindPats = append(bindPats, p)
@@ -1288,8 +1296,9 @@ func (e *fileEmitter) switchStmt(n ast.Node) {
 			e.w("} else if %s {\n", cond)
 		}
 		first = false
-		if len(bindPats) > 1 && !guarded {
-			// `case .a(let x), .b(let x):` binds x from whichever pattern matched.
+		if len(bindPats) > 1 {
+			// `case .a(let x), .b(let x):` binds x from whichever pattern matched; a pattern's `where` is
+			// part of its test, so `.a(let x) where c, .b(let x)` binds from .a only when c held.
 			e.bindOrigin = e.origin(subj)
 			e.alternativeBind(bindPats, bindTestStrs, tmp)
 		} else if bindPat != nil {
@@ -1677,6 +1686,20 @@ func (e *fileEmitter) assign(n ast.Node) {
 				base = base.Child("sub_expr")
 			}
 			e.w("%s.Set%s(%s)\n", e.lvalue(base), info.GoName, prefixCommaTail(strings.Join(ss, ", "), e.owned(src, sinkStore)))
+			return
+		}
+		if info, pfx := e.lookup(dest.Child("decl").Str("decl_usr")); info != nil && info.Kind == "subscript_decl" && info.FreeSelf() && !info.Static {
+			// A subscript emitted as free functions, as a generic one is: its setter takes self by pointer.
+			ss, _ := e.argStrings(e.args(dest.Child("args")), false)
+			base := dest.Child("base")
+			for base.Kind() == "inout_expr" {
+				base = base.Child("sub_expr")
+			}
+			recv := "&" + e.lvalue(base)
+			if t := e.m.typeOf(base.Type()); t != nil && e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
+				recv = e.expr(base)
+			}
+			e.w("%s%s(%s)\n", pfx, subscriptSetterName(info), prefixCommaTail(strings.Join(append([]string{recv}, ss...), ", "), e.owned(src, sinkStore)))
 			return
 		}
 		if s, ok := e.subscriptAssign(dest, src); ok {

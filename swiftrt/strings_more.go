@@ -316,7 +316,8 @@ func SubstringContainsWhere(s Substring, f func(Character) bool) bool {
 // SubstringContains is Swift `Substring.contains(_:)` on a Character or a string.
 // The emitter calls it for `contains(_: Character)` and for `contains(_: some StringProtocol)`, whose Go
 // arguments are both strings: one that holds more than one Character is searched for as a substring.
-func SubstringContains(s Substring, c Character) bool {
+func SubstringContains[C ~string | Substring](s Substring, other C) bool {
+	c := stringOf(other)
 	if len(StringChars(c)) != 1 {
 		return strings.Contains(s.String(), c)
 	}

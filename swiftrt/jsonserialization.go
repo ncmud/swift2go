@@ -3,6 +3,7 @@ package swiftrt
 import (
 	"math"
 	"reflect"
+	"sort"
 )
 
 // Dictionary is Foundation `NSDictionary` as JSONSerialization produces it: string keys and
@@ -101,4 +102,43 @@ func NSDictionarySubscriptAny(d Dictionary, key any) *any {
 		return nil
 	}
 	return &v
+}
+
+// Array is Foundation `NSArray` as JSONSerialization produces it.
+type Array = []any
+
+// NSArrayCount is `NSArray.count`.
+func NSArrayCount(a Array) int { return len(a) }
+
+// NSArrayFirstObject is `NSArray.firstObject`.
+func NSArrayFirstObject(a Array) *any {
+	if len(a) == 0 {
+		return nil
+	}
+	return &a[0]
+}
+
+// NSArrayLastObject is `NSArray.lastObject`.
+func NSArrayLastObject(a Array) *any {
+	if len(a) == 0 {
+		return nil
+	}
+	return &a[len(a)-1]
+}
+
+// NSDictionaryCount is `NSDictionary.count`.
+func NSDictionaryCount(d Dictionary) int { return len(d) }
+
+// NSDictionaryAllKeys is `NSDictionary.allKeys`, in sorted order where Foundation's is unspecified.
+func NSDictionaryAllKeys(d Dictionary) []any {
+	keys := make([]string, 0, len(d))
+	for k := range d {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]any, len(keys))
+	for i, k := range keys {
+		out[i] = k
+	}
+	return out
 }

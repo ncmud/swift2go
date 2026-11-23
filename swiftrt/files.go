@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // FileManager is Foundation `FileManager`.
@@ -421,11 +422,41 @@ type FileAttributeKey string
 // permission bits, as an integer.
 const NSFileAttributeKeyCNSFilePosixPermissions FileAttributeKey = "NSFilePosixPermissions"
 
+// NSFileAttributeKeyCNSFileModificationDate is `FileAttributeKey.modificationDate`, a Date.
+const NSFileAttributeKeyCNSFileModificationDate FileAttributeKey = "NSFileModificationDate"
+
+// NSFileAttributeKeyCNSFileSize is `FileAttributeKey.size`, the item's size in bytes.
+const NSFileAttributeKeyCNSFileSize FileAttributeKey = "NSFileSize"
+
+// NSFileManagerAttributesOfItemAtPath is Foundation `FileManager.attributesOfItem(atPath:)`: the item's
+// permission bits, modification date and size, throwing when it is missing.
+func NSFileManagerAttributesOfItemAtPath(_ FileManager, path string) map[FileAttributeKey]any {
+	fi, err := os.Stat(path)
+	if err != nil {
+		panic(Throw(cocoaFileError(path, err)))
+	}
+	return map[FileAttributeKey]any{
+		NSFileAttributeKeyCNSFilePosixPermissions: int(fi.Mode().Perm()),
+		NSFileAttributeKeyCNSFileModificationDate: dateOf(fi.ModTime()),
+		NSFileAttributeKeyCNSFileSize:             fi.Size(),
+	}
+}
+
 // NSFileManagerSetAttributesOfItemAtPath is Foundation `FileManager.setAttributes(_:ofItemAtPath:)`
-// for `.posixPermissions`, throwing when the item is missing or cannot be changed. Any other
+// for `.posixPermissions` and `.modificationDate`, throwing when the item is missing or cannot be changed. Any other
 // attribute is not supported and panics.
 func NSFileManagerSetAttributesOfItemAtPath(_ FileManager, attributes map[FileAttributeKey]any, path string) {
 	for key, value := range attributes {
+		if key == NSFileAttributeKeyCNSFileModificationDate {
+			d, ok := value.(Date)
+			if !ok {
+				panic(fmt.Sprintf("swiftrt: file attribute %s needs a Date, not %T", key, value))
+			}
+			if err := os.Chtimes(path, time.Time{}, d.Time()); err != nil {
+				panic(Throw(cocoaWriteError(path, err)))
+			}
+			continue
+		}
 		if key != NSFileAttributeKeyCNSFilePosixPermissions {
 			panic(fmt.Sprintf("swiftrt: setting file attribute %s is not supported", key))
 		}

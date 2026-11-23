@@ -50,9 +50,8 @@ func SliceInitClosedRange[S ~[]T, T Integer](r ClosedRange[T]) S {
 }
 
 // MapSetRef is `dict[k] = value` where the value is an optional class reference: nil removes the entry.
-func MapSetRef[K comparable, V comparable](m map[K]V, k K, v V) {
-	var zero V
-	if v == zero {
+func MapSetRef[K comparable, V any](m map[K]V, k K, v V) {
+	if isNilRef(v) {
 		delete(m, k)
 		return
 	}

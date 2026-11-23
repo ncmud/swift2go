@@ -35,16 +35,16 @@ var icuClasses = map[byte]string{
 	's': `\t-\r \x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`,
 }
 
-// icuRegex compiles an ICU pattern with Go's RE2, widening \w, \W, \d, \D, \s and \S to Unicode as ICU does.
-// Known differences from ICU: \b uses ASCII word characters, `$` matches only at the very end of the input
-// (ICU also matches before a final line terminator), and RE2 has no lookaround or backreferences, so such
-// patterns panic.
-func icuRegex(pattern string, caseInsensitive bool) *regexp.Regexp {
-	re, err := icuRegexCompile(pattern, caseInsensitive)
-	if err != nil {
-		panic("swiftrt: regular expression not supported by RE2: " + pattern + ": " + err.Error())
+// icuRegex compiles an ICU pattern with Go's RE2, widening \w, \W, \d, \D, \s and \S to Unicode as ICU does,
+// or with regexp2's backtracking engine when the pattern uses lookaround, backreferences or other syntax RE2
+// lacks. Known differences from ICU: \b uses ASCII word characters, and `$` matches only at the very end of
+// the input (ICU also matches before a final line terminator). An invalid pattern panics.
+func icuRegex(pattern string, caseInsensitive bool) *Regex {
+	r, ok := compileICU(pattern, caseInsensitive)
+	if !ok {
+		panic("swiftrt: invalid regular expression: " + pattern)
 	}
-	return re
+	return r
 }
 
 // icuRegexCompile is icuRegex returning RE2's compile error instead of panicking.
@@ -190,8 +190,7 @@ func rangeOfOptions(s, needle string, opts NSStringCompareOptions, lo, hi int) *
 		return nil
 	}
 	if opts&NSStringCompareOptionsCENSStringCompareOptionsNSRegularExpressionSearch != 0 {
-		re := icuRegex(needle, ci)
-		all := re.FindAllStringIndex(s[lo:hi], -1)
+		all := icuRegex(needle, ci).findAll(s[lo:hi])
 		if len(all) == 0 {
 			return nil
 		}
@@ -238,7 +237,7 @@ func SubstringRangeOfOptions(s Substring, needle string, opts NSStringCompareOpt
 func StringReplacingOccurrencesOfWithOptions(s, target, repl string, opts NSStringCompareOptions) string {
 	ci := opts&NSStringCompareOptionsCENSStringCompareOptionsNSCaseInsensitiveSearch != 0
 	if opts&NSStringCompareOptionsCENSStringCompareOptionsNSRegularExpressionSearch != 0 {
-		return icuRegex(target, ci).ReplaceAllString(s, icuTemplate(repl))
+		return icuRegex(target, ci).replaceAll(s, repl)
 	}
 	if !ci {
 		return StringReplacingOccurrencesOfWith(s, target, repl)
@@ -497,4 +496,17 @@ func StringCompareOptions(a, b string, opts NSStringCompareOptions) int {
 		a, b = strings.ToLower(a), strings.ToLower(b)
 	}
 	return compareUTF16(a, b)
+}
+
+// SubstringReplacingOccurrencesOfWithOptions is Foundation `replacingOccurrences(of:with:options:)` on a Substring.
+func SubstringReplacingOccurrencesOfWithOptions(s Substring, target, repl string, opts NSStringCompareOptions) string {
+	return StringReplacingOccurrencesOfWithOptions(s.String(), target, repl, opts)
+}
+
+// StringRemoveSubrangeRange is `String.removeSubrange(_:)` for a range of indices.
+func StringRemoveSubrangeRange(s *string, r Range[int]) {
+	if r.Lo < 0 || r.Hi > len(*s) || r.Lo > r.Hi {
+		Trap("String index is out of bounds")
+	}
+	*s = (*s)[:r.Lo] + (*s)[r.Hi:]
 }

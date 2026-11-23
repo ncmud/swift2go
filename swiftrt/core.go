@@ -156,6 +156,30 @@ func equalValues(a, b reflect.Value) bool {
 	if !a.IsValid() || !b.IsValid() {
 		return a.IsValid() == b.IsValid()
 	}
+	// Values held as Any, as NSDictionary and NSArray hold theirs, compare by what they hold.
+	if a.Kind() == reflect.Interface && !a.IsNil() {
+		a = a.Elem()
+	}
+	if b.Kind() == reflect.Interface && !b.IsNil() {
+		b = b.Elem()
+	}
+	if a.Type() == nsNumberType || b.Type() == nsNumberType {
+		// NSNumber.isEqual(_:) compares values: NSNumber(0) equals false, and 1 equals 1.0.
+		x, xok := foundationNumber(a)
+		y, yok := foundationNumber(b)
+		if xok && yok {
+			return x == y
+		}
+		if a.Type() != b.Type() {
+			return false
+		}
+	}
+	if a.Kind() != b.Kind() && (a.Kind() == reflect.Map || b.Kind() == reflect.Map) {
+		// An [AnyHashable: Any] literal, an HMap, compared with an NSDictionary.
+		if hm, m, ok := hmapAndMap(a, b); ok {
+			return hmapEqualsMap(hm, m)
+		}
+	}
 	if a.Type() == substringType && b.Type() == substringType {
 		return a.Interface().(Substring).String() == b.Interface().(Substring).String()
 	}
@@ -167,7 +191,7 @@ func equalValues(a, b reflect.Value) bool {
 	}
 	switch a.Kind() {
 	case reflect.Slice, reflect.Array:
-		if a.Len() != b.Len() {
+		if (b.Kind() != reflect.Slice && b.Kind() != reflect.Array) || a.Len() != b.Len() {
 			return false
 		}
 		for i := 0; i < a.Len(); i++ {
@@ -177,10 +201,25 @@ func equalValues(a, b reflect.Value) bool {
 		}
 		return true
 	case reflect.Pointer, reflect.Interface:
+		if b.Kind() != reflect.Pointer && b.Kind() != reflect.Interface {
+			return false
+		}
 		if a.IsNil() || b.IsNil() {
 			return a.IsNil() && b.IsNil()
 		}
 		return equalValues(a.Elem(), b.Elem())
+	case reflect.Map:
+		// Element by element, so that values held as Any compare by what they hold.
+		if b.Kind() != reflect.Map || a.Len() != b.Len() || a.Type().Key() != b.Type().Key() {
+			return false
+		}
+		for it := a.MapRange(); it.Next(); {
+			v := b.MapIndex(it.Key())
+			if !v.IsValid() || !equalValues(it.Value(), v) {
+				return false
+			}
+		}
+		return true
 	case reflect.Struct:
 		// A struct's fields compare one by one, so a field whose type declares its own == uses it, as
 		// Swift's synthesized == does. A struct with unexported fields is a runtime type and compares
@@ -619,6 +658,12 @@ func derefAs[T any](v any) (T, bool) {
 	if p, ok := v.(*T); ok && p != nil {
 		return *p, true
 	}
+	// A value cast to its own Optional, which Go holds as a pointer to a copy.
+	if t := reflect.TypeFor[T](); v != nil && t.Kind() == reflect.Pointer && reflect.TypeOf(v) == t.Elem() {
+		p := reflect.New(t.Elem())
+		p.Elem().Set(reflect.ValueOf(v))
+		return p.Interface().(T), true //nolint:forcetypeassert // a *Elem is a T
+	}
 	var zero T
 	return zero, false
 }
@@ -724,4 +769,68 @@ func Less[T any](a, b T) bool {
 		return sa.String() < any(b).(Substring).String()
 	}
 	panic(fmt.Sprintf("swiftrt.Less: %T has no <", a))
+}
+
+// foundationNumber is the numeric value of v as NSNumber holds it: a Bool is 0 or 1. It reports false for a
+// value that is not a number.
+func foundationNumber(v reflect.Value) (float64, bool) {
+	if v.Type() == nsNumberType {
+		n := v.Interface().(NSNumber) //nolint:forcetypeassert // checked
+		switch n.kind {
+		case 'u':
+			return float64(n.u), true
+		case 'd':
+			return n.f, true
+		}
+		return float64(n.i), true
+	}
+	switch v.Kind() {
+	case reflect.Bool:
+		if v.Bool() {
+			return 1, true
+		}
+		return 0, true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(v.Int()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return float64(v.Uint()), true
+	case reflect.Float32, reflect.Float64:
+		return v.Float(), true
+	}
+	return 0, false
+}
+
+// hmapAndMap orders a and b as an HMap and a Go map, when they are one of each.
+func hmapAndMap(a, b reflect.Value) (hm, m reflect.Value, ok bool) {
+	isHMap := func(v reflect.Value) bool {
+		return v.Kind() == reflect.Struct && strings.HasPrefix(v.Type().Name(), "HMap[") && v.Type().PkgPath() == substringType.PkgPath()
+	}
+	switch {
+	case isHMap(a) && b.Kind() == reflect.Map:
+		return a, b, true
+	case isHMap(b) && a.Kind() == reflect.Map:
+		return b, a, true
+	}
+	return reflect.Value{}, reflect.Value{}, false
+}
+
+func hmapEqualsMap(hm, m reflect.Value) bool {
+	entries := hm.Field(0)
+	if entries.Len() != m.Len() {
+		return false
+	}
+	for it := entries.MapRange(); it.Next(); {
+		k := it.Value().Field(0)
+		if k.Kind() == reflect.Interface {
+			k = k.Elem()
+		}
+		if !k.IsValid() || !k.Type().ConvertibleTo(m.Type().Key()) {
+			return false
+		}
+		v := m.MapIndex(k.Convert(m.Type().Key()))
+		if !v.IsValid() || !equalValues(it.Value().Field(1), v) {
+			return false
+		}
+	}
+	return true
 }

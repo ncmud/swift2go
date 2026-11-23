@@ -232,10 +232,128 @@ func (f *DateFormatter) layout() string {
 	if f.DateFormat == nil {
 		return "1/2/06, 3:04 PM"
 	}
-	r := strings.NewReplacer("yyyy", "2006", "yy", "06", "MMMM", "January", "MMM", "Jan", "MM", "01", "M", "1",
-		"dd", "02", "d", "2", "EEEE", "Monday", "EEE", "Mon", "HH", "15", "H", "15", "hh", "03", "h", "3",
-		"mm", "04", "ss", "05", "SSS", "000", "a", "PM", "zzz", "MST", "Z", "-0700", "'T'", "T", "'", "")
-	return r.Replace(*f.DateFormat)
+	var b strings.Builder
+	for _, tok := range icuTokens(*f.DateFormat) {
+		if tok.letter == 0 {
+			b.WriteString(tok.text)
+			continue
+		}
+		b.WriteString(icuGoLayout(tok.letter, tok.count))
+	}
+	return b.String()
+}
+
+// icuToken is one field of an ICU date pattern, a letter repeated count times, or literal text when letter is 0.
+type icuToken struct {
+	letter rune
+	count  int
+	text   string
+}
+
+// icuTokens splits an ICU date pattern into its fields and literal text: an ASCII letter repeated is a field,
+// text between apostrophes is literal, and two apostrophes are one.
+func icuTokens(pattern string) []icuToken {
+	var toks []icuToken
+	var lit strings.Builder
+	flush := func() {
+		if lit.Len() > 0 {
+			toks = append(toks, icuToken{text: lit.String()})
+			lit.Reset()
+		}
+	}
+	rs := []rune(pattern)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case r == '\'':
+			if i+1 < len(rs) && rs[i+1] == '\'' {
+				lit.WriteRune('\'')
+				i++
+				continue
+			}
+			for i++; i < len(rs); i++ {
+				if rs[i] == '\'' {
+					if i+1 < len(rs) && rs[i+1] == '\'' {
+						lit.WriteRune('\'')
+						i++
+						continue
+					}
+					break
+				}
+				lit.WriteRune(rs[i])
+			}
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z':
+			n := 1
+			for i+1 < len(rs) && rs[i+1] == r {
+				n++
+				i++
+			}
+			flush()
+			toks = append(toks, icuToken{letter: r, count: n})
+		default:
+			lit.WriteRune(r)
+		}
+	}
+	flush()
+	return toks
+}
+
+// icuGoLayout is the Go time layout that parses an ICU field, for `DateFormatter.date(from:)`.
+func icuGoLayout(letter rune, n int) string {
+	switch letter {
+	case 'y', 'Y', 'u':
+		if n == 2 {
+			return "06"
+		}
+		return "2006"
+	case 'M', 'L':
+		return [...]string{"1", "01", "Jan", "January", "Jan"}[min(n, 5)-1]
+	case 'd':
+		if n >= 2 {
+			return "02"
+		}
+		return "2"
+	case 'D':
+		return "002"
+	case 'E', 'e', 'c':
+		if n == 4 {
+			return "Monday"
+		}
+		return "Mon"
+	case 'H', 'k':
+		return "15"
+	case 'h', 'K':
+		if n >= 2 {
+			return "03"
+		}
+		return "3"
+	case 'm':
+		if n >= 2 {
+			return "04"
+		}
+		return "4"
+	case 's':
+		if n >= 2 {
+			return "05"
+		}
+		return "5"
+	case 'S':
+		return strings.Repeat("0", n)
+	case 'a':
+		return "PM"
+	case 'z', 'v', 'V', 'O':
+		return "MST"
+	case 'Z':
+		if n == 5 {
+			return "Z07:00"
+		}
+		return "-0700"
+	case 'X':
+		return [...]string{"Z07", "Z0700", "Z07:00", "Z0700", "Z07:00"}[min(n, 5)-1]
+	case 'x':
+		return [...]string{"-07", "-0700", "-07:00", "-0700", "-07:00"}[min(n, 5)-1]
+	}
+	return strings.Repeat(string(letter), n)
 }
 
 func (f *DateFormatter) loc() *time.Location {
@@ -248,45 +366,182 @@ func (f *DateFormatter) loc() *time.Location {
 // NSDateFormatterStringFrom is Foundation `DateFormatter.string(from:)`.
 func NSDateFormatterStringFrom(f *DateFormatter, d Date) string {
 	t := d.Time().In(f.loc())
-	if f.DateFormat == nil || (f.AmSymbol == nil && f.PmSymbol == nil) {
+	if f.DateFormat == nil {
 		return t.Format(f.layout())
 	}
-	// Custom AM/PM symbols: format a placeholder where each unquoted `a` is, then substitute.
-	sym := "AM"
-	if f.AmSymbol != nil {
-		sym = *f.AmSymbol
-	}
-	if t.Hour() >= 12 {
-		sym = "PM"
-		if f.PmSymbol != nil {
-			sym = *f.PmSymbol
-		}
-	}
-	const mark = "\x01"
-	saved := *f.DateFormat
-	marked := replaceUnquoted(saved, 'a', "'"+mark+"'")
-	f.DateFormat = &marked
-	out := t.Format(f.layout())
-	f.DateFormat = &saved
-	return strings.ReplaceAll(out, mark, sym)
-}
-
-// replaceUnquoted replaces each occurrence of c outside '…' literal text in a date format.
-func replaceUnquoted(format string, c rune, repl string) string {
 	var b strings.Builder
-	quoted := false
-	for _, r := range format {
-		switch {
-		case r == '\'':
-			quoted = !quoted
-			b.WriteRune(r)
-		case r == c && !quoted:
-			b.WriteString(repl)
-		default:
-			b.WriteRune(r)
+	for _, tok := range icuTokens(*f.DateFormat) {
+		if tok.letter == 0 {
+			b.WriteString(tok.text)
+			continue
 		}
+		f.formatField(&b, t, tok.letter, tok.count)
 	}
 	return b.String()
+}
+
+// formatField writes one ICU date field of t, in English, as Foundation's en_US_POSIX locale does.
+func (f *DateFormatter) formatField(b *strings.Builder, t time.Time, letter rune, n int) {
+	num := func(v, width int) {
+		s := strconv.Itoa(v)
+		for i := len(s); i < width; i++ {
+			b.WriteByte('0')
+		}
+		b.WriteString(s)
+	}
+	name := func(full string, n int) {
+		switch n {
+		case 4:
+			b.WriteString(full)
+		case 5:
+			b.WriteString(full[:1])
+		default:
+			b.WriteString(full[:3])
+		}
+	}
+	switch letter {
+	case 'G':
+		if n == 4 {
+			b.WriteString("Anno Domini")
+		} else if n == 5 {
+			b.WriteString("A")
+		} else {
+			b.WriteString("AD")
+		}
+	case 'y', 'Y', 'u':
+		if n == 2 {
+			num(t.Year()%100, 2)
+		} else {
+			num(t.Year(), n)
+		}
+	case 'M', 'L':
+		if n <= 2 {
+			num(int(t.Month()), n)
+		} else {
+			name(t.Month().String(), n)
+		}
+	case 'd':
+		num(t.Day(), n)
+	case 'D':
+		num(t.YearDay(), n)
+	case 'E':
+		if n == 6 {
+			b.WriteString(t.Weekday().String()[:2])
+		} else {
+			name(t.Weekday().String(), max(n, 3))
+		}
+	case 'e', 'c':
+		if n <= 2 {
+			num(int(t.Weekday())+1, n)
+		} else if n == 6 {
+			b.WriteString(t.Weekday().String()[:2])
+		} else {
+			name(t.Weekday().String(), n)
+		}
+	case 'a', 'b', 'B':
+		if t.Hour() < 12 {
+			b.WriteString(derefOr(f.AmSymbol, "AM"))
+		} else {
+			b.WriteString(derefOr(f.PmSymbol, "PM"))
+		}
+	case 'h':
+		num((t.Hour()+11)%12+1, n)
+	case 'H':
+		num(t.Hour(), n)
+	case 'k':
+		num((t.Hour()+23)%24+1, n)
+	case 'K':
+		num(t.Hour()%12, n)
+	case 'm':
+		num(t.Minute(), n)
+	case 's':
+		num(t.Second(), n)
+	case 'S':
+		frac := strconv.Itoa(t.Nanosecond() + 1e9)[1:]
+		for len(frac) < n {
+			frac += "0"
+		}
+		b.WriteString(frac[:n])
+	case 'A':
+		num(int(t.Sub(time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())).Milliseconds()), n)
+	case 'z', 'v', 'V':
+		b.WriteString(*TimeZoneAbbreviationFor(TimeZone{t.Location()}, dateOf(t)))
+	case 'O':
+		_, off := t.Zone()
+		b.WriteString(gmtOffset(off, n == 4))
+	case 'Z':
+		_, off := t.Zone()
+		switch n {
+		case 4:
+			b.WriteString(gmtOffset(off, true))
+		case 5:
+			b.WriteString(isoOffset(off, true, true))
+		default:
+			b.WriteString(isoOffset(off, false, false))
+		}
+	case 'X', 'x':
+		_, off := t.Zone()
+		if letter == 'X' && off == 0 {
+			b.WriteByte('Z')
+			return
+		}
+		switch n {
+		case 1:
+			s := isoOffset(off, false, false)
+			if off%3600 == 0 {
+				s = s[:3]
+			}
+			b.WriteString(s)
+		case 2, 4:
+			b.WriteString(isoOffset(off, false, false))
+		default:
+			b.WriteString(isoOffset(off, true, false))
+		}
+	default:
+		b.WriteString(strings.Repeat(string(letter), n))
+	}
+}
+
+func derefOr(s *string, def string) string {
+	if s != nil {
+		return *s
+	}
+	return def
+}
+
+// isoOffset is a UTC offset as "-0500", or "-05:00" with colon; zulu writes "Z" for zero.
+func isoOffset(off int, colon, zulu bool) string {
+	if off == 0 && zulu {
+		return "Z"
+	}
+	sign := byte('+')
+	if off < 0 {
+		sign, off = '-', -off
+	}
+	sep := ""
+	if colon {
+		sep = ":"
+	}
+	return fmt.Sprintf("%c%02d%s%02d", sign, off/3600, sep, off%3600/60)
+}
+
+// gmtOffset is a localized GMT offset: "GMT-5" short, "GMT-05:00" long, and "GMT" for zero.
+func gmtOffset(off int, long bool) string {
+	if off == 0 {
+		return "GMT"
+	}
+	if long {
+		return "GMT" + isoOffset(off, true, false)
+	}
+	sign := "+"
+	if off < 0 {
+		sign, off = "-", -off
+	}
+	s := "GMT" + sign + strconv.Itoa(off/3600)
+	if off%3600 != 0 {
+		s += fmt.Sprintf(":%02d", off%3600/60)
+	}
+	return s
 }
 
 // NSDateFormatterDateFrom is Foundation `DateFormatter.date(from:)`.
@@ -408,10 +663,11 @@ func AtomicExchangeOrdering[T any](a *Atomic[T], v T, _ any) T {
 	return old
 }
 
-// AtomicUpdate is the result of an Atomic read-modify-write: the value before and after.
+// AtomicUpdate is the `(oldValue:newValue:)` tuple an Atomic read-modify-write returns, with the fields
+// the emitter names a tuple's elements.
 type AtomicUpdate[T any] struct {
-	OldValue T
-	NewValue T
+	F0 T // oldValue
+	F1 T // newValue
 }
 
 func atomicUpdate[T any](a *Atomic[T], f func(T) T) AtomicUpdate[T] {
@@ -419,7 +675,7 @@ func atomicUpdate[T any](a *Atomic[T], f func(T) T) AtomicUpdate[T] {
 	defer a.mu.Unlock()
 	old := a.v
 	a.v = f(old)
-	return AtomicUpdate[T]{OldValue: old, NewValue: a.v}
+	return AtomicUpdate[T]{F0: old, F1: a.v}
 }
 
 // AtomicWrappingAddOrdering is Synchronization `Atomic.wrappingAdd(_:ordering:)`.

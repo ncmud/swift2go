@@ -113,14 +113,15 @@ func strerror(errnum int32) string {
 
 // C `open(2)` flags, with the host platform's values.
 const (
-	CMacroO_RDONLY  int32 = syscall.O_RDONLY
-	CMacroO_WRONLY  int32 = syscall.O_WRONLY
-	CMacroO_RDWR    int32 = syscall.O_RDWR
-	CMacroO_APPEND  int32 = syscall.O_APPEND
-	CMacroO_CREAT   int32 = syscall.O_CREAT
-	CMacroO_TRUNC   int32 = syscall.O_TRUNC
-	CMacroO_EXCL    int32 = syscall.O_EXCL
-	CMacroO_CLOEXEC int32 = syscall.O_CLOEXEC
+	CMacroO_RDONLY   int32 = syscall.O_RDONLY
+	CMacroO_WRONLY   int32 = syscall.O_WRONLY
+	CMacroO_RDWR     int32 = syscall.O_RDWR
+	CMacroO_APPEND   int32 = syscall.O_APPEND
+	CMacroO_CREAT    int32 = syscall.O_CREAT
+	CMacroO_TRUNC    int32 = syscall.O_TRUNC
+	CMacroO_EXCL     int32 = syscall.O_EXCL
+	CMacroO_CLOEXEC  int32 = syscall.O_CLOEXEC
+	CMacroO_NONBLOCK int32 = sysO_NONBLOCK
 )
 
 // OpenUnsafePointerIntInt is C `open(_:_:_:)`: it opens path, a C string, with the flags and
