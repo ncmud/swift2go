@@ -19,9 +19,13 @@ import (
 // hundredfold.
 //
 // Two costs are checked. Bytes allocated is nearly deterministic, so it catches a quadratic copy on
-// any machine. Time catches quadratic work that allocates nothing; it is the minimum of several
-// runs with the collector held off, and a workload fails only when every attempt exceeds the bound,
-// so a busy machine slows a run without failing it.
+// any machine, and a workload whose quadratic failure would be a copy is judged by it alone. Time
+// catches quadratic work that allocates nothing. A timed round repeats the workload until it takes
+// milliseconds at n, and the time at each size is the median of several rounds with the collector
+// held off, so a preemption or page-fault burst on a busy machine slows one round without moving
+// the median. A workload fails on time only when every attempt exceeds the bound. The maps and sets
+// stay small enough at 10n to stay in the CPU's caches: a lookup in a larger one waits on memory,
+// whose latency grows with the table and with what else the machine runs.
 
 const (
 	// scalingTimeBound is the largest time ratio between 10n and n that passes.
@@ -31,59 +35,99 @@ const (
 	scalingBytesBound = 30
 	// scalingMinBytes is the allocation at 10n below which the byte ratio is not checked.
 	scalingMinBytes = 64 << 10
-	// scalingMinTime is the least time at n the time ratio is taken against, so a workload too
-	// quick to time reliably at n is judged by its time at 10n.
-	scalingMinTime   = 200 * time.Microsecond
+	// scalingRoundTime is the least time a round at n takes: the workload repeats until it does.
+	scalingRoundTime = 2 * time.Millisecond
+	scalingMaxReps   = 10_000
 	scalingHeapLimit = 1 << 30
-	scalingRuns      = 5
+	scalingRounds    = 7
 	scalingAttempts  = 3
 )
 
 // scalingCase is one workload. prepare builds its input of size n outside the timing and returns
-// the work to time; it is called again for every run, so the work may consume its input.
+// the work to time, which a round runs repeatedly.
 type scalingCase struct {
 	name    string
 	n       int
 	prepare func(n int) func()
-	// bytesOnly judges the workload by its allocation alone. Growing an array to 10n spends most of
-	// its time faulting in the fresh pages its backing arrays take, which a shared CI runner charges
-	// unevenly, while at n the pages from earlier runs are reused; a quadratic copy shows in the
-	// bytes allocated.
+	// consumes marks work that uses up or changes its input, so each run needs a fresh prepare.
+	consumes bool
+	// bytesOnly judges the workload by its allocation alone, for an operation whose quadratic
+	// failure would copy its storage on every call. Growing an array to 10n spends most of its time
+	// faulting in the fresh pages its backing arrays take, which a shared CI runner charges
+	// unevenly, while at n the pages from earlier runs are reused.
 	bytesOnly bool
 }
 
 type scalingCost struct {
-	elapsed time.Duration
-	bytes   uint64
+	elapsed time.Duration // the median time of a round
+	bytes   uint64        // the least allocation of one run
 }
 
-// measureScaling is the least time and allocation of several runs at size n. It stops after a run
-// that takes longer than limit, which only a workload failing its bound does.
-func measureScaling(prepare func(int) func(), n int, limit time.Duration) scalingCost {
-	best := scalingCost{elapsed: time.Duration(1<<63 - 1), bytes: 1<<64 - 1}
-	var before, after runtime.MemStats
-	for range scalingRuns {
-		work := prepare(n)
+// scalingReps is how many runs of the workload at n make a round of at least scalingRoundTime.
+func scalingReps(c scalingCase) int {
+	once := time.Duration(1<<63 - 1)
+	for range 3 {
+		once = min(once, scalingRound(c, c.n, 1))
+	}
+	return int(min(scalingMaxReps, scalingRoundTime/max(once, 1)+1))
+}
+
+// scalingRound times reps runs of the workload at size n, preparing its input outside the timing.
+func scalingRound(c scalingCase, n, reps int) time.Duration {
+	if !c.consumes {
+		work := c.prepare(n)
 		runtime.GC()
-		runtime.ReadMemStats(&before)
+		start := time.Now()
+		for range reps {
+			work()
+		}
+		return time.Since(start)
+	}
+	runtime.GC()
+	var total time.Duration
+	for range reps {
+		work := c.prepare(n)
 		start := time.Now()
 		work()
-		elapsed := time.Since(start)
+		total += time.Since(start)
+	}
+	return total
+}
+
+// measureScaling is the median time of a round of reps runs at size n, and the least allocation of
+// one run. It stops after a round that takes longer than limit, which only a workload failing its
+// bound does, and judges by the rounds it has.
+func measureScaling(c scalingCase, n, reps int, limit time.Duration) scalingCost {
+	cost := scalingCost{bytes: 1<<64 - 1}
+	var before, after runtime.MemStats
+	for range 2 {
+		work := c.prepare(n)
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		work()
 		runtime.ReadMemStats(&after)
-		best.elapsed = min(best.elapsed, elapsed)
-		best.bytes = min(best.bytes, after.TotalAlloc-before.TotalAlloc)
-		if elapsed > limit {
+		cost.bytes = min(cost.bytes, after.TotalAlloc-before.TotalAlloc)
+	}
+	if c.bytesOnly {
+		return cost
+	}
+	rounds := make([]time.Duration, 0, scalingRounds)
+	for range scalingRounds {
+		rounds = append(rounds, scalingRound(c, n, reps))
+		if rounds[len(rounds)-1] > limit {
 			break
 		}
 	}
-	return best
+	slices.Sort(rounds)
+	cost.elapsed = rounds[len(rounds)/2]
+	return cost
 }
 
 // scalingFailure describes why a workload's growth from small to big exceeds the bounds, or is
 // empty when it does not.
 func scalingFailure(small, big scalingCost, bytesOnly bool) string {
 	var reasons []string
-	if r := float64(big.elapsed) / float64(max(small.elapsed, scalingMinTime)); r > scalingTimeBound && !bytesOnly {
+	if r := float64(big.elapsed) / float64(max(small.elapsed, 1)); r > scalingTimeBound && !bytesOnly {
 		reasons = append(reasons, fmt.Sprintf("time grew %.0fx (%v to %v)", r, small.elapsed, big.elapsed))
 	}
 	if big.bytes >= scalingMinBytes {
@@ -108,12 +152,16 @@ func runScaling(t *testing.T, cases []scalingCase) {
 	defer debug.SetMemoryLimit(debug.SetMemoryLimit(scalingHeapLimit))
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			reps := 1
+			if !c.bytesOnly {
+				reps = scalingReps(c)
+			}
 			var failure string
 			for range scalingAttempts {
-				small := measureScaling(c.prepare, c.n, time.Hour)
-				big := measureScaling(c.prepare, 10*c.n, 2*scalingTimeBound*small.elapsed)
+				small := measureScaling(c, c.n, reps, time.Hour)
+				big := measureScaling(c, 10*c.n, reps, 2*scalingTimeBound*small.elapsed)
 				if failure = scalingFailure(small, big, c.bytesOnly); failure == "" {
-					t.Logf("n=%d: %v, %d bytes; 10n: %v, %d bytes", c.n, small.elapsed, small.bytes, big.elapsed, big.bytes)
+					t.Logf("n=%d, %d runs a round: %v, %d bytes; 10n: %v, %d bytes", c.n, reps, small.elapsed, small.bytes, big.elapsed, big.bytes)
 					return
 				}
 				if strings.Contains(failure, "allocation") {
@@ -234,7 +282,7 @@ func stringCases(kind, unit string) []scalingCase {
 				}
 			}
 		}},
-		{name: kind + "/removeLast until empty", n: 2_000, prepare: func(n int) func() {
+		{name: kind + "/removeLast until empty", n: 2_000, consumes: true, prepare: func(n int) func() {
 			s := text(n)
 			return func() {
 				for s != "" {
@@ -301,24 +349,24 @@ func TestScalingArray(t *testing.T) {
 				}
 			}
 		}},
-		{name: "removeLast until empty", n: 50_000, prepare: func(n int) func() {
-			xs := shuffledInts(n)
+		{name: "removeLast until empty", n: 50_000, consumes: true, prepare: func(n int) func() {
+			xs := make([]int, n)
 			return func() {
 				for len(xs) > 0 {
 					_ = SliceRemoveLast(&xs)
 				}
 			}
 		}},
-		{name: "insert(at: 0) a fixed number of times", n: 2_000, prepare: func(n int) func() {
-			xs := shuffledInts(n)
+		{name: "insert(at: 0) a fixed number of times", n: 2_000, consumes: true, prepare: func(n int) func() {
+			xs := make([]int, n)
 			return func() {
 				for i := range fixed {
 					SliceInsertAt(&xs, i, 0)
 				}
 			}
 		}},
-		{name: "removeFirst a fixed number of times", n: 2_000, prepare: func(n int) func() {
-			xs := shuffledInts(n)
+		{name: "removeFirst a fixed number of times", n: 2_000, consumes: true, prepare: func(n int) func() {
+			xs := make([]int, n)
 			return func() {
 				for range fixed {
 					_ = SliceRemoveFirst(&xs)
@@ -363,7 +411,7 @@ func scalingSet(keys []string) map[string]struct{} {
 
 func TestScalingDictionary(t *testing.T) {
 	runScaling(t, []scalingCase{
-		{name: "updateValue(_:forKey:)", n: 20_000, prepare: func(n int) func() {
+		{name: "updateValue(_:forKey:)", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			return func() {
 				var d map[string]int
@@ -372,7 +420,7 @@ func TestScalingDictionary(t *testing.T) {
 				}
 			}
 		}},
-		{name: "lookup", n: 20_000, prepare: func(n int) func() {
+		{name: "lookup", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			d := map[string]int{}
 			for i, k := range keys {
@@ -385,24 +433,18 @@ func TestScalingDictionary(t *testing.T) {
 			}
 		}},
 		{name: "removeValue(forKey:) until empty", n: 2_000, prepare: func(n int) func() {
-			// Removing every key of a map larger than the CPU's caches is bound by memory latency,
-			// which grows with the map and differs between machines. The map stays small enough to
-			// stay in cache at 10n, and the work repeats so it takes long enough to time.
-			const passes = 100
 			keys := scalingKeys(n)
 			d := make(map[string]int, n)
 			return func() {
-				for range passes {
-					for i, k := range keys {
-						d[k] = i
-					}
-					for _, k := range keys {
-						_ = MapRemoveValueForKey(&d, k)
-					}
+				for i, k := range keys {
+					d[k] = i
+				}
+				for _, k := range keys {
+					_ = MapRemoveValueForKey(&d, k)
 				}
 			}
 		}},
-		{name: "keys and values", n: 20_000, prepare: func(n int) func() {
+		{name: "keys and values", n: 2_000, prepare: func(n int) func() {
 			d := map[string]int{}
 			for i, k := range scalingKeys(n) {
 				d[k] = i
@@ -412,7 +454,7 @@ func TestScalingDictionary(t *testing.T) {
 				_ = MapValues(d)
 			}
 		}},
-		{name: "HMap set and get", n: 5_000, prepare: func(n int) func() {
+		{name: "HMap set and get", n: 1_000, prepare: func(n int) func() {
 			keys := make([][]int, n)
 			for i := range keys {
 				keys[i] = []int{i, i + 1}
@@ -432,7 +474,7 @@ func TestScalingDictionary(t *testing.T) {
 
 func TestScalingSet(t *testing.T) {
 	runScaling(t, []scalingCase{
-		{name: "insert", n: 20_000, prepare: func(n int) func() {
+		{name: "insert", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			return func() {
 				var s map[string]struct{}
@@ -441,7 +483,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{name: "contains", n: 20_000, prepare: func(n int) func() {
+		{name: "contains", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			s := scalingSet(keys)
 			return func() {
@@ -450,7 +492,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{name: "remove until empty", n: 20_000, prepare: func(n int) func() {
+		{name: "remove until empty", n: 2_000, consumes: true, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			s := scalingSet(keys)
 			return func() {
@@ -481,7 +523,7 @@ func TestScalingSet(t *testing.T) {
 				}
 			}
 		}},
-		{name: "union", n: 20_000, prepare: func(n int) func() {
+		{name: "union", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			a, b := scalingSet(keys[:n/2]), scalingSet(keys[n/2:])
 			return func() {
@@ -489,7 +531,7 @@ func TestScalingSet(t *testing.T) {
 				_ = SetUnionSet(a, b)
 			}
 		}},
-		{name: "intersection", n: 20_000, prepare: func(n int) func() {
+		{name: "intersection", n: 2_000, prepare: func(n int) func() {
 			keys := scalingKeys(n)
 			a, b := scalingSet(keys[:2*n/3]), scalingSet(keys[n/3:])
 			return func() {
@@ -497,11 +539,11 @@ func TestScalingSet(t *testing.T) {
 				_ = SetIntersectionSet(a, b)
 			}
 		}},
-		{name: "iteration", n: 20_000, prepare: func(n int) func() {
+		{name: "iteration", n: 2_000, prepare: func(n int) func() {
 			s := scalingSet(scalingKeys(n))
 			return func() { _ = SetElements(s) }
 		}},
-		{name: "HSet insert and contains", n: 5_000, prepare: func(n int) func() {
+		{name: "HSet insert and contains", n: 1_000, prepare: func(n int) func() {
 			keys := make([][]int, n)
 			for i := range keys {
 				keys[i] = []int{i, i + 1}
@@ -533,7 +575,7 @@ type scalingTree struct {
 
 func TestScalingCopy(t *testing.T) {
 	runScaling(t, []scalingCase{
-		{name: "Copy of nested values", n: 5_000, prepare: func(n int) func() {
+		{name: "Copy of nested values", n: 1_000, prepare: func(n int) func() {
 			v := scalingTree{ByName: map[string]scalingLeaf{}}
 			for i := range n {
 				one := i
@@ -544,7 +586,7 @@ func TestScalingCopy(t *testing.T) {
 			}
 			return func() { _ = Copy(v) }
 		}},
-		{name: "Copy of a growing array element by element", n: 5_000, prepare: func(n int) func() {
+		{name: "Copy of a growing array element by element", n: 1_000, prepare: func(n int) func() {
 			return func() {
 				var xs []scalingLeaf
 				for i := range n {
@@ -657,22 +699,18 @@ func TestCastFailureCost(t *testing.T) {
 	}
 	root, otherRoot, plainRoot := castFixtures()
 	const n = 200_000
-	best := func(cast func()) time.Duration {
-		least := time.Duration(1<<63 - 1)
-		for range 7 {
-			start := time.Now()
-			for range n {
-				cast()
-			}
-			least = min(least, time.Since(start))
+	timed := func(cast func()) time.Duration {
+		start := time.Now()
+		for range n {
+			cast()
 		}
-		return least
+		return time.Since(start)
 	}
 	var sink bool
-	success := best(func() { sink = sink != Is[*castLeaf](root) })
+	succeed := func() { sink = sink != Is[*castLeaf](root) }
 	for _, c := range []struct {
 		name  string
-		bound time.Duration // in successful casts
+		bound float64 // in successful casts
 		cast  func()
 	}{
 		{"a plain root to a subclass", 3, func() { sink = sink != Is[*castLeaf](plainRoot) }},
@@ -680,8 +718,18 @@ func TestCastFailureCost(t *testing.T) {
 		// The cast walks the subclass's superclass parts, one method call each.
 		{"a subclass to an unrelated subclass", 6, func() { sink = sink != Is[*castLeaf](otherRoot) }},
 	} {
-		if failure := best(c.cast); failure > c.bound*success {
-			t.Errorf("casting %s failed in %v per cast, against %v for a successful cast", c.name, failure/n, success/n)
+		// The failing and the successful casts are timed in alternation, and the ratio is the median
+		// of the pairs', so a busy machine slows both sides of a pair or only one pair.
+		const pairs = 9
+		ratios := make([]float64, pairs)
+		var success, failure time.Duration
+		for i := range ratios {
+			success, failure = timed(succeed), timed(c.cast)
+			ratios[i] = float64(failure) / float64(max(success, 1))
+		}
+		slices.Sort(ratios)
+		if r := ratios[pairs/2]; r > c.bound {
+			t.Errorf("casting %s failed in %.1fx the time of a successful cast (%v against %v per cast)", c.name, r, failure/n, success/n)
 		}
 	}
 }
