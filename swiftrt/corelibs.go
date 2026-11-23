@@ -66,12 +66,12 @@ func CFLog(x float64) float64 { return math.Log(x) }
 // CFLog2 is C `log2(_:)`.
 func CFLog2(x float64) float64 { return math.Log2(x) }
 
-// C__sigset_t is the C library's `sigset_t` on Linux, a struct where Darwin's is an integer. The
-// runtime's signal masks are integers either way.
-type C__sigset_t = uint64 //nolint:revive // C name
+// CX__sigset_t is the C library's `sigset_t` on Linux, a struct where Darwin's is an integer, named
+// as the emitter names `__sigset_t`. The runtime's signal masks are integers either way.
+type CX__sigset_t = uint64 //nolint:revive // C name
 
-// C__sigset_tInit is `sigset_t()`, the empty set.
-func C__sigset_tInit() C__sigset_t { return 0 } //nolint:revive // C name
+// CX__sigset_tInit is `sigset_t()`, the empty set.
+func CX__sigset_tInit() CX__sigset_t { return 0 } //nolint:revive // C name
 
 // CPosix_spawn_file_actions_t is the C `posix_spawn_file_actions_t` that Linux declares as a struct
 // and Darwin as a pointer; the runtime keeps its file actions behind the pointer either way.
