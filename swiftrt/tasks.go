@@ -1,11 +1,8 @@
 package swiftrt
 
 import (
-	"bytes"
 	"fmt"
 	"reflect"
-	"runtime"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -101,16 +98,6 @@ func (s *cancelScope) onCancel(h func()) func() {
 }
 
 var goroutineScopes sync.Map
-
-func goroutineID() uint64 {
-	var buf [64]byte
-	b := bytes.TrimPrefix(buf[:runtime.Stack(buf[:], false)], []byte("goroutine "))
-	if i := bytes.IndexByte(b, ' '); i > 0 {
-		b = b[:i]
-	}
-	id, _ := strconv.ParseUint(string(b), 10, 64)
-	return id
-}
 
 // runInScope runs f on the current goroutine as part of the task whose cancellation state is s.
 func runInScope(s *cancelScope, locals *localFrame, f func()) {
