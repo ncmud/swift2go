@@ -425,11 +425,11 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 		e.w("// %s upcasts to the superclass.\nfunc (self *%s) %s() *%s {\n\tif self == nil {\n\t\treturn nil\n\t}\n\treturn &self.%s\n}\n\n", upcastMethod(sup), recvT, upcastMethod(sup), sup, embeddedField(sup))
 	}
 	if sups := e.m.ancestors(info.GoName); len(sups) > 0 {
-		var parts []string
-		for _, sup := range sups {
-			parts = append(parts, "&self."+embeddedField(sup))
+		var cases strings.Builder
+		for i, sup := range sups {
+			fmt.Fprintf(&cases, "\tcase %d:\n\t\treturn &self.%s\n", i, embeddedField(sup))
 		}
-		e.w("// SwiftBases returns the superclass parts, nearest first, for casts to a superclass.\nfunc (self *%s) SwiftBases() []any {\n\treturn []any{%s}\n}\n\n", recvT, strings.Join(parts, ", "))
+		e.w("// SwiftBase returns superclass part i, nearest first, or nil past the last, for casts to a superclass.\nfunc (self *%s) SwiftBase(i int) any {\n\tswitch i {\n%s\t}\n\treturn nil\n}\n\n", recvT, cases.String())
 	}
 	e.members(n, info)
 	e.codingKeyOmissionDefaults(n, recvT, keys)

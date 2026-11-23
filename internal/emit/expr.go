@@ -92,6 +92,9 @@ func (e *fileEmitter) expr(n ast.Node) string {
 	if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Optional && len(t.Args) == 1 && t.Args[0].Kind != types.Optional {
 		// C strings come back from the runtime as *any already.
 		if gt := e.m.GoType(t.Args[0], e.generics); gt != "*any" && e.m.isReferenceGo(t.Args[0], gt) {
+			if n.Kind() == "conditional_checked_cast_expr" && strings.HasPrefix(out, "swiftrt.As[") {
+				return "swiftrt.AsRef[" + strings.TrimPrefix(out, "swiftrt.As[")
+			}
 			return "swiftrt.Flat(" + out + ")"
 		}
 	}
