@@ -690,6 +690,11 @@ func castFixtures() (root, otherRoot, plainRoot any) {
 // TestCastFailureCost checks that a failed cast between class references costs about what a
 // successful one does, with no lookup on the failing path: a plain root object fails at once, and a
 // subclass only walks its own superclass parts.
+//
+// Each cast is timed over many short trials, alternating with the successful cast, and each side's
+// cost is its fastest trial. Noise from a busy machine only adds time, so the fastest of many short
+// trials is the cast's own cost, while a slower failing path is slower in every trial. A case fails
+// only when every attempt exceeds its bound.
 func TestCastFailureCost(t *testing.T) {
 	if raceDetector {
 		t.Skip("the race detector's instrumentation dominates the timings; CI runs these tests without -race")
@@ -698,10 +703,20 @@ func TestCastFailureCost(t *testing.T) {
 		t.Skip("timing tests are skipped in short mode")
 	}
 	root, otherRoot, plainRoot := castFixtures()
-	const n = 200_000
+	// A program casts many classes to many types; a cache of cast results would hold more than the
+	// few entries the timed casts alone make.
+	for _, v := range []any{root, otherRoot, plainRoot, &castMid{}, &castLeaf{}, &castOther{}, 1, "s"} {
+		_, _, _, _ = Is[*castRoot](v), Is[*castMid](v), Is[*castLeaf](v), Is[*castOther](v)
+		_, _ = AsRef[*castMid](v), As[string](v)
+	}
+	const (
+		casts    = 20_000
+		trials   = 41
+		attempts = 3
+	)
 	timed := func(cast func()) time.Duration {
 		start := time.Now()
-		for range n {
+		for range casts {
 			cast()
 		}
 		return time.Since(start)
@@ -716,20 +731,24 @@ func TestCastFailureCost(t *testing.T) {
 		{"a plain root to a subclass", 3, func() { sink = sink != Is[*castLeaf](plainRoot) }},
 		{"a plain root to a subclass through AsRef", 3, func() { sink = sink != (AsRef[*castMid](plainRoot) != nil) }},
 		// The cast walks the subclass's superclass parts, one method call each.
-		{"a subclass to an unrelated subclass", 6, func() { sink = sink != Is[*castLeaf](otherRoot) }},
+		{"a subclass to an unrelated subclass", 4, func() { sink = sink != Is[*castLeaf](otherRoot) }},
 	} {
-		// The failing and the successful casts are timed in alternation, and the ratio is the median
-		// of the pairs', so a busy machine slows both sides of a pair or only one pair.
-		const pairs = 9
-		ratios := make([]float64, pairs)
+		var ratio float64
 		var success, failure time.Duration
-		for i := range ratios {
-			success, failure = timed(succeed), timed(c.cast)
-			ratios[i] = float64(failure) / float64(max(success, 1))
+		for range attempts {
+			success, failure = time.Duration(1<<63-1), time.Duration(1<<63-1)
+			for range trials {
+				success = min(success, timed(succeed))
+				failure = min(failure, timed(c.cast))
+			}
+			ratio = float64(failure) / float64(max(success, 1))
+			if ratio <= c.bound {
+				break
+			}
 		}
-		slices.Sort(ratios)
-		if r := ratios[pairs/2]; r > c.bound {
-			t.Errorf("casting %s failed in %.1fx the time of a successful cast (%v against %v per cast)", c.name, r, failure/n, success/n)
+		t.Logf("casting %s: %.2fx (%.1fns against %.1fns per cast)", c.name, ratio, float64(failure)/casts, float64(success)/casts)
+		if ratio > c.bound {
+			t.Errorf("casting %s failed in %.1fx the time of a successful cast (%.1fns against %.1fns per cast)", c.name, ratio, float64(failure)/casts, float64(success)/casts)
 		}
 	}
 }
