@@ -608,6 +608,7 @@ func TestCastAllocations(t *testing.T) {
 	other := &castOther{}
 	other.SwiftSub = other
 	var root, otherRoot any = &leaf.castRoot, &other.castRoot
+	plainRoot := any(&castRoot{})
 	if AsRef[*castLeaf](root) != leaf || AsRef[*castMid](root) != &leaf.castMid || AsRef[*castOther](root) != nil {
 		t.Fatal("AsRef cast a class reference wrongly")
 	}
@@ -624,11 +625,81 @@ func TestCastAllocations(t *testing.T) {
 		"AsRef to an unrelated class": func() { _ = AsRef[*castOther](root) },
 		"As to an unrelated class":    func() { _ = As[*castOther](root) },
 		"Is to an unrelated class":    func() { _ = Is[*castLeaf](otherRoot) },
+		"Is from a plain root object": func() { _ = Is[*castLeaf](plainRoot) },
 		"MustAs to the dynamic class": func() { _ = MustAs[*castLeaf](root) },
 	} {
 		if n := testing.AllocsPerRun(1000, cast); n != 0 {
 			t.Errorf("%s: %v allocations, want 0", name, n)
 		}
+	}
+}
+
+// castFixtures are class references for the cast tests: a leaf seen through its root, an
+// unrelated subclass seen through the root, and a plain root object, which has no superclass
+// parts, as an NPC is a plain GameCharacter in ncmud.
+func castFixtures() (root, otherRoot, plainRoot any) {
+	leaf := &castLeaf{}
+	leaf.SwiftSub = leaf
+	other := &castOther{}
+	other.SwiftSub = other
+	return &leaf.castRoot, &other.castRoot, &castRoot{}
+}
+
+// TestCastFailureCost checks that a failed cast between class references costs about what a
+// successful one does, with no lookup on the failing path: a plain root object fails at once, and a
+// subclass only walks its own superclass parts.
+func TestCastFailureCost(t *testing.T) {
+	if raceDetector {
+		t.Skip("the race detector's instrumentation dominates the timings; CI runs these tests without -race")
+	}
+	if testing.Short() {
+		t.Skip("timing tests are skipped in short mode")
+	}
+	root, otherRoot, plainRoot := castFixtures()
+	const n = 200_000
+	best := func(cast func()) time.Duration {
+		least := time.Duration(1<<63 - 1)
+		for range 7 {
+			start := time.Now()
+			for range n {
+				cast()
+			}
+			least = min(least, time.Since(start))
+		}
+		return least
+	}
+	var sink bool
+	success := best(func() { sink = sink != Is[*castLeaf](root) })
+	for _, c := range []struct {
+		name  string
+		bound time.Duration // in successful casts
+		cast  func()
+	}{
+		{"a plain root to a subclass", 3, func() { sink = sink != Is[*castLeaf](plainRoot) }},
+		{"a plain root to a subclass through AsRef", 3, func() { sink = sink != (AsRef[*castMid](plainRoot) != nil) }},
+		// The cast walks the subclass's superclass parts, one method call each.
+		{"a subclass to an unrelated subclass", 6, func() { sink = sink != Is[*castLeaf](otherRoot) }},
+	} {
+		if failure := best(c.cast); failure > c.bound*success {
+			t.Errorf("casting %s failed in %v per cast, against %v for a successful cast", c.name, failure/n, success/n)
+		}
+	}
+}
+
+// BenchmarkClassCast measures the casts the game server runs most: isPC on an NPC, which fails
+// on a plain root object, and on a player, which succeeds.
+func BenchmarkClassCast(b *testing.B) {
+	root, otherRoot, plainRoot := castFixtures()
+	for _, c := range []struct {
+		name string
+		v    any
+	}{{"success", root}, {"plain-root-failure", plainRoot}, {"sibling-failure", otherRoot}} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = Is[*castLeaf](c.v)
+			}
+		})
 	}
 }
 
