@@ -1,0 +1,15 @@
+mid=- leaf=- other=- named=- isMid=false isLeaf=false
+mid=2 leaf=- other=- named=mid2 isMid=true isLeaf=false
+mid=3 leaf=3 other=- named=leaf3 isMid=true isLeaf=true
+mid=- leaf=- other=4 named=- isMid=false isLeaf=false
+mid=- leaf=- other=- named=- isMid=false isLeaf=false
+mid=- leaf=- other=- named=- isMid=false isLeaf=false
+mid=2 leaf=- other=- named=mid2 isMid=true isLeaf=false
+mid=3 leaf=3 other=- named=leaf3 isMid=true isLeaf=true
+mid=- leaf=- other=4 named=- isMid=false isLeaf=false
+mid=- leaf=- other=- named=- isMid=false isLeaf=false
+root=5 mid=5 int=-1
+root=6 mid=- int=-1
+root=- mid=- int=7
+root=- mid=- int=-1
+leaf9 true

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // Integer is every Go integer type a Swift integer maps to.
@@ -503,65 +505,53 @@ func formatDouble(f float64) string { return swiftFloatDescription(f, 64) }
 
 // Is is Swift's `is`.
 func Is[T any](v any) bool {
-	if _, ok := v.(T); ok {
-		return true
-	}
-	if _, ok := derefAs[T](v); ok {
-		return true
-	}
-	if _, ok := dynamicAs[T](v); ok {
-		return true
-	}
-	if _, ok := bridgeAs[T](v); ok {
-		return true
-	}
-	_, ok := collectionAs[T](v)
+	_, ok := cast[T](v)
 	return ok
 }
 
 // As is Swift's `as?`.
 func As[T any](v any) *T {
-	if t, ok := v.(T); ok {
-		return &t
-	}
-	if t, ok := dynamicAs[T](v); ok {
-		return &t
-	}
-	if t, ok := derefAs[T](v); ok {
-		return &t
-	}
-	if t, ok := bridgeAs[T](v); ok {
-		return &t
-	}
-	if t, ok := collectionAs[T](v); ok {
+	if t, ok := cast[T](v); ok {
 		return &t
 	}
 	return nil
 }
 
+// AsRef is Swift's `as?` to a class or other reference type, whose optional Go represents as a
+// nil-able T: the cast, or T's zero value. Unlike [As] it allocates nothing.
+func AsRef[T any](v any) T {
+	t, _ := cast[T](v)
+	return t
+}
+
 // MustAs is Swift's `as!`. Casting to Any always succeeds, so a nil interface, which is how a Void
 // result travels through a generic value such as a continuation's, becomes Any's zero value.
 func MustAs[T any](v any) T {
-	t, ok := v.(T)
+	t, ok := cast[T](v)
 	if !ok && v == nil && reflect.TypeFor[T]() == reflect.TypeFor[any]() {
 		return t
-	}
-	if !ok {
-		t, ok = dynamicAs[T](v)
-	}
-	if !ok {
-		t, ok = derefAs[T](v)
-	}
-	if !ok {
-		t, ok = bridgeAs[T](v)
-	}
-	if !ok {
-		t, ok = collectionAs[T](v)
 	}
 	if !ok {
 		Trap(fmt.Sprintf("could not cast value of type %T", v))
 	}
 	return t
+}
+
+// cast is the dynamic cast of v to T that `is`, `as?` and `as!` share.
+func cast[T any](v any) (T, bool) {
+	if t, ok := v.(T); ok {
+		return t, true
+	}
+	if t, ok, decided := classAs[T](v); decided {
+		return t, ok
+	}
+	if t, ok := derefAs[T](v); ok {
+		return t, true
+	}
+	if t, ok := bridgeAs[T](v); ok {
+		return t, true
+	}
+	return collectionAs[T](v)
 }
 
 // Max is Swift's max(_:_:).
@@ -596,22 +586,69 @@ func Dynamic(v any) any {
 	return v
 }
 
-// dynamicAs matches the most-derived object behind a class reference against T, or one of its
-// superclass parts when T is a class between the reference's static and dynamic types.
-func dynamicAs[T any](v any) (T, bool) {
-	d := Dynamic(v)
-	if t, ok := d.(T); ok {
-		return t, true
+// classAs matches the most-derived object behind a class reference against T, or one of its
+// superclass parts when T is a class between the reference's static and dynamic types. decided is
+// false when v is not a class reference; a class reference casts no other way.
+func classAs[T any](v any) (t T, ok, decided bool) {
+	c, isClass := v.(interface{ SwiftDynamic() any })
+	if !isClass {
+		return t, false, false
 	}
-	if b, ok := d.(interface{ SwiftBases() []any }); ok && !isNil(d) {
-		for _, p := range b.SwiftBases() {
-			if t, ok := p.(T); ok {
-				return t, true
-			}
+	d := c.SwiftDynamic()
+	if t, ok := d.(T); ok {
+		return t, true, true
+	}
+	i := baseIndex[T](d)
+	if i < 0 {
+		return t, false, true
+	}
+	t, ok = d.(interface{ SwiftBase(i int) any }).SwiftBase(i).(T)
+	return t, ok, true
+}
+
+type castKey struct{ from, to reflect.Type }
+
+var (
+	baseIndexMu sync.Mutex
+	// baseIndexes maps a class and a cast's target type to the index of the class's superclass part
+	// that is a T, or -1. It is replaced, never changed, so readers need no lock.
+	baseIndexes atomic.Pointer[map[castKey]int]
+)
+
+// baseIndex is the index of d's first superclass part that is a T, or -1. The
+// parts' types depend on d's class alone, so the answer is computed once for each class and T.
+func baseIndex[T any](d any) int {
+	key := castKey{reflect.TypeOf(d), reflect.TypeFor[T]()}
+	if m := baseIndexes.Load(); m != nil {
+		if i, ok := (*m)[key]; ok {
+			return i
 		}
 	}
-	var zero T
-	return zero, false
+	b, ok := d.(interface{ SwiftBase(i int) any })
+	if !ok || isNil(d) {
+		return -1
+	}
+	i := -1
+	for j := 0; ; j++ {
+		p := b.SwiftBase(j)
+		if p == nil {
+			break
+		}
+		if _, ok := p.(T); ok {
+			i = j
+			break
+		}
+	}
+	baseIndexMu.Lock()
+	defer baseIndexMu.Unlock()
+	next := map[castKey]int{key: i}
+	if m := baseIndexes.Load(); m != nil {
+		for k, v := range *m {
+			next[k] = v
+		}
+	}
+	baseIndexes.Store(&next)
+	return i
 }
 
 // Ref boxes a struct value for an existential whose methods need a pointer receiver.

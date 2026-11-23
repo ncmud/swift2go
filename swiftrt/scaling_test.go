@@ -555,3 +555,79 @@ func TestScalingCopy(t *testing.T) {
 		}},
 	})
 }
+
+// castRoot, castMid and castLeaf are a class hierarchy as the emitter writes one: each subclass
+// embeds its superclass, the root records the most-derived object, and a subclass lists its
+// superclass parts.
+type castRoot struct{ SwiftSub any }
+
+func (c *castRoot) SwiftDynamic() any {
+	if c != nil && c.SwiftSub != nil {
+		return c.SwiftSub
+	}
+	return c
+}
+
+type castMid struct{ castRoot }
+
+func (c *castMid) SwiftBase(i int) any {
+	switch i {
+	case 0:
+		return &c.castRoot
+	}
+	return nil
+}
+
+type castLeaf struct{ castMid }
+
+func (c *castLeaf) SwiftBase(i int) any {
+	switch i {
+	case 0:
+		return &c.castMid
+	case 1:
+		return &c.castRoot
+	}
+	return nil
+}
+
+type castOther struct{ castRoot }
+
+func (c *castOther) SwiftBase(i int) any {
+	switch i {
+	case 0:
+		return &c.castRoot
+	}
+	return nil
+}
+
+// TestCastAllocations checks that a cast between class references allocates nothing, whether it
+// succeeds or fails, and that `as?` to a class through AsRef does not box its result.
+func TestCastAllocations(t *testing.T) {
+	leaf := &castLeaf{}
+	leaf.SwiftSub = leaf
+	other := &castOther{}
+	other.SwiftSub = other
+	var root, otherRoot any = &leaf.castRoot, &other.castRoot
+	if AsRef[*castLeaf](root) != leaf || AsRef[*castMid](root) != &leaf.castMid || AsRef[*castOther](root) != nil {
+		t.Fatal("AsRef cast a class reference wrongly")
+	}
+	if !Is[*castMid](root) || Is[*castMid](otherRoot) || As[*castOther](root) != nil {
+		t.Fatal("Is or As cast a class reference wrongly")
+	}
+	var nilRoot *castRoot
+	if AsRef[*castLeaf](nilRoot) != nil || Is[*castLeaf](nilRoot) {
+		t.Fatal("a nil class reference cast to a subclass")
+	}
+	for name, cast := range map[string]func(){
+		"AsRef to the dynamic class":  func() { _ = AsRef[*castLeaf](root) },
+		"AsRef to a middle class":     func() { _ = AsRef[*castMid](root) },
+		"AsRef to an unrelated class": func() { _ = AsRef[*castOther](root) },
+		"As to an unrelated class":    func() { _ = As[*castOther](root) },
+		"Is to an unrelated class":    func() { _ = Is[*castLeaf](otherRoot) },
+		"MustAs to the dynamic class": func() { _ = MustAs[*castLeaf](root) },
+	} {
+		if n := testing.AllocsPerRun(1000, cast); n != 0 {
+			t.Errorf("%s: %v allocations, want 0", name, n)
+		}
+	}
+}
