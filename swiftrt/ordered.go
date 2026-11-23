@@ -58,7 +58,7 @@ func OrderedDictionaryRemoveValueForKey[K comparable, V any](d *OrderedDictionar
 		return nil
 	}
 	delete(d.M, k)
-	d.Keys_ = slices.DeleteFunc(d.Keys_, func(x K) bool { return x == k })
+	d.Keys_ = slices.DeleteFunc(Mut(&d.Keys_), func(x K) bool { return x == k })
 	return &v
 }
 
@@ -162,7 +162,7 @@ func OrderedSetRemove[T comparable](s *OrderedSet[T], v T) *T {
 	if i < 0 {
 		return nil
 	}
-	s.Items = slices.Delete(s.Items, i, i+1)
+	s.Items = slices.Delete(Mut(&s.Items), i, i+1)
 	return &v
 }
 

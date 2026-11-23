@@ -173,10 +173,10 @@ func SliceRandomElement[T any](xs []T) *T {
 
 // SliceShuffleUsing is Swift `MutableCollection.shuffle(using:)`.
 func SliceShuffleUsing[T any](xs *[]T, g any) {
-	s := *xs
-	if len(s) <= 1 {
+	if len(*xs) <= 1 {
 		return
 	}
+	s := Mut(xs)
 	amount := len(s)
 	cur := 0
 	for amount > 1 {

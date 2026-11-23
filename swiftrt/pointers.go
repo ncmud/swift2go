@@ -175,7 +175,7 @@ func SliceWithUnsafeBufferPointer[T, R any](xs []T, body func(any) R) R { return
 // receives a buffer over the array's elements, and what it writes through the buffer is written
 // to the array.
 func SliceWithUnsafeMutableBufferPointer[T, R any](xs *[]T, body func(*any) R) R {
-	var buf any = *xs
+	var buf any = Mut(xs)
 	return body(&buf)
 }
 
@@ -183,6 +183,7 @@ func SliceWithUnsafeMutableBufferPointer[T, R any](xs *[]T, body func(*any) R) R
 // array's memory as bytes, and what it writes there is written to the array. The elements must be
 // numbers; other element types are not supported and panic.
 func SliceWithUnsafeMutableBytes[T, R any](xs *[]T, body func(any) R) R {
+	Mut(xs)
 	if b, ok := any(*xs).([]byte); ok {
 		return body(b)
 	}

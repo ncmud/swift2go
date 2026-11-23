@@ -748,7 +748,10 @@ func SliceRemoveSubrange[T any](xs *[]T, r interval[int]) {
 	if lo > hi {
 		Trap("Range requires lowerBound <= upperBound")
 	}
-	*xs = slices.Delete(*xs, lo, hi)
+	if lo == hi {
+		return
+	}
+	*xs = slices.Delete(Mut(xs), lo, hi)
 }
 
 // SliceRemoveSubrangeRange is Swift `Array.removeSubrange(_:)` with a half-open Range.
@@ -860,7 +863,9 @@ func RangeCountWhere[T Integer](r Range[T], f func(T) bool) int {
 func ReversedCollectionFilter[T any](xs []T, f func(T) bool) []T { return SliceFilter(xs, f) }
 
 // ReversedCollectionPrefixInt is `xs.reversed().prefix(n)`.
-func ReversedCollectionPrefixInt[T any](xs []T, n int) []T { return xs[:min(max(n, 0), len(xs))] }
+func ReversedCollectionPrefixInt[T any](xs []T, n int) []T {
+	return part(xs, 0, min(max(n, 0), len(xs)))
+}
 
 // StringEnumerated is `String.enumerated()`: each Character with its offset.
 func StringEnumerated(s string) []struct {

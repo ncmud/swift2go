@@ -63,14 +63,18 @@ func TestCopyUnsharesEveryValuePart(t *testing.T) {
 	}
 
 	*c.Inner.Opt = 100
-	c.Inner.List[0] = 100
-	c.Nested[1][0] = 100
-	c.ByKey["k"].List[0] = 100
-	*c.ByKey["k"].Opt = 100
+	Mut(&c.Inner.List)[0] = 100
+	Mut(&Mut(&c.Nested)[1])[0] = 100
+	byKey := c.ByKey["k"]
+	Mut(&byKey.List)[0] = 100
+	*byKey.Opt = 100
+	c.ByKey["k"] = byKey
 	c.ByKey["new"] = copyInner{}
-	c.Any.(copyInner).List[0] = 100
-	c.OptBox.List[0] = 100
-	c.Pair[1].List[0] = 100
+	inAny := c.Any.(copyInner)
+	Mut(&inAny.List)[0] = 100
+	c.Any = inAny
+	Mut(&c.OptBox.List)[0] = 100
+	Mut(&c.Pair[1].List)[0] = 100
 
 	want.Ref, want.private = orig.Ref, orig.private
 	if !reflect.DeepEqual(orig, want) {
@@ -88,12 +92,16 @@ func TestCopyOriginalMutationsStayOutOfTheCopy(t *testing.T) {
 	want.Ref, want.private = c.Ref, c.private
 
 	*orig.Inner.Opt = 100
-	orig.Inner.List[0] = 100
-	orig.Nested[0][0] = 100
-	orig.ByKey["k"].List[0] = 100
-	orig.Any.(copyInner).List[0] = 100
-	orig.OptBox.List[0] = 100
-	orig.Pair[0].List[0] = 100
+	Mut(&orig.Inner.List)[0] = 100
+	Mut(&Mut(&orig.Nested)[0])[0] = 100
+	byKey := orig.ByKey["k"]
+	Mut(&byKey.List)[0] = 100
+	orig.ByKey["k"] = byKey
+	inAny := orig.Any.(copyInner)
+	Mut(&inAny.List)[0] = 100
+	orig.Any = inAny
+	Mut(&orig.OptBox.List)[0] = 100
+	Mut(&orig.Pair[0].List)[0] = 100
 
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("mutating the original changed the copy: %+v", c)
@@ -128,14 +136,16 @@ func TestCopyRecursiveTypes(t *testing.T) {
 func TestCopyTopLevelContainers(t *testing.T) {
 	s := []copyInner{{List: []int{1}}}
 	cs := Copy(s)
-	cs[0].List[0] = 9
+	Mut(&Mut(&cs)[0].List)[0] = 9
 	if s[0].List[0] != 1 {
 		t.Fatal("slice of structs shares element storage")
 	}
 
 	m := map[int][]int{1: {1}}
 	cm := Copy(m)
-	cm[1][0] = 9
+	first := cm[1]
+	Mut(&first)[0] = 9
+	cm[1] = first
 	cm[2] = nil
 	if m[1][0] != 1 || len(m) != 1 {
 		t.Fatal("map shares storage")
@@ -155,7 +165,8 @@ func TestCopyTopLevelContainers(t *testing.T) {
 
 	var a any = []int{1}
 	ca := Copy(a)
-	ca.([]int)[0] = 9
+	inAny := ca.([]int)
+	Mut(&inAny)[0] = 9
 	if a.([]int)[0] != 1 {
 		t.Fatal("interface holding a slice shares storage")
 	}
@@ -213,7 +224,7 @@ func BenchmarkCopyStructWithOptional(b *testing.B) {
 
 func TestSliceInitRepeatingCountCopiesEachElement(t *testing.T) {
 	rows := SliceInitRepeatingCount[[][]int]([]int{0, 0}, 3)
-	rows[1][1] = 5
+	Mut(&Mut(&rows)[1])[1] = 5
 	if want := [][]int{{0, 0}, {0, 5}, {0, 0}}; !reflect.DeepEqual(rows, want) {
 		t.Errorf("rows share storage: got %v, want %v", rows, want)
 	}
@@ -232,7 +243,7 @@ type copyBacking struct {
 func TestCopyUnexportedSwiftProperty(t *testing.T) {
 	orig := copyBacking{_values: []int{1, 2}, cache: []int{3}}
 	c := Copy(orig)
-	c._values[0] = 9
+	Mut(&c._values)[0] = 9
 	c.cache[0] = 9
 	if orig._values[0] != 1 {
 		t.Error("a Swift property with an unexported Go name must be copied")
@@ -249,9 +260,9 @@ type copyKeyRoom struct{ vnum int }
 func (copyKeyRoom) isCopyKey() {}
 
 type copyExit struct {
-	Description string
-	Keywords    []string
-	Destination copyKey
+	Description string   `swift:"description"`
+	Keywords    []string `swift:"keywords"`
+	Destination copyKey  `swift:"destination"`
 }
 
 func TestCopyAllocatesOnlyWhatItUnshares(t *testing.T) {
@@ -266,7 +277,7 @@ func TestCopyAllocatesOnlyWhatItUnshares(t *testing.T) {
 	if n := testing.AllocsPerRun(100, func() { out = Copy(withKeywords) }); n != slice {
 		t.Errorf("copying a value with one slice made %v allocations, want the slice's own %v", n, slice)
 	}
-	out.Keywords[0] = "gate"
+	Mut(&out.Keywords)[0] = "gate"
 	if withKeywords.Keywords[0] != "door" || out.Destination != withKeywords.Destination {
 		t.Errorf("copy shares storage or lost a field: %+v from %+v", out, withKeywords)
 	}
