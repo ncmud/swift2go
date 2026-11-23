@@ -83,6 +83,10 @@ changed:
 go run github.com/ncmud/swift2go/cmd/swift2go -incremental -pkg path/to/SwiftPackage transpile Core App
 ```
 
+- An incremental run emits a target's `.swiftmodule` in the background while it writes the target's
+  Go; the targets that import it wait for it before they dump. Each file is still dumped in a frontend
+  job of its own: a job with several primary files writes their implicit accessors and synthesized
+  members in an order that depends on the other files of the job.
 - A file is dumped again when its content changes. The target's other files keep their cached ASTs
   as long as the changed files' fingerprints hold. A fingerprint covers a file's declarations with
   their types, attributes and conformances, but not the bodies of functions, initializers and

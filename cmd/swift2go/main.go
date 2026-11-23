@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"sync"
@@ -42,7 +45,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: swift2go [flags] dump|transpile|stats <Target> [<TestTarget>]")
 		flag.PrintDefaults()
 	}
+	cpuprofile := flag.String("cpuprofile", os.Getenv("SWIFT2GO_CPUPROFILE"), "write a CPU profile of the run to `file` (default from SWIFT2GO_CPUPROFILE)")
 	flag.Parse()
+	if os.Getenv("GOGC") == "" {
+		// The run keeps every target's AST live; collecting less often saves a fifth of a run that emits little.
+		debug.SetGCPercent(400)
+	}
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile) //nolint:gosec // the file the user named
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "swift2go:", err)
+			os.Exit(2)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintln(os.Stderr, "swift2go:", err)
+			os.Exit(2)
+		}
+		defer pprof.StopCPUProfile()
+	}
 	if flag.NArg() < 2 {
 		flag.Usage()
 		os.Exit(2)
@@ -55,10 +75,13 @@ func main() {
 	if *buildDir == "" {
 		*buildDir = swiftmod.BuildDir(*pkgDir, dest)
 	}
+	start := time.Now()
 	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays, *incremental, *strict, dest, xcc...); err != nil {
 		fmt.Fprintln(os.Stderr, "swift2go:", err)
+		pprof.StopCPUProfile()
 		os.Exit(1)
 	}
+	fmt.Fprintf(os.Stderr, "swift2go: ran in %s\n", time.Since(start).Round(time.Millisecond))
 }
 
 // mapFlag collects -map Module=importpath pairs.
@@ -152,6 +175,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 		mappings[i].Requirements = reqs
 	}
 	searchDirs := []string{mods, swiftmod.ModulesDir(buildDir, dest)}
+	modules := &moduleJobs{jobs: map[string]*moduleJob{}}
 	emitted := map[string]bool{}
 	ifaces := map[string]string{}
 	load := func(t swiftmod.Target) ([]ast.File, error) {
@@ -162,7 +186,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			return nil, err
 		}
 		if incremental {
-			c := cachedLoad{t: t, targets: targets, outDir: outDir, mods: mods, searchDirs: searchDirs, extra: extra, strict: strict}
+			c := cachedLoad{modules: modules, t: t, targets: targets, outDir: outDir, mods: mods, searchDirs: searchDirs, extra: extra, strict: strict}
 			return c.load(ifaces, emitted)
 		}
 		if t.Type != "test" {
@@ -209,7 +233,9 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			fmt.Fprintf(os.Stderr, "swift2go: skipping %s: it depends on %s, which failed\n", name, failed[dep])
 			continue
 		}
+		loadStart := time.Now()
 		files, err := load(t)
+		loaded := time.Since(loadStart)
 		if err != nil {
 			fail(name, err)
 			continue
@@ -229,6 +255,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 		if dest.CorelibsFoundation() {
 			opts = append(opts, emit.CorelibsFoundation())
 		}
+		newStart := time.Now()
 		m, err := emit.New(name, files, rtPath, opts...)
 		if err != nil {
 			fail(name, err)
@@ -275,12 +302,14 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			}
 		}
 		m.ImportPath = path.Join(goModule, filepath.ToSlash(pkgOut))
+		indexed := time.Since(newStart)
+		writeStart := time.Now()
 		if _, err := m.WriteGo(pkgOut); err != nil {
 			fail(name, err)
 			continue
 		}
 		if incremental {
-			fmt.Fprintf(os.Stderr, "swift2go: %s: kept %d of %d Go files\n", name, m.Reused, len(m.Files))
+			fmt.Fprintf(os.Stderr, "swift2go: %s: kept %d of %d Go files (loaded in %s, indexed in %s, wrote in %s)\n", name, m.Reused, len(m.Files), loaded.Round(time.Millisecond), indexed.Round(time.Millisecond), time.Since(writeStart).Round(time.Millisecond))
 		}
 		if len(m.Stale) > 0 {
 			fail(name, fmt.Errorf("the incremental run would have kept Go files that emitting changes: %s", strings.Join(m.Stale, ", ")))
@@ -292,14 +321,68 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			byName[name] = m
 		}
 	}
+	if err := modules.waitAll(); err != nil {
+		return err
+	}
 	if len(failures) > 0 {
 		return fmt.Errorf("%d of %d targets not transpiled: %s", len(failures), len(names), strings.Join(failures, ", "))
 	}
 	return nil
 }
 
+// moduleJobs are the module emissions an incremental run started, by target.
+type moduleJobs struct {
+	mu   sync.Mutex
+	jobs map[string]*moduleJob
+}
+
+type moduleJob struct {
+	done chan struct{}
+	err  error
+}
+
+// start emits a target's module in the background.
+func (m *moduleJobs) start(target string, emit func() error) {
+	j := &moduleJob{done: make(chan struct{})}
+	m.mu.Lock()
+	m.jobs[target] = j
+	m.mu.Unlock()
+	go func() {
+		defer close(j.done)
+		if err := emit(); err != nil {
+			j.err = fmt.Errorf("%s's module: %w", target, err)
+		}
+	}()
+}
+
+// waitAll waits for every module emission and returns the first error.
+func (m *moduleJobs) waitAll() error {
+	m.mu.Lock()
+	targets := slices.Sorted(maps.Keys(m.jobs))
+	m.mu.Unlock()
+	return m.wait(targets)
+}
+
+// wait waits for the modules of the targets being emitted and returns the first error.
+func (m *moduleJobs) wait(targets []string) error {
+	for _, t := range targets {
+		m.mu.Lock()
+		j := m.jobs[t]
+		m.mu.Unlock()
+		if j == nil {
+			continue
+		}
+		<-j.done
+		if j.err != nil {
+			return j.err
+		}
+	}
+	return nil
+}
+
 // cachedLoad loads a target's AST through the cache under OUT/.cache/<Target>.
 type cachedLoad struct {
+	modules    *moduleJobs
 	t          swiftmod.Target
 	targets    map[string]swiftmod.Target
 	outDir     string
@@ -327,7 +410,17 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 	if c.strict {
 		env += "\x00strict"
 	}
-	dump, err := swiftmod.DumpCached(cacheDir, env, d.Sources, d.Dump)
+	// The frontend reads the modules of the target's dependencies, which may still be being emitted.
+	var waited sync.Once
+	var waitErr error
+	dumpFiles := func(primaries []int, copies map[int]string) ([]swiftmod.FileDump, error) {
+		waited.Do(func() { waitErr = c.modules.wait(transitiveDeps(t, c.targets)) })
+		if waitErr != nil {
+			return nil, waitErr
+		}
+		return d.Dump(primaries, copies)
+	}
+	dump, err := swiftmod.DumpCached(cacheDir, env, d.Sources, dumpFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -337,15 +430,20 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 		stamp := filepath.Join(cacheDir, "module.stamp")
 		want := env + "\x00" + dump.Interface
 		if old, err := os.ReadFile(stamp); err != nil || string(old) != want || !fileExists(filepath.Join(c.mods, t.Name+".swiftmodule")) {
-			start := time.Now()
 			_ = os.Remove(stamp)
-			if err := swiftmod.EmitModule(t, c.mods, c.extra...); err != nil {
-				return nil, err
-			}
-			if err := os.WriteFile(stamp, []byte(want), 0o644); err != nil {
-				return nil, err
-			}
-			fmt.Fprintf(os.Stderr, "swift2go: %s: emitted its module in %s\n", t.Name, time.Since(start).Round(time.Millisecond))
+			deps := transitiveDeps(t, c.targets)
+			// The target's Go is emitted meanwhile; only the targets that import it wait for its module.
+			c.modules.start(t.Name, func() error {
+				if err := c.modules.wait(deps); err != nil {
+					return err
+				}
+				start := time.Now()
+				if err := swiftmod.EmitModule(t, c.mods, c.extra...); err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "swift2go: %s: emitted its module in %s\n", t.Name, time.Since(start).Round(time.Millisecond))
+				return os.WriteFile(stamp, []byte(want), 0o644)
+			})
 		}
 		emitted[t.Name] = true
 	}
@@ -424,6 +522,27 @@ func foreignMappings(maps mapFlag, names []string) ([]emit.Mapping, error) {
 		out = append(out, emit.Mapping{Module: mod, ImportPath: maps[mod], Package: pkg, Exports: exports, Generic: generic})
 	}
 	return out, nil
+}
+
+// transitiveDeps lists the targets t depends on, directly or not.
+func transitiveDeps(t swiftmod.Target, targets map[string]swiftmod.Target) []string {
+	seen := map[string]bool{}
+	var out []string
+	var visit func(names []string)
+	visit = func(names []string) {
+		for _, n := range names {
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			out = append(out, n)
+			if d, ok := targets[n]; ok {
+				visit(d.AllDeps())
+			}
+		}
+	}
+	visit(t.AllDeps())
+	return out
 }
 
 // failedDep returns a dependency of t, direct or not, that has failed in this run.
