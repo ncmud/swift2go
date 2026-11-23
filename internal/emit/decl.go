@@ -606,7 +606,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				continue
 			}
 			for _, pm := range append([]*Module{e.m}, e.m.Deps...) {
-				for _, d := range pm.sortedDecls() {
+				for _, d := range pm.membersOf(other) {
 					if d.ProtoExt && d.Owner == other && d.Kind == "func_decl" && funcSignatureKey(d.Node) == funcSignatureKey(impl) && e.m.extensionApplies(d.Node, q, other, pm) {
 						return true
 					}
@@ -627,7 +627,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 			e.propertyGetters(n, nil, q, proto, conformed, pm, pfx)
 			e.staticForwarders(q, proto, conformed, pm, pfx)
 			e.initForwarders(q, proto, pm, pfx)
-			for _, info := range pm.sortedDecls() {
+			for _, info := range pm.membersOf(proto) {
 				if !info.ProtoExt || info.Owner != proto || info.Kind != "func_decl" || defined[funcSignatureKey(info.Node)] {
 					continue
 				}
@@ -720,7 +720,7 @@ func (m *Module) extensionApplies(fn ast.Node, q, proto string, pm *Module) bool
 func (e *fileEmitter) descriptionMarkers(q, recvT string) {
 	has := func(name string) bool {
 		for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-			for _, d := range mod.sortedDecls() {
+			for _, d := range mod.membersOf(q) {
 				if d.Owner == q && !d.Static && d.Node != nil && d.Node.Name() == name && (d.Kind == "var_decl" || d.Kind == "func_decl" && len(d.Node.Child("params").List("params")) == 0) {
 					return true
 				}
@@ -2575,7 +2575,7 @@ func (e *fileEmitter) propertyGetters(n ast.Node, self *DeclInfo, q, proto strin
 			if mod.Pkg != e.m.Pkg {
 				mpfx = mod.Pkg + "."
 			}
-			for _, d := range mod.sortedDecls() {
+			for _, d := range mod.declsNamed(name) {
 				if d.Kind != "var_decl" || d.Node == nil || d.Node.Name() != name || d.NotWitness {
 					continue
 				}
@@ -2777,7 +2777,7 @@ func (e *fileEmitter) initForwarders(q, proto string, pm *Module, pfx string) {
 			if mod.Pkg != e.m.Pkg {
 				mpfx = mod.Pkg + "."
 			}
-			for _, d := range mod.sortedDecls() {
+			for _, d := range mod.membersOf(q) {
 				if d.Kind != "constructor_decl" || d.Owner != q || d.Node == nil || strings.Join(paramLabels(d.Node), ":") != labels {
 					continue
 				}
@@ -2836,7 +2836,7 @@ func (e *fileEmitter) staticForwarders(q, proto string, conformed []string, pm *
 			if mod.Pkg != e.m.Pkg {
 				mpfx = mod.Pkg + "."
 			}
-			for _, d := range mod.sortedDecls() {
+			for _, d := range mod.declsNamed(r.Name()) {
 				if d.Kind != r.Kind() || !d.Static || d.Node == nil || d.Node.Name() != r.Name() {
 					continue
 				}
