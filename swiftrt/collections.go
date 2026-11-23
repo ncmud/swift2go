@@ -358,13 +358,62 @@ func MapOrdered[K comparable, V any](m map[K]V) []struct {
 }
 
 // SortKeys orders map keys deterministically: numerically or lexically when the key is ordered, else by description.
-func SortKeys[K comparable](keys []K) {
-	slices.SortFunc(keys, func(a, b K) int {
-		if c, ok := compareOrdered(a, b); ok {
+func SortKeys[K comparable](keys []K) { sortDeterministic(keys) }
+
+// sortDeterministic is SortKeys for elements of any type.
+func sortDeterministic[T any](xs []T) {
+	if len(xs) < 2 {
+		return
+	}
+	switch s := any(xs).(type) {
+	case []int:
+		slices.Sort(s)
+		return
+	case []int64:
+		slices.Sort(s)
+		return
+	case []int32:
+		slices.Sort(s)
+		return
+	case []uint64:
+		slices.Sort(s)
+		return
+	case []uint32:
+		slices.Sort(s)
+		return
+	case []uint8:
+		slices.Sort(s)
+		return
+	case []string:
+		slices.Sort(s)
+		return
+	}
+	if _, ordered := compareOrdered(xs[0], xs[0]); ordered {
+		slices.SortFunc(xs, func(a, b T) int {
+			if c, ok := compareOrdered(a, b); ok {
+				return c
+			}
+			return cmp.Compare(Str(a), Str(b))
+		})
+		return
+	}
+	// Describe each element once, not on every comparison.
+	descs := make([]string, len(xs))
+	order := make([]int, len(xs))
+	for i, x := range xs {
+		descs[i], order[i] = Str(x), i
+	}
+	slices.SortFunc(order, func(i, j int) int {
+		if c, ok := compareOrdered(xs[i], xs[j]); ok {
 			return c
 		}
-		return cmp.Compare(Str(a), Str(b))
+		return cmp.Compare(descs[i], descs[j])
 	})
+	sorted := make([]T, len(xs))
+	for k, i := range order {
+		sorted[k] = xs[i]
+	}
+	copy(xs, sorted)
 }
 
 // compareAny orders two values of a Go-ordered kind. It panics on any other kind, whose Swift ordering

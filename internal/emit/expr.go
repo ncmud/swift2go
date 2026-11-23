@@ -33,6 +33,15 @@ func (e *fileEmitter) wrapSlots(n ast.Node, call string, mark int) string {
 	return "func() " + rt + " {\n" + pre.String() + "res := " + call + "\n" + wb.String() + "return res\n}()"
 }
 
+// elements is a one-element-type collection t's elements as a slice. A Set's come in the order a for-in
+// loop over it visits them.
+func (e *fileEmitter) elements(t *types.Type, src string) string {
+	if e.m.Recv(t) == "Set" && strings.HasPrefix(e.m.GoType(t, e.generics), "map[") {
+		return "swiftrt.SetElements(" + src + ")"
+	}
+	return "swiftrt.Iterate[" + e.m.GoType(t.Args[0], e.generics) + "](" + src + ")"
+}
+
 func (e *fileEmitter) expr(n ast.Node) string {
 	if v, ok := e.exprSubst[nodeKey(n)]; ok && n != nil {
 		return v
@@ -2375,7 +2384,7 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 			// A Set passed to a generic Sequence parameter, which is a slice here.
 			if pt := e.m.typeOf(params[i].Str("interface_type")); isGenericParam(pt) && sequenceParam(e.m, callee.Node, pt) {
 				if at := e.m.typeOf(a.node.Type()); at != nil && e.m.Recv(at) == "Set" && len(at.Args) == 1 {
-					s = "swiftrt.Iterate[" + e.m.GoType(at.Args[0], e.generics) + "](" + s + ")"
+					s = e.elements(at, s)
 				}
 			}
 		}
@@ -2761,19 +2770,19 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		// Sequence.filter (chosen over Set.filter when the context wants an Array) returns an Array.
 		if bt := e.m.typeOf(base.Type()); bt != nil && e.m.Recv(bt) == "Set" && len(bt.Args) == 1 {
 			ss, _ := e.argStrings(as, false)
-			return "swiftrt.SliceFilter(swiftrt.Iterate[" + e.m.GoType(bt.Args[0], e.generics) + "](" + e.expr(base) + "), " + ss[0] + ")"
+			return "swiftrt.SliceFilter(" + e.elements(bt, e.expr(base)) + ", " + ss[0] + ")"
 		}
 	}
 	refSuffix := ""
 	if bt := e.m.typeOf(base.Type()); base != nil && len(as) == 0 && (d.Str("base_name") == "max" || d.Str("base_name") == "min") && bt != nil && len(bt.Args) == 1 && (e.m.Recv(bt) == "Slice" || e.m.Recv(bt) == "Set") {
 		if less := e.lessFunc(bt.Args[0]); less != "" {
-			return "swiftrt.Slice" + capitalize(d.Str("base_name")) + "By(swiftrt.Iterate[" + e.m.GoType(bt.Args[0], e.generics) + "](" + e.expr(base) + "), " + less + ")"
+			return "swiftrt.Slice" + capitalize(d.Str("base_name")) + "By(" + e.elements(bt, e.expr(base)) + ", " + less + ")"
 		}
 	}
 	if bt := e.m.typeOf(base.Type()); base != nil && len(as) == 0 && d.Str("base_name") == "sorted" && bt != nil && len(bt.Args) == 1 && (e.m.Recv(bt) == "Slice" || e.m.Recv(bt) == "Set") {
 		// sorted() orders by the element type's own `<`.
 		if less := e.lessFunc(bt.Args[0]); less != "" && less != "swiftrt.Int128Less" {
-			return "swiftrt.SliceSortedBy(swiftrt.Iterate[" + e.m.GoType(bt.Args[0], e.generics) + "](" + e.expr(base) + "), " + less + ")"
+			return "swiftrt.SliceSortedBy(" + e.elements(bt, e.expr(base)) + ", " + less + ")"
 		}
 	}
 	if base != nil && e.m.Recv(e.m.typeOf(base.Type())) == "Set" && len(as) == 1 && as[0].label == "" && e.m.Recv(e.m.typeOf(as[0].node.Type())) == "Set" {
@@ -2927,6 +2936,9 @@ func (e *fileEmitter) nativeMethod(recv, base string, self ast.Node, kept []arg,
 		elem := "any"
 		if t := e.m.typeOf(self.Child("sub_expr").Type()); t != nil && len(t.Args) == 1 {
 			elem = e.m.GoType(t.Args[0], e.generics)
+		}
+		if at := e.m.typeOf(kept[0].node.Type()); at != nil && e.m.Recv(at) == "Set" && len(at.Args) == 1 {
+			return lv + " = append(" + lv + ", " + e.elements(at, ss[0]) + "...)", true
 		}
 		return lv + " = append(" + lv + ", swiftrt.Iterate[" + elem + "](" + ss[0] + ")...)", true
 	case recv == "String" && base == "append" && len(kept) == 1 && self.Kind() == "inout_expr" && kept[0].label == "":
@@ -3480,7 +3492,11 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			rs := e.expr(r)
 			if lg, rg := e.m.GoType(lt, e.generics), e.exprGoType(r); strings.HasPrefix(lg, "[]") && !strings.HasPrefix(rg, "[]") {
 				// `array + sequence`: the other sequence (a lazy one, a Set) is read into a slice.
-				rs = "swiftrt.Iterate[" + lg[2:] + "](" + rs + ")"
+				if rt := e.m.typeOf(r.Type()); rt != nil && e.m.Recv(rt) == "Set" && len(rt.Args) == 1 {
+					rs = e.elements(rt, rs)
+				} else {
+					rs = "swiftrt.Iterate[" + lg[2:] + "](" + rs + ")"
+				}
 			}
 			return "swiftrt.Concat(" + e.expr(l) + ", " + rs + ")"
 		}

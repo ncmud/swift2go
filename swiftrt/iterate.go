@@ -3,7 +3,6 @@ package swiftrt
 import (
 	"fmt"
 	"reflect"
-	"slices"
 	"strings"
 )
 
@@ -32,14 +31,14 @@ func Iterate[T any](seq any) []T {
 		}
 		return out
 	case reflect.Map:
-		keys := rv.MapKeys()
-		slices.SortFunc(keys, func(a, b reflect.Value) int { return strings.Compare(fmt.Sprint(a), fmt.Sprint(b)) })
-		out := make([]T, 0, len(keys))
-		for _, k := range keys {
-			if v, ok := k.Interface().(T); ok {
+		// A Set, in the order SetElements gives its elements.
+		out := make([]T, 0, rv.Len())
+		for it := rv.MapRange(); it.Next(); {
+			if v, ok := it.Key().Interface().(T); ok {
 				out = append(out, v)
 			}
 		}
+		sortDeterministic(out)
 		return out
 	case reflect.Struct:
 		if out, ok := iterateIntegerRange[T](rv); ok {
