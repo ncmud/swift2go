@@ -90,9 +90,76 @@ public func greeting() -> String {
 }
 `,
 		"Sources/App/Other.swift": "func helper() -> Int { 42 }\n",
+		"Sources/Core/Point.swift": `public struct Point {
+    public var x: Int
+    public var y: Int
+    public init(x: Int, y: Int) { self.x = x; self.y = y }
+}
+`,
+		"Sources/App/Shapes.swift": `import Core
+
+func origin() -> Point { Point(x: 0, y: 0) }
+`,
+		"Sources/Core/Find.swift": `public struct Spot {
+    public var n: Int
+    public init(n: Int) { self.n = n }
+}
+
+public func findSpot() -> Spot? { Spot(n: 1) }
+`,
+		"Sources/App/Find.swift": `import Core
+
+func spotN() -> Int { findSpot()?.n ?? 0 }
+`,
+		"Sources/Core/Kinds.swift": `public enum Suit { case hearts, spades }
+
+public typealias Coord = Int
+
+public protocol Named { var name: String { get } }
+
+public final class Tally {
+    public var total: Int = 0
+    public init() {}
+    public func step() -> Int { 1 }
+    public static func make() -> Tally { Tally() }
+}
+
+public func pick<T>(_ x: T) -> T { x }
+
+public func load() -> Int { 1 }
+`,
+		"Sources/App/Kinds.swift": `import Core
+
+func suitName(_ s: Suit) -> String {
+    switch s {
+    case .hearts: return "h"
+    default: return "other"
+    }
+}
+
+func coord() -> Coord { 3 }
+
+struct Tag: Named { var name: String { "tag" } }
+
+func tagName() -> String { Tag().name }
+
+func tally() -> Int {
+    let t = Tally.make()
+    t.step()
+    return pick(t.step())
+}
+
+func totalText() -> String { "\(Tally().total)" }
+
+func loaded() -> Int { load() }
+`,
 	}
 	for name, src := range files {
 		writeSource(t, filepath.Join(pkgDir, name), src)
+	}
+	overlay := filepath.Join(pkgDir, "overlay", "core")
+	if err := os.MkdirAll(overlay, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	t.Chdir("../..")
 	outDir := filepath.Join("out", "incrementaltest")
@@ -105,7 +172,7 @@ public func greeting() -> String {
 		t.Helper()
 		var err error
 		log = captureStderr(t, func() {
-			err = run("transpile", targets, pkgDir, dir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{}, incremental, swiftmod.Destination{})
+			err = run("transpile", targets, pkgDir, dir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{"Core": overlay}, incremental, swiftmod.Destination{})
 		})
 		if err != nil {
 			t.Fatalf("%v\n%s", err, log)
@@ -134,44 +201,55 @@ public func greeting() -> String {
 
 	const all = -1 // every Go file of the target
 	steps := []struct {
-		name, file, old, new string         // old is "" for a new file; new is "" to remove the file
+		name, file, old, new string         // an edit (see [edit])
 		emits                []string       // the targets whose modules are emitted again
 		emitsGo              map[string]int // the number of Go files each target writes again
 		changes              []string       // Go files of other Swift files whose content must change
+		also                 []edit         // edits made in other files at the same time
 	}{
-		{"a body edit", "Sources/App/App.swift", `"hello "`, `"hi "`, nil, map[string]int{"Core": 0, "App": 1}, nil},
-		{"a body edit in a dependency", "Sources/Core/Counter.swift", "count += 1", "count += 2", nil, map[string]int{"Core": 1, "App": 0}, nil},
-		{"a new initial value of the same type", "Sources/Core/Names.swift", `"core"`, `"kernel"`, nil, map[string]int{"Core": 1, "App": 0}, nil},
+		{"a body edit", "Sources/App/App.swift", `"hello "`, `"hi "`, nil, map[string]int{"Core": 0, "App": 1}, nil, nil},
+		{"a body edit in a dependency", "Sources/Core/Counter.swift", "count += 1", "count += 2", nil, map[string]int{"Core": 1, "App": 0}, nil, nil},
+		{"a new initial value of the same type", "Sources/Core/Names.swift", `"core"`, `"kernel"`, nil, map[string]int{"Core": 1, "App": 0}, nil, nil},
 		// Callers lend a class's property to total without a copy only while total cannot write it.
-		{"a function that starts writing shared state", "Sources/Core/Effects.swift", "return xs", "note(xs.count)\n    return xs", nil, map[string]int{"Core": 2, "App": 1}, []string{"core/use.go", "app/use.go"}},
-		{"a function that stops writing shared state", "Sources/Core/Effects.swift", "note(xs.count)\n    return xs", "return xs", nil, map[string]int{"Core": 2, "App": 1}, []string{"core/use.go", "app/use.go"}},
+		{"a function that starts writing shared state", "Sources/Core/Effects.swift", "return xs", "note(xs.count)\n    return xs", nil, map[string]int{"Core": 2, "App": 1}, []string{"core/use.go", "app/use.go"}, nil},
+		{"a function that stops writing shared state", "Sources/Core/Effects.swift", "note(xs.count)\n    return xs", "return xs", nil, map[string]int{"Core": 2, "App": 1}, []string{"core/use.go", "app/use.go"}, nil},
 		// The synthesized initializer's callers spell out the default.
-		{"a new default for a stored property", "Sources/Core/Options.swift", `"a"`, `"b"`, nil, map[string]int{"Core": 2, "App": 0}, []string{"core/use.go"}},
+		{"a new default for a stored property", "Sources/Core/Options.swift", `"a"`, `"b"`, nil, map[string]int{"Core": 2, "App": 0}, []string{"core/use.go"}, nil},
 		// Hoisted generic local functions are numbered across the files of the module.
-		{"a new hoisted local function", "Sources/App/Hoist1.swift", "    return (same(1)", "    func twice<U>(_ u: U) -> [U] { [u, u] }\n    return (same(twice(1)[0])", nil, map[string]int{"Core": 0, "App": 2}, []string{"app/hoist2.go"}},
+		{"a new hoisted local function", "Sources/App/Hoist1.swift", "    return (same(1)", "    func twice<U>(_ u: U) -> [U] { [u, u] }\n    return (same(twice(1)[0])", nil, map[string]int{"Core": 0, "App": 2}, []string{"app/hoist2.go"}, nil},
 		// A global with an initializer that is not a literal is initialized lazily, and read through a cell.
-		{"an initial value that is not a literal", "Sources/Core/Names.swift", `"kernel"`, `String("kernel")`, nil, map[string]int{"Core": all, "App": all}, []string{"core/counter.go"}},
-		{"a new type for a variable another file uses", "Sources/Core/Names.swift", `String("kernel")`, `7`, []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil},
-		{"a new declaration in a dependency", "Sources/Core/Names.swift", "7\n", "7\npublic func shout(_ s: String) -> String { s + \"!\" }\n", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil},
-		{"a use of the new declaration", "Sources/App/App.swift", `return "hi "`, `return shout("hi") + " "`, nil, map[string]int{"Core": 0, "App": 1}, nil},
-		{"a new file", "Sources/App/Extra.swift", "", "func extra() -> Int { helper() + 1 }\n", []string{"App"}, map[string]int{"Core": 0, "App": all}, nil},
-		{"a removed file", "Sources/App/Extra.swift", "func extra", "", []string{"App"}, map[string]int{"Core": 0, "App": all}, nil},
+		{"an initial value that is not a literal", "Sources/Core/Names.swift", `"kernel"`, `String("kernel")`, nil, map[string]int{"Core": all, "App": all}, []string{"core/counter.go"}, nil},
+		{"a new type for a variable another file uses", "Sources/Core/Names.swift", `String("kernel")`, `7`, []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a new declaration in a dependency", "Sources/Core/Names.swift", "7\n", "7\npublic func shout(_ s: String) -> String { s + \"!\" }\n", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a use of the new declaration", "Sources/App/App.swift", `return "hi "`, `return shout("hi") + " "`, nil, map[string]int{"Core": 0, "App": 1}, nil, nil},
+		// The Go of a call to another target's initializer passes its defaults and depends on its parameters.
+		{"a new defaulted parameter of an initializer another target calls", "Sources/Core/Point.swift", "init(x: Int, y: Int) { self.x = x; self.y = y }", "init(x: Int, y: Int, z: Int = 3) { self.x = x; self.y = y + z }", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, []string{"app/shapes.go"}, nil},
+		{"a new default argument", "Sources/Core/Point.swift", "z: Int = 3", "z: Int = 4", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, []string{"app/shapes.go"}, nil},
+		{"a new argument label", "Sources/Core/Point.swift", "init(x: Int,", "init(left x: Int,", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, []edit{{"Sources/App/Shapes.swift", "Point(x: 0", "Point(left: 0"}}},
+		{"a new parameter type", "Sources/Core/Point.swift", "y: Int, z: Int = 4) { self.x = x; self.y = y + z }", "y: Int?, z: Int = 4) { self.x = x; self.y = (y ?? 0) + z }", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, []string{"app/shapes.go"}, nil},
+		// Declarations another target uses.
+		{"a new enum case", "Sources/Core/Kinds.swift", "case hearts, spades }", "case hearts, spades, clubs }", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a new type for a typealias", "Sources/Core/Kinds.swift", "Coord = Int\n", "Coord = Int32\n", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, []string{"app/kinds.go"}, nil},
+		{"a new protocol requirement with a default", "Sources/Core/Kinds.swift", "var name: String { get } }", "var name: String { get }; func greet() -> String }\n\nextension Named { public func greet() -> String { \"hi \" + name } }", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a new @discardableResult", "Sources/Core/Kinds.swift", "public func step()", "@discardableResult public func step()", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a new property type", "Sources/Core/Kinds.swift", "total: Int = 0", "total: Double = 0", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a new generic constraint", "Sources/Core/Kinds.swift", "pick<T>(", "pick<T: Equatable>(", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a new access level", "Sources/Core/Kinds.swift", "public func load()", "package func load()", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, nil},
+		{"a static method made an instance method", "Sources/Core/Kinds.swift", "public static func make()", "public func make()", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, []edit{{"Sources/App/Kinds.swift", "Tally.make()", "Tally().make()"}}},
+		{"a function that starts throwing", "Sources/Core/Kinds.swift", "func load() -> Int", "func load() throws -> Int", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, []edit{{"Sources/App/Kinds.swift", "{ load() }", "{ (try? load()) ?? 0 }"}}},
+		{"an async function", "Sources/Core/Kinds.swift", "func load() throws", "func load() async throws", []string{"Core", "App"}, map[string]int{"Core": all, "App": all}, nil, []edit{{"Sources/App/Kinds.swift", "func loaded() -> Int { (try? load())", "func loaded() async -> Int { (try? await load())"}}},
+		// A caller takes the Optional result of a function an overlay replaces in its pointer form.
+		{"a new overlay file in a dependency", "overlay/core/find.go", "", "package core\n\nfunc FindSpot() *Spot { return \u0026Spot{N: 1} }\n", nil, map[string]int{"Core": all, "App": all}, []string{"app/find.go"}, nil},
+		{"a removed overlay file in a dependency", "overlay/core/find.go", "package core", "", nil, map[string]int{"Core": all, "App": all}, []string{"app/find.go"}, nil},
+		// Go declares the methods of a conformance where the type is, in the dependency's package.
+		{"a new retroactive conformance", "Sources/App/Retro.swift", "", "import Core\n\nprotocol Describes { func describeIt() -> String }\n\nextension Counter: Describes { func describeIt() -> String { \"c\" } }\n", []string{"App"}, map[string]int{"Core": 0, "App": all}, nil, nil},
+		{"a removed retroactive conformance", "Sources/App/Retro.swift", "import Core", "", []string{"App"}, map[string]int{"Core": 0, "App": all}, nil, nil},
+		{"a new file", "Sources/App/Extra.swift", "", "func extra() -> Int { helper() + 1 }\n", []string{"App"}, map[string]int{"Core": 0, "App": all}, nil, nil},
+		{"a removed file", "Sources/App/Extra.swift", "func extra", "", []string{"App"}, map[string]int{"Core": 0, "App": all}, nil, nil},
 	}
 	for _, step := range steps {
-		path := filepath.Join(pkgDir, step.file)
-		src, err := os.ReadFile(path)
-		if err != nil && step.old != "" {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(src), step.old) {
-			t.Fatalf("%s: %s does not contain %q", step.name, step.file, step.old)
-		}
-		if step.new == "" {
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		} else {
-			writeSource(t, path, strings.Replace(string(src), step.old, step.new, 1))
+		for _, e := range append([]edit{{step.file, step.old, step.new}}, step.also...) {
+			e.apply(t, pkgDir, step.name)
 		}
 		before := map[string]time.Time{}
 		for _, target := range targets {
@@ -212,6 +290,29 @@ public func greeting() -> String {
 			}
 		}
 	}
+}
+
+// An edit replaces old with new in a file of the package; old is "" for a new file, and new is "" to
+// remove the file.
+type edit struct{ file, old, new string }
+
+func (e edit) apply(t *testing.T, pkgDir, step string) {
+	t.Helper()
+	path := filepath.Join(pkgDir, e.file)
+	src, err := os.ReadFile(path)
+	if err != nil && e.old != "" {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), e.old) {
+		t.Fatalf("%s: %s does not contain %q", step, e.file, e.old)
+	}
+	if e.new == "" {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	writeSource(t, path, strings.Replace(string(src), e.old, e.new, 1))
 }
 
 var keptLine = regexp.MustCompile(`swift2go: (\w+): kept (\d+) of (\d+) Go files`)
