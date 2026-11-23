@@ -36,3 +36,14 @@ struct LedgerTests {
     #expect(Ledger.current == nil)
     #expect(Dispatch.current == nil)
 }
+
+@Suite(.ledger("outer"))
+enum Outer {}
+
+extension Outer {
+    @Suite struct Inner {
+        @Test func outerSuiteScopeReachesNestedSuites() {
+            #expect(Ledger.active.entries == ["outer"])
+        }
+    }
+}

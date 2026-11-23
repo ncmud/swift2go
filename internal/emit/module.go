@@ -71,6 +71,7 @@ type Module struct {
 	Test            bool     // transpiling a test target into the package under test
 	Target          string
 	dm              *types.Demangler
+	typesByQName    map[string]*DeclInfo
 	decls           map[string]*DeclInfo
 	sorted          []*DeclInfo       // decls ordered by key, built on first use after a change to decls
 	typeKinds       map[string]string // qualified Swift type name → decl kind
@@ -855,6 +856,23 @@ func patternName(p ast.Node) string {
 		}
 	}
 	return ""
+}
+
+// typeDecl is the declaration of the module's type with qualified name q, or nil.
+func (m *Module) typeDecl(q string) *DeclInfo {
+	if q == "" {
+		return nil
+	}
+	if m.typesByQName == nil {
+		m.typesByQName = map[string]*DeclInfo{}
+		for _, d := range m.sortedDecls() {
+			switch d.Kind {
+			case "struct_decl", "class_decl", "enum_decl":
+				m.typesByQName[m.typeQName(d)] = d
+			}
+		}
+	}
+	return m.typesByQName[q]
 }
 
 // typeQName is the qualified name of the type that info declares.

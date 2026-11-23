@@ -42,3 +42,10 @@ public struct UnderscoredFields {
 
     public func _describe() -> String { "\(_type)/\(_class)" }
 }
+
+/// A Hashable struct with an Optional field, used as a Set element by another module.
+public struct BaseFlaggedAct: Hashable {
+    public var name: String
+    public var vnum: Int?
+    public init(name: String, vnum: Int?) { self.name = name; self.vnum = vnum }
+}

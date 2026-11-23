@@ -58,5 +58,12 @@ func typeName(t reflect.Type) string {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
+	// A generated type knows its Swift name; a nested type's Go name is its owners' and its own run together.
+	if t.Kind() != reflect.Interface && t.Name() != "" {
+		if n, ok := reflect.New(t).Interface().(SwiftNamed); ok {
+			name := n.SwiftTypeName()
+			return name[strings.LastIndexByte(name, '.')+1:]
+		}
+	}
 	return t.Name()
 }

@@ -1687,9 +1687,15 @@ func (e *fileEmitter) goTest(n ast.Node, info *DeclInfo, self *DeclInfo) {
 // the suite's outermost. The other traits of the Testing module, such as `.serialized` and `.timeLimit`, change
 // nothing in Go.
 func (e *fileEmitter) testTraits(fn ast.Node, self *DeclInfo) (skips string, scopes []string) {
+	// The traits of the enclosing suites come first, outermost first: a suite's traits reach every test
+	// nested in it.
+	var suites []*DeclInfo
+	for d := self; d != nil && d.Node != nil; d = e.m.typeDecl(d.Owner) {
+		suites = append([]*DeclInfo{d}, suites...)
+	}
 	var attrs []ast.Node
-	if self != nil && self.Node != nil {
-		attrs = append(attrs, self.Node.List("attrs")...)
+	for _, d := range suites {
+		attrs = append(attrs, d.Node.List("attrs")...)
 	}
 	attrs = append(attrs, fn.List("attrs")...)
 	var b strings.Builder
