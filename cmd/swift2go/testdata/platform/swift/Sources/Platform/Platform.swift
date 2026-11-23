@@ -31,3 +31,16 @@ public func motd() -> String {
           let text = try? String(contentsOf: url, encoding: .utf8) else { return "none" }
     return text.trimmingCharacters(in: .whitespacesAndNewlines)
 }
+
+/// Writes a file to the temporary directory, backdates it, and reads back its modification time and size,
+/// which Foundation on Linux names as Swift statics and Darwin's imports from Objective-C.
+public func fileAttributes() -> String {
+    let path = NSTemporaryDirectory() + "platform-\(getpid()).txt"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    guard FileManager.default.createFile(atPath: path, contents: Data("hello".utf8)),
+          (try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000_000)], ofItemAtPath: path)) != nil,
+          let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+          let modified = attributes[.modificationDate] as? Date,
+          let size = attributes[.size] as? NSNumber else { return "none" }
+    return "\(Int(modified.timeIntervalSince1970)) \(size.intValue)"
+}
