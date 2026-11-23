@@ -615,6 +615,8 @@ func ErrorLocalizedDescription(err any) string {
 	switch e := v.(type) {
 	case NSError:
 		return e.Msg
+	case URLError:
+		return e.localizedDescription()
 	case CancellationError:
 		return "The operation could not be completed. (Swift.CancellationError error 1.)"
 	}
