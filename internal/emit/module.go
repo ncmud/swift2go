@@ -157,6 +157,8 @@ type Module struct {
 
 	// corelibsFoundation is set by [CorelibsFoundation].
 	corelibsFoundation bool
+	// sourceRoots is set by [SourceRoots].
+	sourceRoots []sourceRoot
 
 	// Interface identifies the module's declarations, as the AST cache fingerprints them. An
 	// incremental run sets it on the module and its dependencies.
@@ -457,6 +459,22 @@ func Dependencies(deps []*Module) Option {
 func CorelibsFoundation() Option {
 	return func(m *Module) { m.corelibsFoundation = true }
 }
+
+// SourceRoots names directories outside the package that hold Swift sources the target compiles, such as
+// generated resource-bundle accessors and build-tool plugin outputs, by the stable names the Go uses for
+// them in place of their absolute paths: roots maps each directory to its name.
+func SourceRoots(roots map[string]string) Option {
+	return func(m *Module) {
+		m.sourceRoots = nil
+		for _, dir := range slices.Sorted(maps.Keys(roots)) {
+			m.sourceRoots = append(m.sourceRoots, sourceRoot{dir: dir, name: roots[dir]})
+		}
+		// A root inside another is tried first.
+		slices.SortStableFunc(m.sourceRoots, func(a, b sourceRoot) int { return len(b.dir) - len(a.dir) })
+	}
+}
+
+type sourceRoot struct{ dir, name string }
 
 // New prepares a module: demangles every symbol and indexes declarations.
 func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module, error) {
