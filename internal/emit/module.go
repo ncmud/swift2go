@@ -1245,6 +1245,7 @@ func (m *Module) Unsup(kind, where, goType string) string {
 // its place, along with any other Go file in the directory.
 func (m *Module) WriteGo(dir string) ([]string, error) {
 	m.settleWitnessNames()
+	m.separateFieldsFromMethods()
 	m.outDir, m.retroFiles, m.retroDone = dir, map[string]*strings.Builder{}, map[string]bool{}
 	shadowedPkgs = map[string]bool{"swiftrt": true}
 	for _, d := range m.Deps {
@@ -1908,6 +1909,31 @@ func (m *Module) settleWitnessNames() {
 					}
 					witness.GoName = req.GoName
 				}
+			}
+		}
+	}
+}
+
+// separateFieldsFromMethods renames a property that shares its Go name with a method of the same type, as a
+// stored `kills` does beside the witness `kills(ofRun:)` of a protocol: Go has one namespace for a type's
+// fields and methods. The property takes a trailing underscore.
+func (m *Module) separateFieldsFromMethods() {
+	for _, t := range m.sortedDecls() {
+		switch t.Kind {
+		case "struct_decl", "class_decl", "enum_decl":
+		default:
+			continue
+		}
+		members := m.membersOf(m.typeQName(t))
+		methods := map[string]bool{}
+		for _, mem := range members {
+			if mem.Kind == "func_decl" && !mem.Static && !mem.FreeSelf() {
+				methods[mem.GoName] = true
+			}
+		}
+		for _, mem := range members {
+			if mem.Kind == "var_decl" && !mem.Static && methods[mem.GoName] {
+				mem.GoName += "_"
 			}
 		}
 	}

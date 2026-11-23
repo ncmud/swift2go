@@ -109,8 +109,8 @@ func CFStat(path *any, st *CStat) int32 {
 	return 0
 }
 
-// ContinuousClockNow is `ContinuousClock.now`.
-func ContinuousClockNow() ContinuousClockInstant { return InstantNow() }
+// ContinuousClockNow is `ContinuousClock.now`, read from the type or from a clock.
+func ContinuousClockNow(_ ...ContinuousClock) ContinuousClockInstant { return InstantNow() }
 
 // NSThreadCallStackSymbols is Foundation `Thread.callStackSymbols`: one line per frame of the
 // current goroutine's stack.

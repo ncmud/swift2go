@@ -88,3 +88,17 @@ func jsonSerializationData(obj any, options NSJSONWritingOptions) []byte {
 // JSONWritingOptions is Foundation `JSONSerialization.WritingOptions` under the name the emitter
 // gives it in option-set array literals.
 type JSONWritingOptions = NSJSONWritingOptions
+
+// NSDictionarySubscriptAny is NSDictionary's `subscript(_: Any) -> Any?`. The dictionaries JSONSerialization
+// makes are keyed by strings, so another key finds nothing.
+func NSDictionarySubscriptAny(d Dictionary, key any) *any {
+	k, ok := key.(string)
+	if !ok {
+		return nil
+	}
+	v, ok := d[k]
+	if !ok {
+		return nil
+	}
+	return &v
+}
