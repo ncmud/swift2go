@@ -1,0 +1,17 @@
+npc casts 3000
+goblin: isPC=false player=- hero=- tagged=- shop=-
+bonzo: isPC=true player=bonzo hero=- tagged=player bonzo shop=-
+ash: isPC=true player=ash hero=ash tagged=hero ash shop=-
+grocer: isPC=false player=- hero=- tagged=- shop=grocer
+rat: isPC=false player=- hero=- tagged=- shop=-
+character=goblin player=- pet=false familiar=-
+character=bonzo player=bonzo pet=false familiar=-
+character=ash player=ash pet=false familiar=-
+character=grocer player=- pet=false familiar=-
+character=rat player=- pet=false familiar=-
+character=- player=- pet=true familiar=-
+character=- player=- pet=true familiar=bonzo
+character=- player=- pet=false familiar=-
+character=- player=- pet=false familiar=-
+false false -
+true true hero ash

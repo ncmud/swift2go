@@ -9,8 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 )
 
 // Integer is every Go integer type a Swift integer maps to.
@@ -598,57 +596,19 @@ func classAs[T any](v any) (t T, ok, decided bool) {
 	if t, ok := d.(T); ok {
 		return t, true, true
 	}
-	i := baseIndex[T](d)
-	if i < 0 {
+	b, hasBases := d.(interface{ SwiftBase(i int) any })
+	if !hasBases || isNil(d) {
 		return t, false, true
 	}
-	t, ok = d.(interface{ SwiftBase(i int) any }).SwiftBase(i).(T)
-	return t, ok, true
-}
-
-type castKey struct{ from, to reflect.Type }
-
-var (
-	baseIndexMu sync.Mutex
-	// baseIndexes maps a class and a cast's target type to the index of the class's superclass part
-	// that is a T, or -1. It is replaced, never changed, so readers need no lock.
-	baseIndexes atomic.Pointer[map[castKey]int]
-)
-
-// baseIndex is the index of d's first superclass part that is a T, or -1. The
-// parts' types depend on d's class alone, so the answer is computed once for each class and T.
-func baseIndex[T any](d any) int {
-	key := castKey{reflect.TypeOf(d), reflect.TypeFor[T]()}
-	if m := baseIndexes.Load(); m != nil {
-		if i, ok := (*m)[key]; ok {
-			return i
-		}
-	}
-	b, ok := d.(interface{ SwiftBase(i int) any })
-	if !ok || isNil(d) {
-		return -1
-	}
-	i := -1
-	for j := 0; ; j++ {
-		p := b.SwiftBase(j)
+	for i := 0; ; i++ {
+		p := b.SwiftBase(i)
 		if p == nil {
-			break
+			return t, false, true
 		}
-		if _, ok := p.(T); ok {
-			i = j
-			break
-		}
-	}
-	baseIndexMu.Lock()
-	defer baseIndexMu.Unlock()
-	next := map[castKey]int{key: i}
-	if m := baseIndexes.Load(); m != nil {
-		for k, v := range *m {
-			next[k] = v
+		if t, ok := p.(T); ok {
+			return t, true, true
 		}
 	}
-	baseIndexes.Store(&next)
-	return i
 }
 
 // Ref boxes a struct value for an existential whose methods need a pointer receiver.
