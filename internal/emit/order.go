@@ -301,24 +301,64 @@ func depNames(m *Module) []string {
 	return names
 }
 
-// goBinaryOps are the Go binary operators a compound assignment can expand to.
+// goBinaryOps are the Go binary operators the emitter joins operands with.
 var goBinaryOps = map[string]token.Token{"+": token.ADD, "-": token.SUB, "*": token.MUL, "/": token.QUO, "%": token.REM,
-	"&": token.AND, "|": token.OR, "^": token.XOR, "<<": token.SHL, ">>": token.SHR}
+	"&": token.AND, "|": token.OR, "^": token.XOR, "<<": token.SHL, ">>": token.SHR, "&^": token.AND_NOT,
+	"==": token.EQL, "!=": token.NEQ, "<": token.LSS, "<=": token.LEQ, ">": token.GTR, ">=": token.GEQ,
+	"&&": token.LAND, "||": token.LOR}
 
-// rightOperand parenthesizes src, the right operand of the Go operator op, when it is a binary
-// expression that would otherwise bind to op's left operand: `x |= a ^ b` is `x = x | (a ^ b)`, as
-// Go's | and ^ share a precedence and associate to the left.
-func rightOperand(src, op string) string {
+// infix joins l and r with the Go binary operator op, parenthesizing an operand Go would otherwise
+// split: Swift's tree already grouped each operand, and Go's precedences differ from Swift's (a shift
+// binds tighter than & in Swift, not in Go) and from those of the operators a lowering emits.
+func infix(l, op, r string) string {
+	return operand(l, op, false) + " " + op + " " + operand(r, op, true)
+}
+
+// assocInfix is infix for an associative operator, such as && or String's +, which leaves a right
+// operand joined by the same operator unparenthesized.
+func assocInfix(l, op, r string) string {
+	if b, ok := parseBinary(r); ok && b != nil && b.Op == goBinaryOps[op] {
+		return operand(l, op, false) + " " + op + " " + r
+	}
+	return infix(l, op, r)
+}
+
+// operand parenthesizes src, the left or right operand of the Go operator op, when it is a binary
+// expression that would not stay whole: one of lower precedence, or on the right one of the same
+// precedence, as Go's binary operators associate to the left.
+func operand(src, op string, right bool) string {
 	tok, ok := goBinaryOps[op]
-	if !ok {
+	if !ok || !strings.ContainsAny(src, "+-*/%&|^<>=!") {
 		return src
 	}
-	x, err := parser.ParseExpr(src)
-	if err != nil {
+	b, ok := parseBinary(src)
+	if !ok {
 		return "(" + src + ")"
 	}
-	if b, ok := x.(*goast.BinaryExpr); ok && b.Op.Precedence() <= tok.Precedence() {
+	if b != nil && (b.Op.Precedence() < tok.Precedence() || right && b.Op.Precedence() == tok.Precedence()) {
 		return "(" + src + ")"
 	}
 	return src
+}
+
+// unaryOperand parenthesizes src, the operand of a Go unary operator, when it is a binary expression.
+func unaryOperand(src string) string {
+	if !strings.ContainsAny(src, "+-*/%&|^<>=!") {
+		return src
+	}
+	if b, ok := parseBinary(src); !ok || b != nil {
+		return "(" + src + ")"
+	}
+	return src
+}
+
+// parseBinary parses src, a Go expression, and returns it if it is a binary expression. It reports
+// false when src does not parse.
+func parseBinary(src string) (*goast.BinaryExpr, bool) {
+	x, err := parser.ParseExpr(sanitizeRuntimeNames(src))
+	if err != nil {
+		return nil, false
+	}
+	b, _ := x.(*goast.BinaryExpr)
+	return b, true
 }
