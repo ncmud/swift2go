@@ -153,6 +153,7 @@ type Module struct {
 	methodNames     map[string]bool   // "owner name" of every function declared on a type
 	typeAliases     map[string]string // qualified typealias name → mangled aliased type
 	members         map[string][]*DeclInfo
+	named           map[string][]*DeclInfo // declsNamed's index
 	protocolsByType map[string][]string
 
 	// corelibsFoundation is set by [CorelibsFoundation].
@@ -267,6 +268,19 @@ func (m *Module) membersOf(q string) []*DeclInfo {
 		}
 	}
 	return m.members[q]
+}
+
+// declsNamed lists the declarations of this module with the given base name, in key order.
+func (m *Module) declsNamed(name string) []*DeclInfo {
+	if m.named == nil {
+		m.named = map[string][]*DeclInfo{}
+		for _, d := range m.sortedDecls() {
+			if d.Node != nil {
+				m.named[d.Node.Name()] = append(m.named[d.Node.Name()], d)
+			}
+		}
+	}
+	return m.named[name]
 }
 
 // IsOptionSet reports whether the qualified Swift type conforms to OptionSet, in this module or a dependency.

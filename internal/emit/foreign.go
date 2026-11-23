@@ -565,8 +565,9 @@ func swiftMemberName(d *DeclInfo) string {
 func (e *fileEmitter) witness(q, goT string, req swiftmod.Requirement) string {
 	var impl, def *DeclInfo
 	var implMod, defMod *Module
+	base, _, _ := strings.Cut(req.Name, "(")
 	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-		for _, d := range mod.sortedDecls() {
+		for _, d := range mod.declsNamed(base) {
 			if d.Node == nil || d.Node.Bool("implicit") || d.Static != req.Static || swiftMemberName(d) != req.Name {
 				continue
 			}
