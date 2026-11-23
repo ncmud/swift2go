@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -96,9 +97,81 @@ func demangleInto(syms, out []string, distinct map[string]bool) error {
 	if len(lines) != len(syms) {
 		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(syms))
 	}
+	raws := make([]string, len(syms))
+	for i := range syms {
+		raws[i] = privateName.ReplaceAllString(nameApart(stripClosures(lines[i]), distinct), "$1")
+	}
+	if err := spellLocals(syms, raws, distinct); err != nil {
+		return err
+	}
 	for i, s := range syms {
-		raw := privateName.ReplaceAllString(nameApart(stripClosures(lines[i]), distinct), "$1")
-		out[i] = localWrappers(s, raw, normalizeLocal(raw))
+		out[i] = localWrappers(s, raws[i], normalizeLocal(raws[i]))
+	}
+	return nil
+}
+
+// spellLocals rewrites, in each demangled symbol that names function-local types more than once
+// ("(inout TaskGroup<Foo #1 in f() -> Swift.Int?>) -> Foo #1 in f() -> Swift.Int?"), every local type to
+// its normalized name, keeping the optionals that follow it. Such a symbol mangles the local type once
+// and refers back to it, so [localWrappers] cannot read each occurrence's optionals from the mangling;
+// instead each local type's mangling is demangled on its own, which gives the exact text of its context,
+// and the "?" that follow that text in the symbol are the type's optionals.
+func spellLocals(syms, raws []string, distinct map[string]bool) error {
+	var bare []string
+	owner := map[string][]int{}
+	for i, s := range syms {
+		if len(localStart.FindAllStringIndex(raws[i], 2)) < 2 || !strings.HasSuffix(s, "D") {
+			continue
+		}
+		m := mangledForm(s)
+		for _, mark := range localMangling.FindAllStringIndex(m, -1) {
+			for j := 2; j < mark[0]; j++ {
+				if m[j] >= '1' && m[j] <= '9' && (m[j-1] < '0' || m[j-1] > '9') {
+					b := "$s" + m[j:mark[1]] + "D"
+					if len(owner[b]) == 0 {
+						bare = append(bare, b)
+					}
+					owner[b] = append(owner[b], i)
+				}
+			}
+		}
+	}
+	if len(bare) == 0 {
+		return nil
+	}
+	var in bytes.Buffer
+	for _, b := range bare {
+		in.WriteString(b)
+		in.WriteByte('\n')
+	}
+	cmd := exec.Command("xcrun", "swift-demangle", "--compact")
+	cmd.Stdin = &in
+	data, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("swift-demangle: %w", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != len(bare) {
+		return fmt.Errorf("swift-demangle: %d lines for %d symbols", len(lines), len(bare))
+	}
+	// The longest spelling of a symbol's local type is its whole context; shorter ones are suffixes of it.
+	spellings := map[int][]string{}
+	for k, b := range bare {
+		text := privateName.ReplaceAllString(nameApart(stripClosures(lines[k]), distinct), "$1")
+		if loc := localStart.FindStringIndex(text); loc == nil || loc[0] != 0 {
+			continue
+		}
+		for _, i := range owner[b] {
+			if strings.Contains(raws[i], text) {
+				spellings[i] = append(spellings[i], text)
+			}
+		}
+	}
+	for i, texts := range spellings {
+		slices.SortFunc(texts, func(a, b string) int { return len(b) - len(a) })
+		for _, text := range texts {
+			raws[i] = strings.ReplaceAll(raws[i], text, normalizeLocal(text))
+		}
 	}
 	return nil
 }

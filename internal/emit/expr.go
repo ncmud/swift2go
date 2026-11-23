@@ -3,6 +3,7 @@ package emit
 import (
 	"fmt"
 	"maps"
+	"math/big"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -222,8 +223,8 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 				return "&" + tmp
 			}
 		}
-		if root := mapElementRoot(e, stripLoads(sub)); root != nil {
-			// A member of a Go map element: copy the element out, mutate it, store it back.
+		if root := e.goMapElementRoot(sub); root != nil {
+			// A Go map element, or a member of one: copy the element out, mutate it, store it back.
 			saved := e.b
 			e.b = strings.Builder{}
 			rlv := e.lvalue(root)
@@ -1088,6 +1089,12 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 			return "swiftrt.MustAs[" + gt + "](swiftrt.TaskValue(" + e.expr(base) + "))"
 		}
 	}
+	if recv == "Any" && sig.base == "rawValue" {
+		// A type parameter's raw value comes back as any; a same-type requirement may name its type.
+		if gt := e.exprGoType(n); gt != "" && gt != "any" && !namesGeneric(e.m.typeOf(n.Type())) && !isGenericParam(e.m.typeOf(n.Type())) {
+			return "swiftrt.MustAs[" + gt + "](swiftrt.AnyRawValue(" + e.expr(base) + "))"
+		}
+	}
 	if recv == "KeyedDecodingContainer" && sig.base == "allKeys" {
 		if bt.Kind != types.Named || len(bt.Args) != 1 {
 			return e.m.Unsup("allKeys-untyped", e.where, e.exprGoType(n))
@@ -1144,8 +1151,9 @@ func (e *fileEmitter) stringValueInit(owner string) string {
 // recvExpr renders a receiver for field access or a Go method call.
 func (e *fileEmitter) recvExpr(base ast.Node) string {
 	if base.Kind() == "inout_expr" {
-		if ds := stripLoads(base.Child("sub_expr")); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "Map" {
-			// A mutating method on a dictionary element runs on a slot the enclosing call stores back.
+		if ds := stripLoads(base.Child("sub_expr")); ds.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(ds.Child("base").Type())) == "Map" || e.goMapElementRoot(ds) != nil {
+			// A mutating method on a dictionary element, or on a value inside one, runs on a slot the
+			// enclosing call stores back.
 			return "(" + e.expr(base) + ")"
 		}
 		return e.lvalue(base.Child("sub_expr"))
@@ -3493,7 +3501,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		return e.floatOperands(lt, e.expr(l), e.expr(r), op)
 	case "<<", ">>":
-		if lt.Kind == types.Named && isIntegerName(lt.Name) && !isNonNegativeLiteral(r) {
+		if lt.Kind == types.Named && isIntegerName(lt.Name) && (!isNonNegativeLiteral(r) || op == "<<" && !e.constShiftFits(lt, l, r)) {
 			return "swiftrt." + map[string]string{"<<": "Shl", ">>": "Shr"}[op] + e.intTypeArg(lt) + "(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}
 		return e.expr(l) + " " + op + " " + e.expr(r)
@@ -3704,6 +3712,33 @@ func integerLiterals(a, b ast.Node) (x, y int64, ok bool) {
 	x, ok1 := parse(a)
 	y, ok2 := parse(b)
 	return x, y, ok1 && ok2
+}
+
+// constShiftFits reports whether `l << r` fits l's type, or is not a constant: Go rejects a constant
+// shift that overflows (`1 << 7` as an int8), where Swift's shift drops the bits past the type's width.
+func (e *fileEmitter) constShiftFits(lt *types.Type, l, r ast.Node) bool {
+	l, r = stripConv(l), stripConv(r)
+	if l.Kind() != "integer_literal_expr" || r.Kind() != "integer_literal_expr" {
+		return true
+	}
+	v, ok := new(big.Int).SetString(strings.TrimPrefix(l.Str("value"), "+"), 0)
+	n, err := strconv.ParseUint(strings.ReplaceAll(r.Str("value"), "_", ""), 0, 16)
+	if !ok || err != nil {
+		return true
+	}
+	if l.Bool("negative") && v.Sign() > 0 {
+		v.Neg(v)
+	}
+	bits := map[string]uint{"int8": 8, "int16": 16, "int32": 32, "uint8": 8, "uint16": 16, "uint32": 32}[e.m.GoType(lt, e.generics)]
+	if bits == 0 {
+		bits = 64
+	}
+	signed := !strings.HasPrefix(e.m.GoType(lt, e.generics), "u")
+	if signed {
+		bits--
+	}
+	v.Lsh(v, uint(n))
+	return v.BitLen() <= int(bits) && (signed || v.Sign() >= 0)
 }
 
 // isNonNegativeLiteral reports whether n is an integer literal Go can use as a shift count as is.
@@ -4507,22 +4542,6 @@ func protocolBoundOf(m *Module, fn ast.Node, t *types.Type) string {
 		}
 	}
 	return ""
-}
-
-// mapElementRoot is the Dictionary subscript a stored-property chain like `d[k].a.b` is rooted at,
-// or nil. It stops at classes, whose members are addressable through their pointer.
-func mapElementRoot(e *fileEmitter, n ast.Node) ast.Node {
-	for n.Kind() == "member_ref_expr" {
-		base := stripLoads(n.Child("base"))
-		if t := e.m.typeOf(base.Type()); t == nil || e.m.isReferenceGo(t, e.m.GoType(t, e.generics)) {
-			return nil
-		}
-		if base.Kind() == "subscript_expr" && e.m.Recv(e.m.typeOf(base.Child("base").Type())) == "Map" {
-			return base
-		}
-		n = base
-	}
-	return nil
 }
 
 // paramConformsTo reports whether fn's generic signature requires parameter t to conform to proto.

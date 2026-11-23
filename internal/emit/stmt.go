@@ -31,8 +31,12 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 		return
 	}
 	defer e.scopeLocalGetters(list)()
+	forward := e.capturedLater(list)
 	opened := 0
-	for _, s := range list {
+	for i, s := range list {
+		for _, p := range forward[i] {
+			e.w("var %s %s\n", goSafe(p.Name()), e.m.GoType(e.m.typeOf(p.Type()), e.generics))
+		}
 		names := declaredNames(s)
 		for _, n := range names {
 			if scope[n] {
@@ -65,6 +69,47 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 	for ; opened > 0; opened-- {
 		e.w("}\n")
 	}
+}
+
+// capturedLater finds the variables of list that a local function before them captures, which Swift
+// allows when the function is not called before the declaration. Each is declared ahead of the first
+// function that captures it, keyed by that function's index, and its binding assigns it.
+func (e *fileEmitter) capturedLater(list []ast.Node) map[int][]ast.Node {
+	var out map[int][]ast.Node
+	for i, s := range list {
+		if s.Kind() != "func_decl" {
+			continue
+		}
+		refs := map[string]bool{}
+		ast.Walk(s, func(n ast.Node) {
+			if n.Kind() == "declref_expr" {
+				refs[n.Child("decl").Str("base_name")] = true
+			}
+		})
+		for _, later := range list[i+1:] {
+			if later.Kind() != "pattern_binding_decl" {
+				continue
+			}
+			for _, pe := range later.List("pattern_entries") {
+				p := pe.Child("pattern")
+				for p != nil && (p.Kind() == "pattern_typed" || p.Kind() == "pattern_binding" || p.Kind() == "pattern") {
+					p = p.Child("sub_pattern")
+				}
+				if p == nil || p.Kind() != "pattern_named" || !refs[p.Name()] || pe.Child("processed_init") == nil || e.forwardVars[nodeKey(p)] {
+					continue
+				}
+				if out == nil {
+					out = map[int][]ast.Node{}
+				}
+				if e.forwardVars == nil {
+					e.forwardVars = map[uintptr]bool{}
+				}
+				e.forwardVars[nodeKey(p)] = true
+				out[i] = append(out[i], p)
+			}
+		}
+	}
+	return out
 }
 
 // declaredNames lists the Go variables a statement introduces into its enclosing block.
@@ -527,6 +572,10 @@ func (e *fileEmitter) bindPattern(p ast.Node, init ast.Node, declare bool) {
 		s := sinkLet
 		if e.isVarPattern(p) {
 			s = sinkStore
+		}
+		if e.forwardVars[nodeKey(p)] {
+			e.w("%s = %s\n", name, e.owned(init, s))
+			return
 		}
 		e.w("var %s %s = %s\n", name, gt, e.owned(init, s))
 		if gt == "swiftrt.Type" {
