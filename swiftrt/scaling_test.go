@@ -631,3 +631,23 @@ func TestCastAllocations(t *testing.T) {
 		}
 	}
 }
+
+// scalingDepth reads tl at each of depth nested calls, so a read that walks the stack costs
+// quadratic time in depth.
+func scalingDepth(tl *TaskLocal[int], depth int) int {
+	if depth == 0 {
+		return 0
+	}
+	return TaskLocalGet(tl) + scalingDepth(tl, depth-1)
+}
+
+func TestScalingTaskLocal(t *testing.T) {
+	runScaling(t, []scalingCase{
+		{name: "TaskLocal.get at every level of a deepening stack", n: 1_000, prepare: func(n int) func() {
+			tl := TaskLocalInitWrappedValue(0)
+			return func() {
+				TaskLocalWithValueOperation(tl, 1, func() int { return scalingDepth(tl, n) })
+			}
+		}},
+	})
+}
