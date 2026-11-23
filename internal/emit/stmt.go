@@ -635,6 +635,7 @@ func (m *Module) sharesStorage(t *types.Type, visiting map[string]bool) bool {
 			m.shares = map[string]bool{}
 		}
 		if shares, ok := m.shares[t.Name]; ok {
+			m.observeFrozen(t.Name)
 			return shares
 		}
 		if visiting[t.Name] {
@@ -651,6 +652,10 @@ func (m *Module) sharesStorage(t *types.Type, visiting map[string]bool) bool {
 			case "struct_decl", "enum_decl":
 				if len(t.Args) > 0 || len(mod.typeParamNames[t.Name]) > 0 {
 					shares = true
+					break
+				}
+				if kind == "struct_decl" && mod.frozenStruct(t.Name) {
+					// Nothing can change a frozen struct's storage in place, so its copies may share it.
 					break
 				}
 				for _, d := range mod.decls {
@@ -675,9 +680,46 @@ func (m *Module) sharesStorage(t *types.Type, visiting map[string]bool) bool {
 			// Only a finished answer is kept: one reached inside a cycle may be too optimistic.
 			m.shares[t.Name] = shares
 		}
+		m.observeFrozen(t.Name)
 		return shares
 	}
 	return false
+}
+
+// frozenStruct reports whether the struct of this module named name has stored properties and
+// declares every one of them with `let`. Code can then only replace such a value whole, never change
+// its storage in place: a part read out of it is someone else's (see [fileEmitter.originOf]).
+func (m *Module) frozenStruct(name string) bool {
+	if m.frozen == nil {
+		m.frozen = map[string]bool{}
+		mutable := map[string]bool{}
+		for _, d := range m.decls {
+			if d.Kind != "var_decl" || d.Static || d.Computed || d.Node == nil || d.Owner == "" || m.typeKinds[d.Owner] != "struct_decl" {
+				continue
+			}
+			if d.Node.Bool("let") && !mutable[d.Owner] {
+				m.frozen[d.Owner] = true
+			} else {
+				mutable[d.Owner] = true
+				delete(m.frozen, d.Owner)
+			}
+		}
+	}
+	return m.frozen[name]
+}
+
+// observeFrozen records, for an incremental run, whether the struct named name is frozen, which
+// decides whether its values are copied.
+func (m *Module) observeFrozen(name string) {
+	if m.rec == nil {
+		return
+	}
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[name] == "struct_decl" {
+			m.observe(obsFrozen, mod.Name, name, boolObs(mod.frozenStruct(name)))
+			return
+		}
+	}
 }
 
 func (e *fileEmitter) conds(cs []ast.Node, inner func()) {

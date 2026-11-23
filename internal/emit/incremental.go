@@ -21,7 +21,7 @@ import (
 
 // emitCacheFormat changes whenever what the emit cache stores, or what an entry's reuse depends on,
 // changes.
-const emitCacheFormat = "swift2go-emit-cache-1"
+const emitCacheFormat = "swift2go-emit-cache-2"
 
 // The kinds of state a file's emission reads that other files decide.
 const (
@@ -29,6 +29,7 @@ const (
 	obsInit      = "init"    // a stored property's initial value
 	obsHoist     = "hoist"   // the module's count of hoisted local declarations
 	obsImport    = "import"  // the import path the module recorded for a package
+	obsFrozen    = "frozen"  // whether a struct's stored properties are all `let` (frozenStruct)
 	claimAdapter = "adapter" // an adapter type emitted once per module (foreign.go)
 	claimRetro   = "retro"   // a method added once to a dependency's type (retroactive conformances)
 )
@@ -235,6 +236,11 @@ func (m *Module) holds(r *fileRecord, mods map[string]*Module) bool {
 				return false
 			}
 			got = mod.importPkgs[name]
+		case obsFrozen:
+			if mod == nil {
+				return false
+			}
+			got = boolObs(mod.frozenStruct(name))
 		case claimAdapter:
 			if mod == nil {
 				return false

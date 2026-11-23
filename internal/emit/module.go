@@ -97,9 +97,11 @@ type Module struct {
 	enumComparable  map[string]bool
 	typeParamNames  map[string][]string // generic struct/class → its Go type parameter names
 	shares          map[string]bool     // memo of sharesStorage for named types
+	frozen          map[string]bool     // structs whose stored properties are all `let` (frozenStruct)
 	classProtos     map[string]bool     // protocols only classes can conform to (`: AnyObject`)
 	scopes          *valueScopes        // local variables of every file, resolved
 	fx              *effects            // which functions can write shared places
+	inPlace         map[string]bool     // USRs of properties some code writes into (replacedWhole)
 	lazyInits       map[string]bool     // owner|name of stored statics and globals with non-literal initializers
 	lineStarts      map[string][]int
 	sources         map[string][]byte

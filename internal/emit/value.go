@@ -502,13 +502,27 @@ func (e *fileEmitter) originOf(n ast.Node, loaded bool) origin {
 		}
 		bt := e.m.typeOf(base.Type())
 		if info.Static || bt == nil || bt.Kind == types.Meta || e.m.isReferenceGo(bt, e.m.GoType(bt, e.generics)) {
+			if loaded && e.m.replacedWhole(n.Child("decl").Str("decl_usr")) {
+				// Replacing the property leaves the storage a reader holds as it was.
+				return originBorrowedLet
+			}
 			if loaded {
 				return e.sharedPlace(n)
 			}
 			return originBorrowedLet
 		}
+		if e.m.isFrozen(bt) {
+			// The value may share its storage with copies of it elsewhere (sharesStorage), so the part
+			// is lent, never owned, whoever holds the value.
+			return originBorrowedLet
+		}
 		return e.originOf(base, loaded)
-	case "tuple_element_expr", "keypath_application_expr":
+	case "keypath_application_expr":
+		if e.m.isFrozen(e.m.typeOf(n.Child("base").Type())) {
+			return originBorrowedLet
+		}
+		return e.originOf(n.Child("base"), loaded)
+	case "tuple_element_expr":
 		return e.originOf(n.Child("base"), loaded)
 	case "subscript_expr":
 		if info, _ := e.lookup(n.Child("decl").Str("decl_usr")); info != nil {
@@ -629,6 +643,19 @@ func (e *fileEmitter) callOrigin(n ast.Node) origin {
 		return originFresh
 	}
 	return e.derived(n, operands)
+}
+
+// isFrozen reports whether t is a frozen struct of this module or a dependency (frozenStruct).
+func (m *Module) isFrozen(t *types.Type) bool {
+	if t == nil || t.Kind != types.Named || len(t.Args) > 0 {
+		return false
+	}
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[t.Name] == "struct_decl" {
+			return len(mod.typeParamNames[t.Name]) == 0 && mod.frozenStruct(t.Name)
+		}
+	}
+	return false
 }
 
 // derived is the origin of a library result built from operands: the worst of those it could share
