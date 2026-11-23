@@ -3,6 +3,7 @@ package swiftrt
 import (
 	"reflect"
 	"strings"
+	"sync"
 )
 
 // Type is a Swift metatype value such as `Foo.self`.
@@ -76,4 +77,48 @@ func MetaZero[T any]() T {
 		return reflect.New(t.Elem()).Interface().(T) //nolint:forcetypeassert // reflect.New(Elem) is a T
 	}
 	return z
+}
+
+// witnesses holds, by Go type, the functions that wrap a value of the type in a value that carries a
+// protocol conformance the type's Go form cannot: a Go type of another package, such as int or a slice,
+// cannot gain methods, and an Optional is a pointer whose methods are those of the type it points to.
+var (
+	witnessesMu sync.RWMutex
+	witnesses   = map[reflect.Type][]func(any) any{}
+)
+
+// RegisterWitness records wrap as a carrier of T's conformances: wrap returns a value whose methods are
+// the requirements of the protocols T conforms to through it, its statics included.
+func RegisterWitness[T any](wrap func(T) any) {
+	witnessesMu.Lock()
+	defer witnessesMu.Unlock()
+	key := reflect.TypeFor[T]()
+	witnesses[key] = append(witnesses[key], func(v any) any { return wrap(v.(T)) }) //nolint:forcetypeassert // keyed by T's type
+}
+
+// witnessAs wraps v in the registered carrier of its type that implements the interface P.
+func witnessAs[P any](v any) (P, bool) {
+	var zero P
+	if v == nil || reflect.TypeFor[P]().Kind() != reflect.Interface {
+		return zero, false
+	}
+	witnessesMu.RLock()
+	ws := witnesses[reflect.TypeOf(v)]
+	witnessesMu.RUnlock()
+	for _, wrap := range ws {
+		if p, ok := wrap(v).(P); ok {
+			return p, true
+		}
+	}
+	return zero, false
+}
+
+// StaticWitness is a value of protocol P that carries T's static requirements: T's registered carrier that
+// implements P, or else MetaZero[T]().
+func StaticWitness[T any, P any]() P {
+	z := MetaZero[T]()
+	if p, ok := witnessAs[P](z); ok {
+		return p
+	}
+	return any(z).(P) //nolint:forcetypeassert // generated code calls this for a T constrained by P
 }

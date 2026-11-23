@@ -81,6 +81,13 @@ func (e *fileEmitter) expr(n ast.Node) string {
 	default:
 		return out
 	}
+	if strings.HasPrefix(out, "swiftrt.OptFlatMap") || strings.HasPrefix(out, "swiftrt.RefFlatMap") {
+		if p := e.optionalExistentialGo(e.m.typeOf(n.Type())); p != "" {
+			// The closure returns an Optional reference where flatMap's result is an Optional existential:
+			// a nil pointer must become a nil interface, not an interface holding a nil pointer.
+			return "swiftrt.OptionalExistential[" + p + "](" + out + ")"
+		}
+	}
 	for _, keep := range []string{"swiftrt.Unsupported", "swiftrt.CoalesceRef", "swiftrt.CoalesceOpt", "swiftrt.Flat(", "swiftrt.TryFlat", "swiftrt.TryNil", "swiftrt.Some",
 		"swiftrt.TaskLocalGet", "swiftrt.TaskLocalWithValue", "swiftrt.MapSubscriptDefault", "swiftrt.ForceRef", "swiftrt.Clone", "swiftrt.MustAs", "swiftrt.Copy(",
 		"swiftrt.Dynamic", "swiftrt.Ref(", "swiftrt.MutexWithLock", "swiftrt.NSLockWithLock", "swiftrt.NSRecursiveLockWithLock", "swiftrt.Coalesce(",
@@ -1054,7 +1061,12 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		// A static member is named after the type it belongs to (`Task.isCancelled`), which is
 		// usually also its result type.
 		if bt.Kind == types.Meta && len(bt.Args) == 1 && isGenericParam(bt.Args[0]) && sig.base == "allCases" {
-			return "swiftrt.AllCasesOf[" + e.m.GoType(bt.Args[0], e.generics) + "]()"
+			gt := e.m.GoType(bt.Args[0], e.generics)
+			if e.m.protocolGoName(gt) {
+				// Self in a protocol extension: the receiver's dynamic type has the cases.
+				return "swiftrt.AllCasesOfValue[" + gt + "](" + e.metaReceiver(base) + ")"
+			}
+			return "swiftrt.AllCasesOf[" + gt + "]()"
 		}
 		recvT := e.m.typeOf(n.Type())
 		if bt.Kind == types.Meta && len(bt.Args) == 1 && bt.Args[0].Kind == types.Named {
@@ -2183,12 +2195,16 @@ func (e *fileEmitter) argStrings(as []arg, foreign bool) ([]string, []arg) {
 					inner := at.Args[0]
 					gt := e.m.GoType(inner, e.generics)
 					switch {
+					case e.keptParams[gt]:
+						s = e.staticCarrier(gt)
 					case inner.Kind == types.Named && !e.m.isLocalProtocol(inner.Name) && e.m.HasMutatingMethods(inner.Name):
 						s = "new(" + gt + ")"
 					case inner.Kind == types.Named && !e.m.isLocalProtocol(inner.Name):
 						s = "*new(" + gt + ")"
 					case inner.Kind == types.Generic && slices.Contains(e.typeParams, gt):
-						s = "*new(" + gt + ")"
+						s = e.staticCarrier(gt)
+					case e.optionalMetaValue(inner, callee.Node, pt.Args[0]) != "":
+						s = e.optionalMetaValue(inner, callee.Node, pt.Args[0])
 					default:
 						s = e.metaReceiver(a.node)
 					}
@@ -2433,7 +2449,7 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 			}
 			return call
 		case info.Static && info.ProtoExt:
-			return pfx + info.GoName + "(" + strings.Join(append([]string{e.metaReceiver(base)}, ss...), ", ") + ")"
+			return pfx + info.GoName + e.assocTypeArgs(info, d) + "(" + strings.Join(append([]string{e.metaReceiver(base)}, ss...), ", ") + ")"
 		case info.Static || info.Owner == "":
 			return pfx + info.GoName + e.uninferableTypeArgs(info, d) + "(" + strings.Join(ss, ", ") + ")"
 		case info.FreeSelf():
@@ -2452,7 +2468,7 @@ func (e *fileEmitter) methodCall(n ast.Node, d ast.Node, base ast.Node, as []arg
 					}
 				}
 			}
-			targs := ""
+			targs := e.assocTypeArgs(info, d)
 			if !info.ProtoExt {
 				targs = e.uninferableTypeArgs(info, d)
 			}
@@ -3938,7 +3954,7 @@ func (e *fileEmitter) metaReceiver(base ast.Node) string {
 		if inner.Kind == types.Generic {
 			// The type argument may be a pointer type, whose zero value is nil: a value method of the
 			// static requirement needs a pointer to a value.
-			return "swiftrt.MetaZero[" + gt + "]()"
+			return e.staticCarrier(gt)
 		}
 		return "(*new(" + gt + "))"
 	}
@@ -4504,6 +4520,20 @@ func (e *fileEmitter) resultConversion(sub ast.Node, from, to *types.Type) (stri
 	}
 	return "func(f func(" + strings.Join(tparams(params), ", ") + ") " + fr + ") func(" + strings.Join(params, ", ") + ") " + tr +
 		" { return func(" + strings.Join(params, ", ") + ") " + tr + " { return " + ret + " } }(" + e.expr(sub) + ")", true
+}
+
+// optionalExistentialGo is the Go interface of t when t is an Optional existential of a local protocol,
+// `(any P)?`, or else "".
+func (e *fileEmitter) optionalExistentialGo(t *types.Type) string {
+	if t == nil || t.Kind != types.Optional || len(t.Args) != 1 {
+		return ""
+	}
+	if inner := t.Args[0]; inner.Kind == types.Existential || inner.Kind == types.Named && e.m.isLocalProtocol(inner.Name) {
+		if gt := e.m.GoType(t, e.generics); !strings.HasPrefix(gt, "*") {
+			return gt
+		}
+	}
+	return ""
 }
 
 // tparams strips the names from "name type" parameters.

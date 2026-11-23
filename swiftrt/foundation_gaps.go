@@ -183,9 +183,39 @@ func TimeZoneOptInitSecondsFromGMT(s int) *TimeZone {
 	return &TimeZone{time.FixedZone(gmtName(s), s)}
 }
 
+// commonShortNames are the abbreviations of the metazones whose short names CLDR's English data marks as
+// commonly used: Eastern, Central, Mountain, Pacific, Alaska, Hawaii-Aleutian and Atlantic time.
+var commonShortNames = map[string]bool{
+	"EST": true, "EDT": true, "CST": true, "CDT": true, "MST": true, "MDT": true, "PST": true, "PDT": true,
+	"AKST": true, "AKDT": true, "HST": true, "HDT": true, "AST": true, "ADT": true,
+}
+
+// commonShortName reports whether ICU's English short specific name of the zone id, at a moment Go
+// abbreviates as abbr, is abbr: the zone is one of the North American zones whose names are common.
+// Cuba's zone shares Central time's abbreviations but not its metazone.
+func commonShortName(id, abbr string) bool {
+	if !commonShortNames[abbr] {
+		return false
+	}
+	switch {
+	case id == "America/Havana" || id == "Cuba":
+		return false
+	case strings.HasPrefix(id, "America/"), strings.HasPrefix(id, "US/"), strings.HasPrefix(id, "Canada/"),
+		id == "Pacific/Honolulu", id == "Atlantic/Bermuda", id == "EST5EDT", id == "CST6CDT", id == "MST7MDT", id == "PST8PDT",
+		id == "EST", id == "MST", id == "HST", id == "Local":
+		return true
+	}
+	return false
+}
+
 // TimeZoneAbbreviationFor is Foundation `TimeZone.abbreviation(for:)`.
 func TimeZoneAbbreviationFor(z TimeZone, d Date) *string {
 	name, off := d.Time().In(z.Loc).Zone()
+	if !commonShortName(z.Loc.String(), name) {
+		// ICU names a zone by its English short name only where English speakers commonly use it, the
+		// North American zones; it names every other zone by its offset from GMT.
+		name = "GMT"
+	}
 	if name == "UTC" || name == "" || name[0] == '+' || name[0] == '-' || strings.HasPrefix(name, "GMT") {
 		name = "GMT"
 		if off != 0 {

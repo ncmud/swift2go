@@ -77,6 +77,7 @@ type fileEmitter struct {
 	sliceLos    map[string]string   // local ArraySlice constant → the Go variable holding its start index
 	sliceDry    bool                // sliceBase only reports whether a start index can be told
 	localFuncs  map[string]ast.Node // functions declared inside the file's function bodies, by USR
+	keptParams  map[string]bool     // type parameters callers name though no parameter or result does
 }
 
 // blankStringLiterals is Go source with the contents of its string and rune literals and its
@@ -529,6 +530,7 @@ func (e *fileEmitter) protocolForwarders(n ast.Node, self *DeclInfo) {
 	q := e.m.typeQName(self)
 	e.protocolForwardersFor(n, q)
 	e.conformanceRegistrations(n, q)
+	e.optionalWitnessRegistrations(n, q)
 }
 
 func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
@@ -624,7 +626,7 @@ func (e *fileEmitter) protocolForwardersFor(n ast.Node, q string) {
 				if res == "" {
 					ret = ""
 				}
-				e.w("func (self %s) %s(%s) %s { %s%s%s(self%s)%s }\n\n", recv, req, params, res, ret, pfx, info.GoName, prefixComma(args), ptr)
+				e.w("func (self %s) %s(%s) %s { %s%s%s%s(self%s)%s }\n\n", recv, req, params, res, ret, pfx, info.GoName, e.conformerAssocTypeArgs(info, q, pm), prefixComma(args), ptr)
 			}
 		}
 	}
@@ -1131,9 +1133,15 @@ func (e *fileEmitter) extensionDecl(n ast.Node) {
 	}
 	if self.Kind == "foreign" {
 		e.retroactiveConformances(n, q)
+		if q == "Swift.Optional" {
+			e.optionalWitnessTypes(n)
+		}
 	}
 	if self.Kind != "protocol_ext" {
 		e.conformanceRegistrations(n, q)
+	}
+	if self.Kind != "foreign" && self.Kind != "protocol_ext" {
+		e.optionalWitnessRegistrations(n, q)
 	}
 }
 
@@ -1270,6 +1278,7 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 	maps.Copy(g, e.generics)
 	e.typeParams = nil
 	e.typeBounds = map[string]string{}
+	e.keptParams = map[string]bool{}
 	own := map[string]bool{}
 	for _, gp := range fn.Child("generic_signature").Strings("generic_params") {
 		name := e.m.demangle(gp)
@@ -1287,12 +1296,16 @@ func (e *fileEmitter) genericScope(fn ast.Node) map[string]string {
 			e.typeParams = slices.DeleteFunc(e.typeParams, func(p string) bool { return p == tp })
 		}
 	}
+	assoc := e.scopeAssocParams(fn, g)
 	seqParams := 0
 	for _, r := range fn.Child("generic_signature").List("generic_reqs") {
 		if r.Str("kind") != "conforms_to" {
 			continue
 		}
 		param := e.m.demangle(r.Str("first_type"))
+		if assoc[param] {
+			continue
+		}
 		proto := e.m.demangle(r.Str("protocol"))
 		switch proto {
 		case "Swift.Collection", "Swift.Sequence", "Swift.BidirectionalCollection", "Swift.RandomAccessCollection":
@@ -2772,11 +2785,11 @@ func (e *fileEmitter) staticForwarders(q, proto string, conformed []string, pm *
 						target += "(" + args + ")"
 					}
 				case d.ProtoExt && d.Owner == proto && target == "":
-					target, isDefault, from = mpfx+d.GoName+"("+selfArg+prefixComma(args)+")", true, proto
+					target, isDefault, from = mpfx+d.GoName+e.conformerAssocTypeArgs(d, q, mod)+"("+selfArg+prefixComma(args)+")", true, proto
 				case d.ProtoExt && e.moreRefinedDefault(d, target, isDefault, from, q, proto, conformed, mod) &&
 					(d.Kind != "func_decl" || funcSignatureKey(d.Node) == funcSignatureKey(r)):
 					// A protocol that refines this one, and that the type conforms to, supplies the default.
-					target, isDefault, from = mpfx+d.GoName+"("+selfArg+prefixComma(args)+")", true, d.Owner
+					target, isDefault, from = mpfx+d.GoName+e.conformerAssocTypeArgs(d, q, mod)+"("+selfArg+prefixComma(args)+")", true, d.Owner
 				}
 			}
 		}
@@ -2959,7 +2972,7 @@ func (e *fileEmitter) topLevelCode() {
 // it; inside the body it names any.
 func (e *fileEmitter) erasePhantomTypeParams(sig string) {
 	e.typeParams = slices.DeleteFunc(e.typeParams, func(tp string) bool {
-		if regexp.MustCompile(`\b` + tp + `\b`).MatchString(sig) {
+		if e.keptParams[tp] || regexp.MustCompile(`\b`+tp+`\b`).MatchString(sig) {
 			return false
 		}
 		e.preamble += "type " + tp + " = any\n"
