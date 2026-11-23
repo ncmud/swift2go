@@ -218,7 +218,14 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			fmt.Printf("%s: %d files\n", name, len(files))
 			continue
 		}
-		opts := []emit.Option{emit.Dependencies(done)}
+		// Generated sources lie outside the package; the Go names them apart from where the build put them.
+		// The copies of sources that macros extend keep the path from Sources or Tests down.
+		roots := map[string]string{
+			absPath(filepath.Join(outDir, "derived")):                   "derived",
+			absPath(filepath.Join(outDir, "derived", t.Name, "macros")): "",
+			absPath(swiftmod.PluginOutputDir(t, buildDir)):              path.Join("plugins", t.Name),
+		}
+		opts := []emit.Option{emit.Dependencies(done), emit.SourceRoots(roots)}
 		if dest.CorelibsFoundation() {
 			opts = append(opts, emit.CorelibsFoundation())
 		}

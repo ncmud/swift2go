@@ -3983,7 +3983,7 @@ func (e *fileEmitter) magicLiteralAt(kind string, at ast.Node) string {
 		// The module and the file's name, as Swift writes it: "Commands/BossCommand.swift".
 		return strconv.Quote(e.m.Name + "/" + filepath.Base(e.file.Filename))
 	case "#file", "#filePath":
-		return strconv.Quote(shortPath(e.file.Filename))
+		return strconv.Quote(e.m.sourcePath(e.file.Filename))
 	case "#function":
 		fn := e.where
 		if i := strings.LastIndex(fn, "."); i >= 0 {

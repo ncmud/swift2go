@@ -370,9 +370,14 @@ extension Foundation.Bundle {
 
 // pluginOutputs lists the Swift files build-tool plugins generated for t under buildDir, whose
 // built modules are in modulesDir.
+// PluginOutputDir is the directory in which SwiftPM's build in buildDir writes the sources that t's
+// build-tool plugins generate.
+func PluginOutputDir(t Target, buildDir string) string {
+	return filepath.Join(buildDir, "plugins", "outputs", strings.ToLower(filepath.Base(t.Dir)), t.Name, "destination")
+}
+
 func pluginOutputs(t Target, buildDir, modulesDir string) ([]string, error) {
-	identity := strings.ToLower(filepath.Base(t.Dir))
-	root := filepath.Join(buildDir, "plugins", "outputs", identity, t.Name, "destination")
+	root := PluginOutputDir(t, buildDir)
 	var files []string
 	var newest time.Time
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
