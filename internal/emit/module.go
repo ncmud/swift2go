@@ -69,7 +69,7 @@ type keyedOverload struct{ encode, decode string }
 func (m *Module) keyedOverloads() map[string]keyedOverload {
 	m.keyedOnce.Do(func() {
 		m.keyed = map[string]keyedOverload{}
-		for _, d := range m.decls {
+		for _, d := range m.sortedDecls() {
 			if d.Kind != "func_decl" || d.Static || d.GoName == "" {
 				continue
 			}
@@ -398,7 +398,7 @@ func (m *Module) classTree() {
 	}
 	m.superOf = map[string]string{}
 	m.openClasses = map[string]bool{}
-	for _, d := range m.decls {
+	for _, d := range m.sortedDecls() {
 		if d.Kind != "class_decl" || d.Node == nil {
 			continue
 		}
@@ -429,7 +429,7 @@ func (m *Module) IsPayloadEnum(owner string) bool {
 	if m.payloadEnums == nil {
 		m.payloadEnums = map[string]bool{}
 		for _, mod := range append([]*Module{m}, m.Deps...) {
-			for _, d := range mod.decls {
+			for _, d := range mod.sortedDecls() {
 				if d.Kind != "enum_element_decl" || d.Node == nil {
 					continue
 				}
@@ -543,7 +543,7 @@ func (m *Module) SetTarget(under *Module) {
 	m.Test = true
 	m.Pkg = under.Pkg
 	taken := map[string]bool{}
-	for _, info := range under.decls {
+	for _, info := range under.sortedDecls() {
 		if info.GoName != "" && under.packageLevel(info) {
 			taken[info.GoName] = true
 		}
@@ -801,7 +801,7 @@ func typesNamedApart(files []ast.File) map[string]bool {
 	count, apart := map[string]int{}, map[string]bool{}
 	var locals func(n ast.Node)
 	locals = func(n ast.Node) {
-		for _, v := range n {
+		for _, v := range ast.Fields(n) {
 			var kids []ast.Node
 			switch c := v.(type) {
 			case map[string]any:
@@ -863,7 +863,7 @@ func (m *Module) indexLocalTypes(body ast.Node) {
 	}
 	var visit func(n ast.Node)
 	visit = func(n ast.Node) {
-		for _, v := range n {
+		for _, v := range ast.Fields(n) {
 			var kids []ast.Node
 			switch c := v.(type) {
 			case map[string]any:
@@ -1009,7 +1009,7 @@ func (m *Module) assignNames() {
 		static      bool
 	}
 	groups := map[key][]*DeclInfo{}
-	for _, info := range m.decls {
+	for _, info := range m.sortedDecls() {
 		switch info.Kind {
 		case "func_decl", "constructor_decl", "var_decl":
 			if info.ProtoExt {
@@ -1020,19 +1020,19 @@ func (m *Module) assignNames() {
 		}
 	}
 	payloadOwners := map[string]bool{}
-	for _, d := range m.decls {
+	for _, d := range m.sortedDecls() {
 		if d.Kind == "enum_element_decl" && d.Node != nil {
 			if ps := d.Node.Child("params"); ps != nil && len(ps.List("params")) > 0 {
 				payloadOwners[d.Owner] = true
 			}
 		}
 	}
-	for _, info := range m.decls {
+	for _, info := range m.sortedDecls() {
 		if payloadOwners[info.Owner] && (info.Kind == "func_decl" || info.Kind == "var_decl") {
 			info.OnPayloadEnum = true
 		}
 	}
-	for _, info := range m.decls {
+	for _, info := range m.sortedDecls() {
 		name := info.Node.Name()
 		owner := m.ownerGoName(info)
 		switch info.Kind {
@@ -1080,7 +1080,7 @@ func (m *Module) assignNames() {
 // subclasses, so the member must not satisfy the Go interface in its place.
 func (m *Module) settleClassMemberNames() {
 	classQ := map[string]string{}
-	for _, d := range m.decls {
+	for _, d := range m.sortedDecls() {
 		if d.Kind == "class_decl" && d.Node != nil {
 			classQ[d.GoName] = m.typeQName(d)
 		}
@@ -1647,7 +1647,7 @@ func (info *DeclInfo) FreeSelf() bool {
 
 // markGenericFree flags methods that must become generic package-level functions.
 func (m *Module) markGenericFree() {
-	for _, d := range m.decls {
+	for _, d := range m.sortedDecls() {
 		if d.Kind == "subscript_decl" && !d.Static && d.Owner != "" && d.OwnerKind != "protocol" && m.typeKinds[d.Owner] != "protocol" {
 			// A subscript with generic parameters of its own becomes a pair of generic functions.
 			if len(m.typeParamNames[d.Owner]) == 0 && len(d.Node.Child("generic_signature").Strings("generic_params")) > 0 {
@@ -1675,7 +1675,7 @@ func (m *Module) HasMutatingMethods(q string) bool {
 	if m.mutatingTypes == nil {
 		m.mutatingTypes = map[string]bool{}
 		for _, mod := range append([]*Module{m}, m.Deps...) {
-			for _, d := range mod.decls {
+			for _, d := range mod.sortedDecls() {
 				if d.Mutating && d.Kind == "func_decl" && !d.FreeSelf() && !d.Static {
 					m.mutatingTypes[d.Owner] = true
 				}
@@ -1763,7 +1763,7 @@ func (m *Module) paramTypeSuffix(info *DeclInfo) string {
 
 // markLazy flags static and global stored properties whose initializers must run lazily, as Swift's do.
 func (m *Module) markLazy() {
-	for _, d := range m.decls {
+	for _, d := range m.sortedDecls() {
 		if d.Kind == "var_decl" && !d.Computed && (d.Static || d.Owner == "") && !d.Node.Bool("top_level_global") && m.lazyInits[d.Owner+"|"+d.Node.Name()] {
 			d.Lazy = true
 		}
@@ -1981,9 +1981,9 @@ func (m *Module) protocolGoName(g string) bool {
 func (m *Module) settleWitnessNames() {
 	mods := append([]*Module{m}, m.Deps...)
 	for _, pm := range mods {
-		for proto, reqs := range pm.protoReqs {
+		for _, proto := range slices.Sorted(maps.Keys(pm.protoReqs)) {
 			for _, q := range m.conformers[proto] {
-				for _, r := range reqs {
+				for _, r := range pm.protoReqs[proto] {
 					req := pm.decls[r.Str("usr")]
 					if r.Kind() != "func_decl" || r.Bool("static") || req == nil {
 						continue
@@ -2089,7 +2089,7 @@ func (m *Module) emittedMethods(dir, typeName string) map[string]bool {
 
 // namesLocalType reports whether the Go signature text names a type this module declares.
 func (m *Module) namesLocalType(sig string) bool {
-	for _, d := range m.decls {
+	for _, d := range m.sortedDecls() {
 		switch d.Kind {
 		case "struct_decl", "class_decl", "enum_decl", "protocol":
 			if regexp.MustCompile(`(^|[^\w.])` + regexp.QuoteMeta(d.GoName) + `($|[^\w])`).MatchString(sig) {

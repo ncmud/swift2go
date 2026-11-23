@@ -722,7 +722,7 @@ func (e *fileEmitter) retroactiveSelf(q, goT, proto string) (string, bool) {
 // memberAccess renders reading the instance property named name of the type q: a field, or a getter call.
 func (e *fileEmitter) memberAccess(q, name string) string {
 	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-		for _, d := range mod.decls {
+		for _, d := range mod.sortedDecls() {
 			if d.Kind == "var_decl" && d.Owner == q && !d.Static && d.Node != nil && d.Node.Name() == name {
 				if d.Computed {
 					return d.GoName + "()"

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 )
 
 // Node is one AST node: a JSON object whose "_kind" names the node type.
@@ -87,12 +88,36 @@ func (n Node) Name() string {
 // Type returns the node's mangled "type".
 func (n Node) Type() string { return n.Str("type") }
 
-// Walk calls f for n and every descendant object, depth first.
+// Fields yields the fields of the object n in the order of their keys, so that a traversal of the AST
+// visits nodes in the same order on every run, which ranging over the map does not.
+func Fields(n map[string]any) iter.Seq2[string, any] {
+	return func(yield func(string, any) bool) {
+		var buf [32]string
+		keys := buf[:0]
+		for k := range n {
+			keys = append(keys, k)
+		}
+		// Objects have few fields, which an insertion sort orders without allocating.
+		for i := 1; i < len(keys); i++ {
+			for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
+				keys[j], keys[j-1] = keys[j-1], keys[j]
+			}
+		}
+		for _, k := range keys {
+			if !yield(k, n[k]) {
+				return
+			}
+		}
+	}
+}
+
+// Walk calls f for n and every descendant object, depth first, visiting an object's fields in the
+// order of their keys.
 func Walk(n any, f func(Node)) {
 	switch v := n.(type) {
 	case map[string]any:
 		f(Node(v))
-		for _, c := range v {
+		for _, c := range Fields(v) {
 			Walk(c, f)
 		}
 	case Node:

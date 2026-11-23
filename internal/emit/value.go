@@ -215,7 +215,7 @@ func (vs *valueScopes) walk(n any, f *valueFrame, loaded bool) {
 				}
 			}
 		}
-		for _, c := range v {
+		for _, c := range ast.Fields(v) {
 			switch c.(type) {
 			case map[string]any, []any:
 				vs.walk(c, f, loaded)
@@ -271,7 +271,7 @@ func (vs *valueScopes) newFrame(fn ast.Node, parent *valueFrame) *valueFrame {
 					f.vars[node.Name()] = true
 				}
 			}
-			for _, c := range v {
+			for _, c := range ast.Fields(v) {
 				switch c.(type) {
 				case map[string]any, []any:
 					collect(c, inVar)
@@ -279,7 +279,7 @@ func (vs *valueScopes) newFrame(fn ast.Node, parent *valueFrame) *valueFrame {
 			}
 		}
 	}
-	for k, c := range fn {
+	for k, c := range ast.Fields(fn) {
 		if k != "params" {
 			collect(c, false)
 		}
@@ -301,7 +301,7 @@ func (vs *valueScopes) newFrame(fn ast.Node, parent *valueFrame) *valueFrame {
 				// Bound by a condition, a case or a loop: it names part of its subject.
 				f.lets[node.Name()] += 2
 			}
-			for _, c := range v {
+			for _, c := range ast.Fields(v) {
 				switch c.(type) {
 				case map[string]any, []any:
 					lets(c)
@@ -309,7 +309,7 @@ func (vs *valueScopes) newFrame(fn ast.Node, parent *valueFrame) *valueFrame {
 			}
 		}
 	}
-	for k, c := range fn {
+	for k, c := range ast.Fields(fn) {
 		if k != "params" {
 			lets(c)
 		}
@@ -971,7 +971,7 @@ func mutatesLocal(body any, name string) bool {
 				// Arguments are evaluated on their own, whatever reads the call's result.
 				loaded = false
 			}
-			for _, c := range v {
+			for _, c := range ast.Fields(v) {
 				switch c.(type) {
 				case map[string]any, []any:
 					walk(c, loaded)

@@ -1689,7 +1689,7 @@ func (e *fileEmitter) optionalChain(n ast.Node) string {
 		if x.Kind() == "optional_evaluation_expr" {
 			return
 		}
-		for _, v := range x {
+		for _, v := range ast.Fields(x) {
 			switch c := v.(type) {
 			case map[string]any:
 				find(ast.Node(c))
@@ -4032,7 +4032,7 @@ func (e *fileEmitter) literalInit(n ast.Node, label string) (string, bool) {
 	var ctor *DeclInfo
 	pfx := ""
 	for _, mod := range append([]*Module{e.m}, e.m.Deps...) {
-		for _, d := range mod.decls {
+		for _, d := range mod.sortedDecls() {
 			if d.Kind != "constructor_decl" || d.Owner != t.Name || d.Node == nil {
 				continue
 			}

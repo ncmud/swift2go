@@ -152,7 +152,7 @@ func walkEvaluated(n any, f func(ast.Node)) {
 			return
 		}
 		f(v)
-		for _, c := range v {
+		for _, c := range ast.Fields(v) {
 			walkEvaluated(c, f)
 		}
 	case []any:
