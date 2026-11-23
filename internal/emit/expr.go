@@ -1058,6 +1058,9 @@ func (e *fileEmitter) memberRef(n ast.Node) string {
 		case info.Computed:
 			return e.expr(base) + "." + e.superTarget(info, base) + "()"
 		default:
+			if s, ok := e.actorStoredRead(base, info, func(recv string) string { return recv + "." + info.GoName }); ok {
+				return s
+			}
 			return e.recvExpr(base) + "." + info.GoName
 		}
 	}
@@ -1877,6 +1880,9 @@ func (e *fileEmitter) closure(n ast.Node) string {
 	saved := e.b
 	e.b = strings.Builder{}
 	e.w("func(%s) %s {\n", strings.Join(params, ", "), res)
+	saveOff := e.selfOffActor
+	defer func() { e.selfOffActor = saveOff }()
+	e.w("%s", e.isolatedClosure(n))
 	body := n.Child("body")
 	e.paramNames = map[string]bool{}
 	for _, p := range n.Child("params").List("params") {

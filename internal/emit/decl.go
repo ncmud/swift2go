@@ -25,6 +25,8 @@ type fileEmitter struct {
 	// function context
 	inInit        bool
 	preamble      string                  // statements body() writes first, then clears
+	inActor       bool                    // the code being emitted is in a member isolated to self's actor
+	selfOffActor  bool                    // the code being emitted runs off self's actor, in an escaping closure
 	topLevel      map[uintptr]bool        // statements directly in the current function body
 	paramNames    map[string]bool         // parameters, which share the function body's Go scope
 	doRet         *doReturn               // set while emitting a do body
@@ -470,6 +472,9 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 		}
 		e.w("\t%s %s `%s`\n", vi.GoName, e.m.GoType(e.m.typeOf(mem.Str("interface_type")), e.generics), tag)
 	}
+	if isActor(info) {
+		e.w("\tswiftActor swiftrt.Actor\n")
+	}
 	if n.Kind() == "class_decl" && e.b.Len() == fieldsStart {
 		// Go may give every zero-size allocation the same address; each instance of a class needs its own
 		// identity for ===, ObjectIdentifier and weak references.
@@ -489,6 +494,9 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	if n.Kind() == "class_decl" {
 		e.w("// SwiftClass marks %s as a reference type.\nfunc (*%s) SwiftClass() {}\n\n", info.GoName, recvT)
 		e.w("func (*%s) SwiftTypeName() string { return %q }\n\n", recvT, q)
+		if isActor(info) {
+			e.w("// SwiftActor is the isolation of the actor %s.\nfunc (self *%s) SwiftActor() *swiftrt.Actor { return &self.swiftActor }\n\n", info.GoName, recvT)
+		}
 		e.descriptionMarkers(q, "*"+recvT)
 	} else if !conformsTo(n, "s:s9OptionSetP") {
 		e.w("func (%s) SwiftTypeName() string { return %q }\n\n", recvT, q)
@@ -1683,6 +1691,7 @@ func (e *fileEmitter) funcDecl(n ast.Node, self *DeclInfo) {
 		e.w("func (self %s) %s(%s) %s ", recv, e.dispatched(info, self, recv, params, names, res), params, res)
 	}
 	e.preamble += e.unerase(n, erased)
+	defer e.isolatedMember(n, info)()
 	e.body(n, res)
 	e.w("\n\n")
 	if ps := n.Child("params").List("params"); self != nil && info.FreeSelf() && n.Name() == "encode" && len(ps) == 1 && e.m.demangle(ps[0].Str("interface_type")) == "Swift.Encoder" && e.m.IsPayloadEnum(e.selfQualified(self)) {
@@ -1986,6 +1995,7 @@ func (e *fileEmitter) computedVar(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		}
 		e.w("func (self %s) %s() %s ", recv, e.dispatched(info, self, recv, "", "", res), res)
 	}
+	defer e.isolatedMember(n, info)()
 	e.body(getter, res)
 	e.w("\n\n")
 }
@@ -2673,7 +2683,9 @@ func (e *fileEmitter) subscriptDecl(n ast.Node, self *DeclInfo) {
 			} else {
 				e.w("func (self %s) %s(%s) %s ", recv, info.GoName, params, res)
 			}
+			restore := e.isolatedMember(n, info)
 			e.body(a, res)
+			restore()
 			e.w("\n\n")
 		case a.Bool("set"):
 			setRecv := recv

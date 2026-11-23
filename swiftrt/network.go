@@ -233,6 +233,7 @@ func NSURLSessionDataFor(s URLSession, r URLRequest) struct {
 	F0 []byte
 	F1 URLResponse
 } {
+	defer ActorSuspend()()
 	if r.Url == nil {
 		panic(Throw(URLError{Code: URLErrorBadURL, Err: errors.New("missing URL")}))
 	}

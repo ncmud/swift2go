@@ -28,8 +28,12 @@ func InstantAdvanced(a ContinuousClockInstant, d Duration) ContinuousClockInstan
 	return ContinuousClockInstant(time.Time(a).Add(time.Duration(d)))
 }
 
-// TaskYield is `Task.yield()`: it lets other goroutines run.
-func TaskYield() { runtime.Gosched() }
+// TaskYield is `Task.yield()`: it lets other goroutines run, on the caller's actor too.
+func TaskYield() {
+	resume := ActorSuspend()
+	runtime.Gosched()
+	resume()
+}
 
 // EnumeratedDropFirst is `xs.enumerated().dropFirst()`.
 func EnumeratedDropFirst[T any](xs []struct {
