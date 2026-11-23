@@ -27,6 +27,21 @@ func AllCasesOf[T any]() []T {
 	return f.(func() []T)()
 }
 
+// AllCasesOfValue is `Self.allCases` where generic code knows Self only as the interface P, which v, a
+// value of Self, implements: the cases of v's dynamic type, as P values.
+func AllCasesOfValue[P any](v any) []P {
+	f, ok := allCasesReg.Load(reflect.TypeOf(v))
+	if !ok {
+		panic(fmt.Sprintf("swiftrt: %T has no registered allCases", v))
+	}
+	cases := reflect.ValueOf(f).Call(nil)[0]
+	out := make([]P, cases.Len())
+	for i := range out {
+		out[i] = cases.Index(i).Interface().(P) //nolint:forcetypeassert // the cases are values of v's type, which implements P
+	}
+	return out
+}
+
 // RegisterRawInit records T's `RawRepresentable.init(rawValue:)`.
 func RegisterRawInit[T, R any](f func(R) *T) { rawInitReg.Store(reflect.TypeFor[T](), f) }
 

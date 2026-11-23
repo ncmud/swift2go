@@ -69,3 +69,18 @@ func OptDoRef[T any](v T, f func(T)) *struct{} {
 	f(v)
 	return &struct{}{}
 }
+
+// OptionalExistential is the Optional existential P, whose Go form is the interface, of v, an Optional
+// whose Go form is a pointer: a class reference, or a pointer to a value: nil when v is nil, where Go's conversion would make an
+// interface that holds a nil pointer.
+func OptionalExistential[P any, T any](v *T) P {
+	var zero P
+	if v == nil {
+		return zero
+	}
+	if _, class := any(v).(interface{ SwiftClass() }); class {
+		return any(v).(P) //nolint:forcetypeassert // generated code calls this for a v that implements P
+	}
+	// The Optional of a value: the existential holds the value.
+	return any(*v).(P) //nolint:forcetypeassert // generated code calls this for a v that implements P
+}

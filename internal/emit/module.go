@@ -114,6 +114,7 @@ type Module struct {
 	protoReqs       map[string][]ast.Node
 	protoParents    map[string][]string // a local protocol's directly inherited protocols
 	conformers      map[string][]string // protocol qualified name → conforming local types
+	optConforms     map[string]ast.Node // local protocol → the extension that conforms Optional to it where Wrapped does
 	varInit         map[string]ast.Node // stored var usr → initializer expr
 	Unsupported     map[string]int
 	UnsupportedAt   map[string][]string
@@ -461,7 +462,7 @@ func New(name string, files []ast.File, rtPath string, opts ...Option) (*Module,
 	m := &Module{
 		Name: name, Pkg: strings.ToLower(name), RTPath: rtPath, Files: files,
 		decls: map[string]*DeclInfo{}, typeKinds: map[string]string{},
-		protoReqs: map[string][]ast.Node{}, protoParents: map[string][]string{}, conformers: map[string][]string{},
+		protoReqs: map[string][]ast.Node{}, protoParents: map[string][]string{}, conformers: map[string][]string{}, optConforms: map[string]ast.Node{},
 		varInit: map[string]ast.Node{}, typeParamNames: map[string][]string{}, lazyInits: map[string]bool{}, overridden: map[string]bool{}, importPkgs: map[string]string{}, objcNames: map[string]string{}, typeCache: map[string]*types.Type{}, typeAliases: map[string]string{}, Unsupported: map[string]int{}, UnsupportedAt: map[string][]string{},
 	}
 	for _, o := range opts {
@@ -712,6 +713,9 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				if p := c.Str("protocol"); p != "" {
 					pn := m.demangle(p)
 					m.conformers[pn] = append(m.conformers[pn], q)
+					if q == "Swift.Optional" && wrappedConformsTo(n, p) {
+						m.optConforms[pn] = n
+					}
 				}
 			}
 			m.index(n.List("members"), q, kind)
