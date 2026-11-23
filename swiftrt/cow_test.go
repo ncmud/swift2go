@@ -68,12 +68,20 @@ type cowRow struct {
 	Tag   string `swift:"tag"`
 }
 
+type cowTree struct {
+	Kids []cowTree `swift:"kids"`
+	Next *cowTree  `swift:"next"`
+}
+
+type cowTreeWithMap struct {
+	Kids []cowTreeWithMap       `swift:"kids"`
+	ByID map[int]cowTreeWithMap `swift:"byID"`
+}
+
 type cowWithOptional struct {
 	Cells []int `swift:"cells"`
 	Opt   *int  `swift:"opt"`
 }
-
-type cowRuntimeOwned struct{ Items []int }
 
 func TestShareableElements(t *testing.T) {
 	for _, tc := range []struct {
@@ -86,10 +94,14 @@ func TestShareableElements(t *testing.T) {
 		{reflect.TypeFor[[]cowRow](), true},
 		{reflect.TypeFor[*copyClass](), true},
 		{reflect.TypeFor[copyNode](), false},
-		{reflect.TypeFor[cowWithOptional](), false},
+		{reflect.TypeFor[cowTree](), true},
+		{reflect.TypeFor[cowTreeWithMap](), false},
+		{reflect.TypeFor[cowWithOptional](), true},
 		{reflect.TypeFor[map[string]int](), false},
-		{reflect.TypeFor[any](), false},
-		{reflect.TypeFor[cowRuntimeOwned](), false},
+		{reflect.TypeFor[[]map[string]int](), false},
+		{reflect.TypeFor[any](), true},
+		{reflect.TypeFor[OrderedSet[int]](), false},
+		{reflect.TypeFor[struct{ F0 OrderedSet[int] }](), false},
 		{reflect.TypeFor[struct{ F0 []int }](), true},
 	} {
 		if got := shareableElems(tc.t); got != tc.shareable {
@@ -99,19 +111,58 @@ func TestShareableElements(t *testing.T) {
 }
 
 func TestUnshareableArraysAreAlwaysCopied(t *testing.T) {
-	one := 1
-	a := []cowWithOptional{{Cells: []int{1}, Opt: &one}}
+	a := []map[string]int{{"a": 1}}
 	b := Copy(a)
-	if sameStorage(a, b) || b[0].Opt == a[0].Opt {
-		t.Fatal("an array of values holding optionals must be copied")
+	if sameStorage(a, b) {
+		t.Fatal("an array of dictionaries must be copied")
 	}
 	if cap(b) == len(b) {
 		t.Fatal("an unshareable copy should own spare capacity, so Mut need not look it up")
 	}
-	exact := []cowWithOptional{{}}
-	Mut(&exact)[0].Opt = &one
-	if exact[0].Opt != &one {
+	b[0]["a"] = 2
+	if a[0]["a"] != 1 {
+		t.Fatal("a copied array of dictionaries shares a dictionary")
+	}
+	exact := []map[string]int{{}}
+	Mut(&exact)[0]["b"] = 1
+	if exact[0]["b"] != 1 {
 		t.Fatal("Mut lost a write")
+	}
+}
+
+func TestCopySharesOptionalsAndProtocolValues(t *testing.T) {
+	one := 1
+	v := cowWithOptional{Cells: []int{1}, Opt: &one}
+	c := Copy(v)
+	if c.Opt != v.Opt || !sameStorage(c.Cells, v.Cells) {
+		t.Fatal("an Optional nothing writes in place should be shared")
+	}
+	*MutPtr(&c.Opt) = 2
+	if *v.Opt != 1 || *c.Opt != 2 {
+		t.Fatal("MutPtr must move the value before the write")
+	}
+	inner := make([]int, 1, 2)
+	boxed := &cowRow{Cells: inner}
+	cb := Copy(boxed)
+	if cb == boxed {
+		t.Fatal("an Optional holding an owned array must be copied")
+	}
+	var p any = cowRow{Cells: []int{1}}
+	cp := Copy(p)
+	if !sameStorage(cp.(cowRow).Cells, p.(cowRow).Cells) {
+		t.Fatal("a protocol value holding frozen arrays should be shared")
+	}
+	var q any = cowRow{Cells: inner}
+	if cq := Copy(q); sameStorage(cq.(cowRow).Cells, inner) {
+		t.Fatal("a protocol value holding an owned array must be copied")
+	}
+	var r any = &one
+	if cr := Copy(r); cr.(*int) == &one || *cr.(*int) != 1 {
+		t.Fatal("a protocol value held by pointer, which mutating methods write through, must be copied")
+	}
+	arr := []any{cowRow{Cells: []int{1}}, 3}
+	if ca := Copy(arr); !sameStorage(ca, arr) {
+		t.Fatal("an array of frozen protocol values should be shared")
 	}
 }
 
@@ -223,5 +274,14 @@ func BenchmarkCopySharedNested(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		_ = Copy(v)
+	}
+}
+
+func TestRepeatedProtocolValuesHeldByPointerAreCopied(t *testing.T) {
+	var v any = &cowRow{Tag: "a"}
+	xs := SliceInitRepeatingCount[[]any](v, 2)
+	xs[0].(*cowRow).Tag = "b"
+	if xs[1].(*cowRow).Tag != "a" || v.(*cowRow).Tag != "a" {
+		t.Fatal("elements of Array(repeating:count:) share a value their mutating methods write through")
 	}
 }

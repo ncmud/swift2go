@@ -12,6 +12,9 @@ type SwiftClass interface{ SwiftClass() }
 
 var swiftClassType = reflect.TypeFor[SwiftClass]()
 
+// runtimePkg is the import path of this package.
+var runtimePkg = reflect.TypeFor[copyPlan]().PkgPath()
+
 // Copy gives v Swift value semantics: the result and v can each be changed without the other seeing
 // it. Class references keep their identity. An array whose storage nothing can write in place (see
 // [Mut]) stays shared, as Swift shares an array's buffer between copies; the first write through
@@ -43,10 +46,10 @@ type copyPlan struct {
 	// one's length equals its capacity, all the way down. Only a shareable plan has one; nil means
 	// the type holds no array.
 	frozen func(unsafe.Pointer) bool
-	// shareable says the type holds storage only in arrays of Swift values, which every in-place
-	// write reaches through Mut. A non-class pointer, a map, an interface, or a slice field that a
-	// runtime type of its own writes in place makes a type unshareable, and its arrays are always
-	// copied.
+	// shareable says every in-place write to the type's storage goes through Mut (an array) or
+	// MutPtr (an Optional), and that no one writes an interface's value in place. A map, or a field
+	// that a runtime type of its own writes in place, makes a type unshareable, and its storage is
+	// always copied.
 	shareable bool
 	// kids are the plans of the parts, for working out shareable over recursive types.
 	kids []*copyPlan
@@ -183,12 +186,17 @@ func buildPlan(t reflect.Type, building map[reflect.Type]*copyPlan) *copyPlan {
 		p.shareable = false
 		p.fix = mapFix(t, buildPlan(t.Elem(), building))
 	case reflect.Interface:
-		p.shareable = false
 		p.fix = interfaceFix(t)
+		p.frozen = interfaceFrozen(t)
 	case reflect.Pointer:
 		if !t.Implements(swiftClassType) {
-			p.shareable = false
-			p.fix = pointerFix(t, buildPlan(t.Elem(), building))
+			elem := buildPlan(t.Elem(), building)
+			p.kids = []*copyPlan{elem}
+			p.fix = pointerFix(t, p, elem)
+			p.frozen = func(ptr unsafe.Pointer) bool {
+				target := *(*unsafe.Pointer)(ptr)
+				return target == nil || elem.frozen == nil || elem.frozen(target)
+			}
 		}
 	case reflect.Array:
 		elem := buildPlan(t.Elem(), building)
@@ -241,9 +249,9 @@ func structPlan(t reflect.Type, p *copyPlan, building map[reflect.Type]*copyPlan
 		if !f.IsExported() && !swiftProperty {
 			continue
 		}
-		if !swiftProperty && t.Name() != "" {
-			// An exported field of a runtime or overlay type (OrderedSet.Items) is written in place
-			// by Go code that does not go through Mut: it is never shared.
+		if !swiftProperty && t.PkgPath() == runtimePkg {
+			// A field of the runtime's own types (OrderedSet.Items) is written in place by Go code
+			// that does not go through Mut: it is never shared.
 			p.shareable = false
 			fp = ownedPlan(f.Type, fp)
 		}
@@ -270,7 +278,7 @@ func structPlan(t reflect.Type, p *copyPlan, building map[reflect.Type]*copyPlan
 	}
 }
 
-// ownedPlan is a plan for a field of type t, whose usual plan is p, that Go code writes in place
+// ownedPlan is a plan for a field of type t, whose usual plan is p, that the runtime writes in place
 // without Mut: a slice is always copied, into storage with a spare element so that Mut leaves it be.
 func ownedPlan(t reflect.Type, p *copyPlan) *copyPlan {
 	if t.Kind() != reflect.Slice || p.fix == nil {
@@ -405,11 +413,16 @@ func mapFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 	}
 }
 
-func pointerFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
+// pointerFix keeps an Optional whose value can be shared as it is, since no one writes through it
+// in place (MutPtr), and copies any other.
+func pointerFix(t reflect.Type, self, elem *copyPlan) func(unsafe.Pointer) {
 	elemType := typeWord(t.Elem())
 	return func(ptr unsafe.Pointer) {
 		old := *(*unsafe.Pointer)(ptr)
 		if old == nil {
+			return
+		}
+		if self.shareable && (elem.frozen == nil || elem.frozen(old)) {
 			return
 		}
 		np := unsafeNew(elemType)
@@ -429,13 +442,20 @@ func interfaceFix(t reflect.Type) func(unsafe.Pointer) {
 			return
 		}
 		inner := v.Elem()
-		dyn := planOf(inner.Type())
-		if dyn.fix == nil {
+		dt := inner.Type()
+		if dt.Kind() == reflect.Pointer && !dt.Implements(swiftClassType) {
+			// A struct held by pointer, which its mutating methods write through: copy what it
+			// points at.
+			nv := reflect.New(dt.Elem())
+			nv.Elem().Set(inner.Elem())
+			if elem := planOf(dt.Elem()); elem.fix != nil {
+				elem.fix(nv.UnsafePointer())
+			}
+			v.Set(nv)
 			return
 		}
-		if dyn.shareable && (dyn.frozen == nil || dyn.frozen((*[2]unsafe.Pointer)(ptr)[1])) {
-			// A shareable value that holds an array is larger than a pointer, so the interface's data
-			// word points at it; Go never writes into an interface's value, so the box can be shared.
+		dyn := planOf(dt)
+		if dyn.fix == nil || ifaceShareable(dt, ptr) {
 			return
 		}
 		nv := reflect.New(inner.Type())
@@ -443,4 +463,52 @@ func interfaceFix(t reflect.Type) func(unsafe.Pointer) {
 		dyn.fix(nv.UnsafePointer())
 		v.Set(nv.Elem())
 	}
+}
+
+// interfaceFrozen is the frozen test of an interface type: the value an interface holds can be
+// shared as it is.
+func interfaceFrozen(t reflect.Type) func(unsafe.Pointer) bool {
+	ptrWord := typeWord(reflect.PointerTo(t))
+	return func(ptr unsafe.Pointer) bool {
+		if (*[2]unsafe.Pointer)(ptr)[0] == nil {
+			return true
+		}
+		dt := valueAt(ptrWord, ptr).Elem().Type()
+		return ifaceShareable(dt, ptr)
+	}
+}
+
+// ifaceShareable reports whether the interface at ptr, holding a value of type dt, can be shared as it
+// is. Go never writes an interface's value in place, except that a struct whose protocol has mutating
+// requirements is held by pointer (swiftrt.Ref), and its methods write through that pointer.
+func ifaceShareable(dt reflect.Type, ptr unsafe.Pointer) bool {
+	if dt.Kind() == reflect.Pointer && !dt.Implements(swiftClassType) {
+		return false
+	}
+	dyn := planOf(dt)
+	return dyn.fix == nil || dyn.shareable && (dyn.frozen == nil || dyn.frozen(ifaceValue(ptr, dt)))
+}
+
+// ifaceValue points at the value an interface at ptr holds, of dynamic type t: the data word itself
+// for a pointer-shaped type, which the interface stores directly, and what the data word points at
+// otherwise.
+func ifaceValue(ptr unsafe.Pointer, t reflect.Type) unsafe.Pointer {
+	w := (*[2]unsafe.Pointer)(ptr)
+	if directIface(t) {
+		return unsafe.Pointer(&w[1]) //nolint:gosec // the data word holds the value
+	}
+	return w[1]
+}
+
+// directIface reports whether Go stores a value of type t in an interface's data word itself.
+func directIface(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Chan, reflect.Map, reflect.Func, reflect.UnsafePointer:
+		return true
+	case reflect.Struct:
+		return t.NumField() == 1 && directIface(t.Field(0).Type)
+	case reflect.Array:
+		return t.Len() == 1 && directIface(t.Elem())
+	}
+	return false
 }
