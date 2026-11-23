@@ -1671,7 +1671,20 @@ func (e *fileEmitter) assign(n ast.Node) {
 		e.w("%s = swiftrt.Some[%s](%s)\n", e.lvalue(dest), e.exprGoType(d), e.owned(src, sinkStore))
 		return
 	}
-	e.w("%s = %s\n", e.lvalue(dest), e.owned(src, sinkStore))
+	e.w("%s = %s\n", e.lvalue(dest), e.owned(src, e.assignSink(dest)))
+}
+
+// assignSink is the sink of a value assigned to dest: a `let` declared without a value binds it
+// as its declaration would have, and every other place stores it.
+func (e *fileEmitter) assignSink(dest ast.Node) sink {
+	d := stripLoads(dest)
+	if e.scopes == nil || d.Kind() != "declref_expr" {
+		return sinkStore
+	}
+	if ref, ok := e.scopes.refs[nodeKey(d)]; ok && !ref.cross && ref.frame.deferredLet(ref.name) {
+		return sinkLet
+	}
+	return sinkStore
 }
 
 // implicitlyUnwrappedForeign reports whether a member reference writes a property that Foundation on Linux
