@@ -3,6 +3,7 @@ package emit
 import (
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1070,6 +1071,8 @@ func (e *fileEmitter) forEach(n ast.Node) {
 		base := source(call.base)
 		if e.m.Recv(e.m.typeOf(call.base.Type())) == "String" {
 			base = "swiftrt.StringChars(" + base + ")"
+		} else if t := e.m.typeOf(call.base.Type()); t != nil && t.Kind == types.Array {
+			e.reserveAppends(n, base)
 		}
 		inner := unwrapPattern(p)
 		if inner.Kind() == "pattern_tuple" {
@@ -1145,6 +1148,10 @@ func (e *fileEmitter) forEach(n ast.Node) {
 			src = "swiftrt." + e.m.Recv(st) + "Elements(" + src + ")"
 		case "OrderedSet", "Heap":
 			src = src + ".Items"
+		case "Slice":
+			if st.Kind == types.Array {
+				e.reserveAppends(n, src)
+			}
 		}
 		inner := unwrapPattern(p)
 		if inner.Kind() == "pattern_tuple" {
@@ -2172,6 +2179,93 @@ func (e *fileEmitter) optionalValue(subj string, t *types.Type) string {
 		return subj
 	}
 	return "(*" + subj + ")"
+}
+
+// reservedAppends bounds the capacity reserveAppends gives an array, so a loop that rarely appends
+// to it allocates little more than the growth it saves.
+const reservedAppends = 64
+
+// pureSelector matches a Go expression that only names a variable or reads its fields, which a loop
+// can evaluate an extra time.
+var pureSelector = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
+
+// reserveAppends gives each local array the for-in loop n appends to, and that is still empty
+// without storage when the loop starts, capacity for one element per iteration of the array src the
+// loop ranges over, up to reservedAppends. An empty array's capacity is not part of its value, so
+// only the growth the appends would make changes.
+func (e *fileEmitter) reserveAppends(n ast.Node, src string) {
+	if !pureSelector.MatchString(src) {
+		return
+	}
+	declared := map[string]bool{}
+	ast.Walk(n, func(x ast.Node) {
+		if x.Kind() == "pattern_named" {
+			declared[x.Child("name").Child("base_name").Str("name")] = true
+		}
+	})
+	var names []string
+	seen := map[string]bool{}
+	var walk func(x any)
+	walk = func(x any) {
+		switch v := x.(type) {
+		case []any:
+			for _, c := range v {
+				walk(c)
+			}
+		case map[string]any:
+			node := ast.Node(v)
+			if node.Kind() == "closure_expr" {
+				return
+			}
+			if arr := appendedArray(node); arr != nil {
+				name := arr.Child("decl").Str("base_name")
+				if t := e.m.typeOf(arr.Type()); !declared[name] && !seen[name] && !e.inoutParams[name] && t != nil && t.Kind == types.Array {
+					if gt := e.m.GoType(t, e.generics); strings.HasPrefix(gt, "[]") {
+						seen[name] = true
+						names = append(names, goSafe(name), gt)
+					}
+				}
+			}
+			for _, c := range v {
+				switch c.(type) {
+				case map[string]any, []any:
+					walk(c)
+				}
+			}
+		}
+	}
+	walk(map[string]any(n.Child("body")))
+	for i := 0; i < len(names); i += 2 {
+		v, gt := names[i], names[i+1]
+		e.w("if %s != nil && cap(%s) == 0 {\n%s = make(%s, 0, min(len(%s), %d))\n}\n", v, v, v, gt, src, reservedAppends)
+	}
+}
+
+// appendedArray is the local array variable x appends one element to, as `a.append(e)`, or nil.
+func appendedArray(x ast.Node) ast.Node {
+	if x.Kind() != "call_expr" {
+		return nil
+	}
+	if args := x.Child("args").List("args"); len(args) != 1 || args[0].Str("label") != "" {
+		return nil
+	}
+	dot := stripConv(x.Child("fn"))
+	if dot == nil || dot.Kind() != "dot_syntax_call_expr" || stripConv(dot.Child("fn")).Child("decl").Str("base_name") != "append" {
+		return nil
+	}
+	recv := dot.Child("args").List("args")
+	if len(recv) != 1 {
+		return nil
+	}
+	in := recv[0].Child("expr")
+	if in == nil || in.Kind() != "inout_expr" {
+		return nil
+	}
+	ref := in.Child("sub_expr")
+	if ref == nil || ref.Kind() != "declref_expr" || ref.Child("decl").Str("decl_usr") != "" {
+		return nil
+	}
+	return ref
 }
 
 func containsKind(n ast.Node, kind string) bool {

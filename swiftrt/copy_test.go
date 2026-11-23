@@ -279,3 +279,46 @@ func BenchmarkCopyStruct(b *testing.B) {
 		v = Copy(v)
 	}
 }
+
+// deepNode nests n nodes, each the only child of the one before.
+func deepNode(n int) copyNode {
+	root := copyNode{Value: 0}
+	cur := &root
+	for i := 1; i < n; i++ {
+		cur.Children = []copyNode{{Value: i}}
+		cur = &cur.Children[0]
+	}
+	return root
+}
+
+// TestCopyWhileTheStackGrows copies a value whose plan recurses deep enough to grow a fresh
+// goroutine's stack while the copy is being fixed in place on that stack.
+func TestCopyWhileTheStackGrows(t *testing.T) {
+	const depth = 2_000
+	orig := deepNode(depth)
+	done := make(chan copyNode)
+	go func() { done <- Copy(orig) }()
+	c := <-done
+	cur, other := &c, &orig
+	for i := range depth {
+		if cur.Value != i {
+			t.Fatalf("node %d holds %d", i, cur.Value)
+		}
+		if i < depth-1 {
+			if &cur.Children[0] == &other.Children[0] {
+				t.Fatalf("node %d shares its children with the original", i)
+			}
+			cur, other = &cur.Children[0], &other.Children[0]
+		}
+	}
+}
+
+// BenchmarkCopyNested copies a struct like the gear optimizer's candidates: nested structs holding
+// slices of structs and optionals.
+func BenchmarkCopyNested(b *testing.B) {
+	v := newCopyOuter()
+	b.ReportAllocs()
+	for b.Loop() {
+		v = Copy(v)
+	}
+}
