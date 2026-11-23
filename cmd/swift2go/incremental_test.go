@@ -172,7 +172,7 @@ func loaded() -> Int { load() }
 		t.Helper()
 		var err error
 		log = captureStderr(t, func() {
-			err = run("transpile", targets, pkgDir, dir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{"Core": overlay}, incremental, swiftmod.Destination{})
+			err = run("transpile", targets, pkgDir, dir, swiftmod.BuildDir(pkgDir, swiftmod.Destination{}), "", mapFlag{}, overlayFlag{"Core": overlay}, incremental, false, swiftmod.Destination{})
 		})
 		if err != nil {
 			t.Fatalf("%v\n%s", err, log)

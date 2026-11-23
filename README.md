@@ -66,6 +66,14 @@ go run github.com/ncmud/swift2go/cmd/swift2go -pkg path/to/SwiftPackage transpil
   `swift build --target <Target>` first; if the outputs are missing, or older than a non-Swift file in
   the target's directory (such as the plugin's input), the target fails and names the command to run.
 
+### Files the compiler fails on
+
+A file the compiler can't type-check is left out of its target, and the run prints `swift2go: skipped` with
+the file and the first line of the compiler's error. With `-strict` (or `SWIFT2GO_STRICT=1`), such a file fails
+its target instead, and the run prints every distinct error the compiler gave and exits non-zero. An
+`-incremental` run dumps every file again when it switches between strict and lenient, so a strict run never
+reuses a file that failed in a lenient one.
+
 ### Incremental runs
 
 `-incremental` caches each target's ASTs under `out/.cache/<Target>`, and the next run dumps only what

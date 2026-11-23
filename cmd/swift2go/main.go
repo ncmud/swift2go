@@ -33,6 +33,7 @@ func main() {
 	overlays := overlayFlag{}
 	flag.Var(overlays, "overlay", "`Target=dir`: hand-written Go files in dir replace the target's Swift files of the same name (repeatable)")
 	incremental := flag.Bool("incremental", false, "re-dump only the files whose content or dependencies changed since an earlier incremental run, which cached the ASTs under OUT/.cache")
+	strict := flag.Bool("strict", os.Getenv("SWIFT2GO_STRICT") != "", "fail a target, printing the compiler's errors, when the compiler fails on one of its files, instead of transpiling the target without the file (default from SWIFT2GO_STRICT)")
 	swiftSDK := flag.String("swift-sdk", "", "compile for an installed Swift SDK, named by its id or a target triple as for `swift build --swift-sdk`, and build the package's dependencies for it")
 	triple := flag.String("triple", "", "the target triple of the Swift SDK to compile for, when it has more than one")
 	var xcc listFlag
@@ -54,7 +55,7 @@ func main() {
 	if *buildDir == "" {
 		*buildDir = swiftmod.BuildDir(*pkgDir, dest)
 	}
-	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays, *incremental, dest, xcc...); err != nil {
+	if err := run(flag.Arg(0), flag.Args()[1:], *pkgDir, *outDir, absPath(*buildDir), *modules, maps, overlays, *incremental, *strict, dest, xcc...); err != nil {
 		fmt.Fprintln(os.Stderr, "swift2go:", err)
 		os.Exit(1)
 	}
@@ -98,7 +99,7 @@ func (o overlayFlag) Set(v string) error {
 	return nil
 }
 
-func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag, incremental bool, dest swiftmod.Destination, xcc ...string) error {
+func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string, maps mapFlag, overlays overlayFlag, incremental, strict bool, dest swiftmod.Destination, xcc ...string) error {
 	pkgDir = absPath(pkgDir)
 	if !dest.Host() {
 		// A Swift SDK's modules come from a swift.org build of the compiler, which Xcode's compiler
@@ -161,7 +162,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			return nil, err
 		}
 		if incremental {
-			c := cachedLoad{t: t, targets: targets, outDir: outDir, mods: mods, searchDirs: searchDirs, extra: extra}
+			c := cachedLoad{t: t, targets: targets, outDir: outDir, mods: mods, searchDirs: searchDirs, extra: extra, strict: strict}
 			return c.load(ifaces, emitted)
 		}
 		if t.Type != "test" {
@@ -170,13 +171,13 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			}
 			emitted[t.Name] = true
 		}
-		data, err := swiftmod.DumpAST(t, mods, absPath(filepath.Join(outDir, "derived")), extra...)
+		data, err := swiftmod.DumpAST(t, mods, absPath(filepath.Join(outDir, "derived")), strict, extra...)
 		if err != nil {
 			return nil, err
 		}
 		cache := filepath.Join(outDir, "ast", t.Name+".json")
 		_ = os.MkdirAll(filepath.Dir(cache), 0o755)
-		_ = os.WriteFile(cache, data, 0o644)
+		_ = os.WriteFile(cache, data, 0o644) //nolint:gosec // under the output directory it was given, as G304 allows for reads
 		return ast.Load(data)
 	}
 	var done []*emit.Module
@@ -298,6 +299,7 @@ type cachedLoad struct {
 	mods       string
 	searchDirs []string
 	extra      []string
+	strict     bool
 }
 
 // load dumps the target's files that changed, reusing the cached ASTs of the others, and emits the
@@ -312,7 +314,12 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 	if err != nil {
 		return nil, err
 	}
+	d.Strict = c.strict
 	env := d.Key() + "\x00" + swiftmod.DependencyKey(t, c.targets, ifaces, c.searchDirs)
+	// A strict run never caches a failed file, so it must not reuse a cache that has one.
+	if c.strict {
+		env += "\x00strict"
+	}
 	dump, err := swiftmod.DumpCached(cacheDir, env, d.Sources, d.Dump)
 	if err != nil {
 		return nil, err
