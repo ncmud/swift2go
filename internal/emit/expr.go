@@ -67,6 +67,12 @@ func (e *fileEmitter) expr(n ast.Node) string {
 			return "swiftrt.Flat(" + out + ")"
 		}
 	}
+	if n != nil && n.Kind() == "call_expr" && strings.HasPrefix(out, "swiftrt.StringSplit") {
+		// Sequence's split, chosen over Collection's for a String, makes Character arrays, not Substrings.
+		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Array && len(t.Args) == 1 && e.m.GoType(t.Args[0], e.generics) == "[]swiftrt.Character" {
+			return "swiftrt.SubstringsAsCharacters(" + out + ")"
+		}
+	}
 	if n == nil || !strings.HasPrefix(out, "swiftrt.") {
 		return out
 	}
@@ -2496,6 +2502,12 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 			e.typedErasure[nodeKey(v)] = true
 		}
 	}
+	if d.Str("base_name") == "contains" && len(as) == 1 && as[0].label == "" && base != nil {
+		// `contains(_ other: some Collection)`, as on `s.utf8.contains(t.utf8)`: a subsequence, not an element.
+		if bg := e.exprGoType(base); strings.HasPrefix(bg, "[]") && bg == e.exprGoType(as[0].node) {
+			return "swiftrt.SliceContainsSubsequence(" + e.expr(base) + ", " + e.expr(as[0].node) + ")"
+		}
+	}
 	if d.Str("base_name") == "joined" && len(as) == 0 && base != nil {
 		if bt := e.m.typeOf(base.Type()); bt != nil && (bt.Kind == types.Array || e.m.Recv(bt) == "Slice") && len(bt.Args) == 1 {
 			switch e.m.Recv(bt.Args[0]) {
@@ -3079,6 +3091,11 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 	case "??":
 		return e.coalesce(n, lt, l, r)
 	case "~=":
+		switch e.m.Recv(lt) {
+		case "Range", "ClosedRange":
+			// A range pattern matches the values it contains.
+			return "swiftrt." + e.m.Recv(lt) + "Contains(" + e.expr(l) + ", " + e.expr(r) + ")"
+		}
 		return e.expr(l) + " == " + e.expr(r)
 	case "==", "!=":
 		if rl, rr := e.m.Recv(lt), e.m.Recv(e.m.typeOf(r.Type())); (rl == "String" || rl == "Substring") && (rr == "String" || rr == "Substring") && rl != rr {
@@ -3140,8 +3157,21 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 			}
 			return "swiftrt.PointerAdvanced(" + e.expr(l) + ", " + by + ")"
 		}
-		if op == "-" && e.m.GoType(lt, e.generics) == "swiftrt.ContinuousClockInstant" {
-			return "swiftrt.InstantSub(" + e.expr(l) + ", " + e.expr(r) + ")"
+		if e.m.GoType(lt, e.generics) == "swiftrt.ContinuousClockInstant" {
+			switch rg := e.m.GoType(e.m.typeOf(r.Type()), e.generics); {
+			case op == "-" && rg == "swiftrt.ContinuousClockInstant":
+				return "swiftrt.InstantSub(" + e.expr(l) + ", " + e.expr(r) + ")"
+			case rg == "swiftrt.Duration":
+				by := e.expr(r)
+				if op == "-" {
+					by = "-(" + by + ")"
+				}
+				return "swiftrt.InstantAdvanced(" + e.expr(l) + ", " + by + ")"
+			}
+		}
+		if e.m.GoType(lt, e.generics) == "swiftrt.Date" && e.m.GoType(e.m.typeOf(r.Type()), e.generics) != "swiftrt.Date" {
+			// Date ± TimeInterval is a Date.
+			return "(" + e.expr(l) + " " + op + " swiftrt.Date(" + e.expr(r) + "))"
 		}
 		if op == "+" && (e.m.Recv(lt) == "String" || e.m.Recv(lt) == "Substring") {
 			cat := e.stringish(l) + " + " + e.stringish(r)
@@ -3323,6 +3353,10 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 		if base == "+" && e.m.Recv(lt) == "String" {
 			return cur + " + " + rs
 		}
+		if (base == "+" || base == "-") && e.m.GoType(lt, e.generics) == "swiftrt.Date" {
+			// Date ± TimeInterval is a Date.
+			return cur + " " + base + " swiftrt.Date(" + rs + ")"
+		}
 		return cur + " " + base + " " + rs
 	}
 	if info, _ := e.lookup(d.Str("decl_usr")); info == nil {
@@ -3348,6 +3382,9 @@ func (e *fileEmitter) compoundAssignOnce(n, d ast.Node, op string, as []arg, l a
 	if base == "+" && e.m.GoType(lt, e.generics) == "string" && goAddressable(l, lv) {
 		// Swift appends to a String in amortised constant time; Go's += copies it.
 		return "swiftrt.StringAppend(&" + lv + ", " + rs + ")", true
+	}
+	if (base == "+" || base == "-") && e.m.GoType(lt, e.generics) == "swiftrt.Date" {
+		return lv + " " + op + " swiftrt.Date(" + rs + ")", true
 	}
 	return lv + " " + op + " " + rs, true
 }
@@ -3984,6 +4021,9 @@ var goOrdered = map[string]bool{
 func (e *fileEmitter) lessFunc(t *types.Type) string {
 	if t != nil && t.Kind == types.Named && t.Name == "Swift.Int128" {
 		return "swiftrt.Int128Less"
+	}
+	if t != nil && e.m.GoType(t, e.generics) == "swiftrt.ContinuousClockInstant" {
+		return "swiftrt.InstantLess"
 	}
 	return e.operatorFunc(t, "<")
 }

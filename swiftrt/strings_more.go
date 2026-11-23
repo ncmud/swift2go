@@ -987,3 +987,13 @@ func StringScalarsFrom(s string, r PartialRangeFrom[int]) []rune {
 	}
 	return []rune(s[r.Lo:])
 }
+
+// SubstringsAsCharacters is the Characters of each Substring: Sequence's split of a String, which makes arrays of
+// Characters, from the Substrings the runtime's split makes.
+func SubstringsAsCharacters(subs []Substring) [][]Character {
+	out := make([][]Character, len(subs))
+	for i, s := range subs {
+		out[i] = StringChars(s.String())
+	}
+	return out
+}

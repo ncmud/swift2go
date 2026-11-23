@@ -37,3 +37,13 @@ struct NamedRows {
     let failure: (any Error)? = LibError()
     checkEqual(try checkSome(failure) is LibError, true)
 }
+
+@Test(arguments: zip([5, 150], [90, 100]))
+func zippedArguments(stored: Int, clamped: Int) {
+    checkEqual(min(max(stored, 90), 100), clamped)
+}
+
+@Test(arguments: zip(["a", "bb"], [1...1, 2...2]))
+func zippedRanges(text: String, range: ClosedRange<Int>) {
+    checkEqual(range.contains(text.count), true)
+}

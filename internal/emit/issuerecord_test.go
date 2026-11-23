@@ -26,6 +26,8 @@ func TestIssueRecord(t *testing.T) {
 		"--- PASS: TestComparableUsesTheTypesOwnLess",
 		"--- PASS: TestNamedRowsKeyPathArguments",
 		"--- PASS: TestOptionalReferencesThroughGenerics",
+		"--- PASS: TestZippedArguments",
+		"--- PASS: TestZippedRanges",
 		"--- FAIL: TestUnequalArraysRecordAnIssue",
 		"Tests/LibTests/LibTests.swift:18:15: checkEqual failed: [\"a\"] != [\"b\"] - arrays differ",
 	} {

@@ -1645,9 +1645,14 @@ func (e *fileEmitter) goTest(n ast.Node, info *DeclInfo, self *DeclInfo) {
 		if len(argExprs) == 1 {
 			et = e.m.GoType(e.m.typeOf(params[0].Str("interface_type")), nil)
 			if len(params) > 1 {
-				if t := e.m.typeOf(ax.Type()); t != nil && len(t.Args) == 1 {
-					et = e.m.GoType(t.Args[0], nil)
+				// One collection of tuples, such as `zip(xs, ys)`, for several parameters: each element is the
+				// tuple of the parameters' types.
+				tuple := &types.Type{Kind: types.Tuple}
+				for _, p := range params {
+					tuple.Args = append(tuple.Args, e.m.typeOf(p.Str("interface_type")))
+					tuple.Labels = append(tuple.Labels, "")
 				}
+				et = e.m.GoType(tuple, nil)
 			}
 		} else {
 			et = e.m.GoType(e.m.typeOf(params[i].Str("interface_type")), nil)
