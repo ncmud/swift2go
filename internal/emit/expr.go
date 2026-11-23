@@ -3394,7 +3394,7 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		return e.coalesce(n, lt, l, r)
 	case "~=":
 		switch e.m.Recv(lt) {
-		case "Range", "ClosedRange":
+		case "Range", "ClosedRange", "PartialRangeFrom", "PartialRangeUpTo", "PartialRangeThrough":
 			// A range pattern matches the values it contains.
 			return "swiftrt." + e.m.Recv(lt) + "Contains(" + e.expr(l) + ", " + e.expr(r) + ")"
 		}

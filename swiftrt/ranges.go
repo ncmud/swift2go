@@ -53,6 +53,15 @@ func RangeContains[T Ordered](r Range[T], v T) bool { return r.Contains(v) }
 // ClosedRangeContains is ClosedRange.contains(_:).
 func ClosedRangeContains[T Ordered](r ClosedRange[T], v T) bool { return r.Contains(v) }
 
+// PartialRangeFromContains is PartialRangeFrom.contains(_:).
+func PartialRangeFromContains[T Ordered](r PartialRangeFrom[T], v T) bool { return r.Contains(v) }
+
+// PartialRangeUpToContains is PartialRangeUpTo.contains(_:).
+func PartialRangeUpToContains[T Ordered](r PartialRangeUpTo[T], v T) bool { return r.Contains(v) }
+
+// PartialRangeThroughContains is PartialRangeThrough.contains(_:).
+func PartialRangeThroughContains[T Ordered](r PartialRangeThrough[T], v T) bool { return r.Contains(v) }
+
 // RangeMap is (lo..<hi).map(f).
 func RangeMap[U any, T Integer](r Range[T], f func(T) U) []U {
 	out := make([]U, 0, max(0, int(r.Hi)-int(r.Lo)))
