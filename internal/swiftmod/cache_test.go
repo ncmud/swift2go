@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 )
@@ -45,12 +44,20 @@ func (f *fakeDumper) dump(primaries []int, copies map[int]string) ([]FileDump, e
 func (f *fakeDumper) last() []string { return f.calls[len(f.calls)-1] }
 
 const (
-	bodyA  = `{"_kind":"source_file","items":[{"_kind":"func_decl","usr":"s:A1fyyF","interface_type":"$syycD","decl_context":"replaced-pointer-1","range":{"start":10,"end":40},"body":{"_kind":"brace_stmt","elements":[]}}]}`
-	bodyA2 = `{"_kind":"source_file","items":[{"_kind":"func_decl","usr":"s:A1fyyF","interface_type":"$syycD","decl_context":"replaced-pointer-1","range":{"start":10,"end":52},"body":{"_kind":"brace_stmt","elements":[{"_kind":"call_expr","decl_context":"replaced-pointer-2"}]}}]}`
-	sigA   = `{"_kind":"source_file","items":[{"_kind":"func_decl","usr":"s:A1fyySiF","interface_type":"$sySicD","decl_context":"replaced-pointer-1","range":{"start":10,"end":40},"body":{"_kind":"brace_stmt","elements":[]}}]}`
-	fileB  = `{"_kind":"source_file","items":[{"_kind":"var_decl","usr":"s:B1xSivp","interface_type":"$sSimD"}]}`
-	macroB = `{"_kind":"source_file","items":[{"_kind":"struct_decl","usr":"s:B1SV","attrs":[{"_kind":"custom_attr","macro":"m"}]}]}`
+	bodyA  = `{"_kind":"source_file","filename":"A.swift","items":[{"_kind":"func_decl","usr":"s:A1fyyF","name":{"_kind":"decl_name","base_name":{"_kind":"base_name","name":"f"}},"interface_type":"$syycD","decl_context":"replaced-pointer-1","range":{"start":10,"end":40},"body":{"_kind":"brace_stmt","elements":[]}}]}`
+	bodyA2 = `{"_kind":"source_file","filename":"A.swift","items":[{"_kind":"func_decl","usr":"s:A1fyyF","name":{"_kind":"decl_name","base_name":{"_kind":"base_name","name":"f"}},"interface_type":"$syycD","decl_context":"replaced-pointer-1","range":{"start":10,"end":52},"body":{"_kind":"brace_stmt","elements":[{"_kind":"call_expr","decl_context":"replaced-pointer-2"}]}}]}`
+	sigA   = `{"_kind":"source_file","filename":"A.swift","items":[{"_kind":"func_decl","usr":"s:A1fyySiF","name":{"_kind":"decl_name","base_name":{"_kind":"base_name","name":"f"}},"interface_type":"$sySicD","decl_context":"replaced-pointer-1","range":{"start":10,"end":40},"body":{"_kind":"brace_stmt","elements":[]}}]}`
+	fileB  = `{"_kind":"source_file","filename":"B.swift","items":[{"_kind":"var_decl","usr":"s:B1xSivp","name":{"_kind":"decl_name","base_name":{"_kind":"base_name","name":"x"}},"interface_type":"$sSimD"}]}`
+	macroB = `{"_kind":"source_file","filename":"B.swift","items":[{"_kind":"struct_decl","usr":"s:B1SV","attrs":[{"_kind":"custom_attr","macro":"m"}]}]}`
+	// usesF calls f; other mentions nothing of A's.
+	usesF = `{"_kind":"source_file","filename":"C.swift","items":[{"_kind":"func_decl","usr":"s:C1gyyF","name":{"_kind":"decl_name","base_name":{"_kind":"base_name","name":"g"}},"interface_type":"$syycD","body":{"_kind":"brace_stmt","elements":[{"_kind":"call_expr","fn":{"_kind":"declref_expr","decl":{"_kind":"decl_ref","base_name":"f","decl_usr":"s:A1fyyF"}}}]}}]}`
+	other = `{"_kind":"source_file","filename":"D.swift","items":[{"_kind":"func_decl","usr":"s:D1hyyF","name":{"_kind":"decl_name","base_name":{"_kind":"base_name","name":"h"}},"interface_type":"$syycD","body":{"_kind":"brace_stmt","elements":[]}}]}`
 )
+
+func init() {
+	// The fake documents' symbols stand for themselves.
+	newDemangler = func([]string) (func(string) string, error) { return func(s string) string { return s }, nil }
+}
 
 func writeNow(t *testing.T, path, content string) {
 	t.Helper()
@@ -71,7 +78,7 @@ func setup(t *testing.T, a, b string) (string, []string, *fakeDumper) {
 func dumpOK(t *testing.T, dir, env string, sources []string, f *fakeDumper) CachedDump {
 	t.Helper()
 	f.sources = sources
-	d, err := DumpCached(dir, env, sources, f.dump)
+	d, err := DumpCached(dir, env, nil, sources, f.dump)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +103,7 @@ func TestDumpCachedReusesUnchangedFiles(t *testing.T) {
 	if again.Dumped != 0 || len(f.calls) != 1 {
 		t.Fatalf("unchanged run dumped %d files in %d calls, want none", again.Dumped, len(f.calls)-1)
 	}
-	if !slices.Equal(docs(first), docs(again)) || first.Interface != again.Interface {
+	if !slices.Equal(docs(first), docs(again)) || first.Interface.Hash != again.Interface.Hash {
 		t.Fatal("unchanged run returned different documents or interface")
 	}
 }
@@ -112,7 +119,7 @@ func TestDumpCachedRedumpsOnlyABodyEdit(t *testing.T) {
 	if !slices.Equal(docs(d), []string{bodyA2, fileB}) {
 		t.Fatalf("body edit returned %q", docs(d))
 	}
-	if d.Interface != first.Interface {
+	if d.Interface.Hash != first.Interface.Hash {
 		t.Fatal("a body edit changed the interface")
 	}
 	if again := dumpOK(t, dir, "env", sources, f); again.Dumped != 0 || string(again.Docs[0]) != bodyA2 {
@@ -120,19 +127,61 @@ func TestDumpCachedRedumpsOnlyABodyEdit(t *testing.T) {
 	}
 }
 
-func TestDumpCachedRedumpsEverythingAfterADeclarationEdit(t *testing.T) {
-	dir, sources, f := setup(t, bodyA, fileB)
+func TestDumpCachedRedumpsTheFilesThatMentionAnEditedDeclaration(t *testing.T) {
+	root := t.TempDir()
+	var sources []string
+	for _, f := range []struct{ name, doc string }{{"A.swift", bodyA}, {"B.swift", fileB}, {"C.swift", usesF}, {"D.swift", other}} {
+		sources = append(sources, filepath.Join(root, f.name))
+		writeNow(t, sources[len(sources)-1], f.doc)
+	}
+	dir, f := filepath.Join(root, "cache"), &fakeDumper{sources: sources}
 	first := dumpOK(t, dir, "env", sources, f)
 	writeNow(t, sources[0], sigA)
 	d := dumpOK(t, dir, "env", sources, f)
-	if !slices.Equal(f.last(), sources) || d.Dumped != 2 {
-		t.Fatalf("declaration edit last dumped %v, want every file", f.last())
+	if want := []string{sources[0], sources[2]}; !slices.Equal(slices.Concat(f.calls[1:]...), want) || d.Dumped != 2 {
+		t.Fatalf("declaration edit dumped %v, want A and C, which calls f", f.calls[1:])
 	}
-	if d.Interface == first.Interface {
+	if d.Interface.Hash == first.Interface.Hash {
 		t.Fatal("a declaration edit kept the interface")
 	}
-	if !slices.Equal(docs(d), []string{sigA, fileB}) {
+	if !slices.Equal(docs(d), []string{sigA, fileB, usesF, other}) {
 		t.Fatalf("declaration edit returned %q", docs(d))
+	}
+}
+
+func TestDumpCachedFollowsAnImportedDeclaration(t *testing.T) {
+	root := t.TempDir()
+	core := []string{filepath.Join(root, "Core", "A.swift")}
+	writeNow(t, core[0], bodyA)
+	app := []string{filepath.Join(root, "App", "C.swift"), filepath.Join(root, "App", "D.swift")}
+	writeNow(t, app[0], usesF)
+	writeNow(t, app[1], other)
+	coreDir, appDir := filepath.Join(root, "cache", "Core"), filepath.Join(root, "cache", "App")
+	fc, fa := &fakeDumper{sources: core}, &fakeDumper{sources: app}
+	dumpApp := func(iface *Interface) CachedDump {
+		t.Helper()
+		d, err := DumpCached(appDir, "env", map[string]*Interface{"Core": iface}, app, fa.dump)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	dumpApp(dumpOK(t, coreDir, "env", core, fc).Interface)
+	writeNow(t, core[0], bodyA2)
+	if d := dumpApp(dumpOK(t, coreDir, "env", core, fc).Interface); d.Dumped != 0 {
+		t.Fatalf("a body edit in an import dumped %v", fa.calls[1:])
+	}
+	writeNow(t, core[0], sigA)
+	if d := dumpApp(dumpOK(t, coreDir, "env", core, fc).Interface); d.Dumped != 1 || !slices.Equal(fa.last(), app[:1]) {
+		t.Fatalf("a signature edit in an import dumped %v, want C, which calls f", fa.calls[1:])
+	}
+	// An interface the cache no longer keeps leaves nothing to compare: every file is dumped again.
+	if err := os.RemoveAll(filepath.Join(coreDir, "tables")); err != nil {
+		t.Fatal(err)
+	}
+	writeNow(t, core[0], bodyA)
+	if d := dumpApp(dumpOK(t, coreDir, "env", core, fc).Interface); d.Dumped != 2 {
+		t.Fatalf("an import with an unknown earlier interface dumped %d files, want both", d.Dumped)
 	}
 }
 
@@ -191,61 +240,20 @@ func TestDumpCachedPassesTheCopiesOfUnchangedFiles(t *testing.T) {
 	}
 }
 
-func TestFingerprintIgnoresBodiesAndPositions(t *testing.T) {
-	if Fingerprint([]byte(bodyA)) != Fingerprint([]byte(bodyA2)) {
-		t.Error("a body edit changed the fingerprint")
-	}
-	if Fingerprint([]byte(bodyA)) == Fingerprint([]byte(sigA)) {
-		t.Error("a signature edit kept the fingerprint")
-	}
-	opaque := `{"_kind":"func_decl","interface_type":"$s1A1fQrycD","body":{"_kind":"brace_stmt","elements":[]}}`
-	opaque2 := `{"_kind":"func_decl","interface_type":"$s1A1fQrycD","body":{"_kind":"brace_stmt","elements":[{"_kind":"call_expr"}]}}`
-	if Fingerprint([]byte(opaque)) == Fingerprint([]byte(opaque2)) {
-		t.Error("the body of a function returning an opaque type is not part of its fingerprint")
-	}
-	entry := func(typ, init string) []byte {
-		e := `{"_kind":"pattern_entry","pattern":{"_kind":"pattern_named","type":"` + typ + `"}`
-		if init != "" {
-			e += `,"original_init":{"_kind":"integer_literal_expr","type":"` + typ + `","value":"` + init + `"}`
-		}
-		return []byte(e + "}")
-	}
-	if Fingerprint(entry("$sSiD", "1")) != Fingerprint(entry("$sSiD", "2")) {
-		t.Error("a variable's new initial value of the same type changed the fingerprint")
-	}
-	if Fingerprint(entry("$sSiD", "1")) == Fingerprint(entry("$sSdD", "1")) {
-		t.Error("a variable's new type kept the fingerprint")
-	}
-	if Fingerprint(entry("$sSiD", "1")) == Fingerprint(entry("$sSiD", "")) {
-		t.Error("removing a variable's initial value, which a memberwise initializer defaults to, kept the fingerprint")
-	}
-	if Fingerprint(entry("$s1A1xQrvpQOyQo_D", "1")) == Fingerprint(entry("$s1A1xQrvpQOyQo_D", "2")) {
-		t.Error("the initial value of an opaque-typed variable is not part of the fingerprint")
-	}
-	top1 := `{"_kind":"top_level_code_decl","body":{"_kind":"brace_stmt","elements":[{"_kind":"integer_literal_expr","value":"1"}]}}`
-	top2 := strings.Replace(top1, `"1"`, `"2"`, 1)
-	if Fingerprint([]byte(top1)) == Fingerprint([]byte(top2)) {
-		t.Error("top-level code, which declares globals, is not part of the fingerprint")
-	}
-	if Fingerprint(nil) != "" {
-		t.Error("a missing document has a fingerprint")
-	}
-}
-
-func TestDependencyKeyFollowsDependencyInterfaces(t *testing.T) {
+func TestDependencyKeyNamesTheDependenciesDumpedInThisRun(t *testing.T) {
 	targets := map[string]Target{
 		"App":  {Name: "App", Deps: []string{"Core"}, ModuleType: "SwiftTarget"},
 		"Core": {Name: "Core", Deps: []string{"Base"}, ModuleType: "SwiftTarget"},
 		"Base": {Name: "Base", ModuleType: "SwiftTarget"},
 	}
-	key := func(ifaces map[string]string) string {
+	key := func(ifaces map[string]*Interface) string {
 		return DependencyKey(targets["App"], targets, ifaces, nil)
 	}
-	k1 := key(map[string]string{"Core": "c1", "Base": "b1"})
-	if k1 != key(map[string]string{"Core": "c1", "Base": "b1"}) {
-		t.Error("the same interfaces gave different keys")
+	both := map[string]*Interface{"Core": {Hash: "c1"}, "Base": {Hash: "b1"}}
+	if key(both) != key(map[string]*Interface{"Core": {Hash: "c2"}, "Base": {Hash: "b2"}}) {
+		t.Error("the interfaces of dependencies dumped in this run changed the key; DumpCached follows them")
 	}
-	if k1 == key(map[string]string{"Core": "c1", "Base": "b2"}) {
-		t.Error("an indirect dependency's interface change kept the key")
+	if key(both) == key(map[string]*Interface{"Core": {Hash: "c1"}}) {
+		t.Error("an indirect dependency no longer dumped in this run kept the key")
 	}
 }

@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,126 +15,218 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/ncmud/swift2go/internal/ast"
+	"github.com/ncmud/swift2go/internal/deps"
+	"github.com/ncmud/swift2go/internal/types"
 )
 
-// cacheFormat changes whenever what the cache stores, or how a fingerprint is computed, changes.
-const cacheFormat = "swift2go-ast-cache-2"
+// cacheFormat changes whenever what the cache stores, or how a file's interface or names are read, changes.
+const cacheFormat = "swift2go-ast-cache-3"
 
 // CachedDump is the typed AST of a target, one JSON document per source file in source order.
 type CachedDump struct {
 	// Docs holds each file's document, nil for a file the compiler could not dump.
 	Docs [][]byte
-	// Interface identifies the declarations the target's files make visible to one another and to
-	// the targets that import it. Two dumps with the same Interface type-check every other file the
-	// same way.
-	Interface string
+	// Names holds the names each file mentions (see [deps.Scan]), nil for a file without a document.
+	Names []deps.Names
+	// Interface is what the target's files declare for one another and for the targets that import it.
+	Interface *Interface
 	// Dumped counts the files dumped in this call; the others came from the cache.
 	Dumped int
+}
+
+// Interface is the [deps.Table] of a dumped target.
+type Interface struct {
+	Table deps.Table
+	// Hash identifies the table's content; two dumps with the same Hash type-check every other file the
+	// same way.
+	Hash  string
+	store deps.Store
+}
+
+// Earlier returns the table the target had when its Hash was hash, as an earlier dump kept it.
+func (i *Interface) Earlier(hash string) (deps.Table, bool) {
+	if i == nil {
+		return nil, false
+	}
+	return i.store.Load(hash)
 }
 
 // DumpFunc dumps the sources at the indices in primaries, reading the copies in place of the
 // files they belong to; see [Dumper.Dump].
 type DumpFunc func(primaries []int, copies map[int]string) ([]FileDump, error)
 
+type tableEntry struct {
+	Key    deps.Key
+	Digest string
+}
+
+func tableEntries(t deps.Table) []tableEntry {
+	out := make([]tableEntry, 0, len(t))
+	for _, k := range deps.Changed(nil, t) {
+		out = append(out, tableEntry{k, t[k]})
+	}
+	return out
+}
+
+func entriesTable(es []tableEntry) deps.Table {
+	t := deps.Table{}
+	for _, e := range es {
+		t[e.Key] = e.Digest
+	}
+	return t
+}
+
 type cacheEntry struct {
-	Hash      string `json:"hash"`
-	Interface string `json:"interface"`
-	Copy      string `json:"copy,omitempty"`
+	Hash string
+	Copy string
 	// Failed marks a file the compiler could not dump; it has no document.
-	Failed bool `json:"failed,omitempty"`
+	Failed bool
+	// Decls is the file's part of the target's interface; Names the names it mentions.
+	Decls []tableEntry
+	Names deps.Names
 }
 
 type manifest struct {
-	Env   string                `json:"env"`
-	Files map[string]cacheEntry `json:"files"`
+	Env string
+	// Imports holds the interface hash of each transpiled dependency the files were dumped against.
+	Imports map[string]string
+	Files   map[string]cacheEntry
 }
 
 // DumpCached dumps sources through dump, reusing the documents an earlier call cached in dir.
-// env identifies everything besides the sources that the documents depend on: the compiler and
-// its flags, and the interfaces of the modules the target imports.
+// env identifies everything besides the sources and the imports that the documents depend on: the
+// compiler and its flags, and the modules the target imports that are not transpiled in this run.
+// imports holds the interfaces of those that are.
 //
-// When env and the list of sources are unchanged, only the files whose content changed are
-// dumped. If each of them keeps the [Fingerprint] it had, the other files' documents still hold
-// and come from the cache; otherwise every file is dumped again, since any of them may
-// type-check differently against the changed declarations.
-func DumpCached(dir, env string, sources []string, dump DumpFunc) (CachedDump, error) {
-	env = envKey(env, sources)
+// While env and the list of sources stay the same, a file is dumped again when its content changed,
+// or when it mentions a declaration that changed (see [deps.Affects]): one of the imports', or one of
+// another file of the target that was dumped again. Otherwise its document comes from the cache.
+func DumpCached(dir, env string, imports map[string]*Interface, sources []string, dump DumpFunc) (CachedDump, error) {
+	env = envKey(env, sources, imports)
 	hashes, err := hashFiles(sources)
 	if err != nil {
 		return CachedDump{}, err
 	}
 	old := readCacheManifest(dir)
 	if old.Env == env {
-		d, ok, err := dumpChanged(dir, sources, hashes, old, dump)
+		d, ok, err := dumpChanged(dir, sources, hashes, old, imports, dump)
 		if err != nil || ok {
 			return d, err
 		}
 	}
-	return dumpAll(dir, env, sources, hashes, dump)
+	return dumpAll(dir, env, sources, hashes, imports, dump)
 }
 
-// dumpChanged dumps the files whose content changed since old was written and, when none of
-// their fingerprints changed, completes the dump from the cache. It reports false when the
-// whole target must be dumped again.
-func dumpChanged(dir string, sources, hashes []string, old manifest, dump DumpFunc) (CachedDump, bool, error) {
-	var changed []int
-	copies := map[int]string{}
-	for i, src := range sources {
-		e, ok := old.Files[src]
-		if !ok || e.Hash != hashes[i] || !e.Failed && !exists(docPath(dir, src)) || e.Copy != "" && !exists(e.Copy) {
-			changed = append(changed, i)
+// dumpChanged dumps the files whose content changed since old was written and the files that
+// mention what changed, and completes the dump from the cache. It reports false when the whole
+// target must be dumped again.
+func dumpChanged(dir string, sources, hashes []string, old manifest, imports map[string]*Interface, dump DumpFunc) (CachedDump, bool, error) {
+	var changedKeys []deps.Key
+	for _, name := range slices.Sorted(maps.Keys(imports)) {
+		iface := imports[name]
+		was := old.Imports[name]
+		if was == iface.Hash {
 			continue
 		}
-		if e.Copy != "" {
-			copies[i] = e.Copy
+		prev, ok := iface.Earlier(was)
+		if !ok {
+			return CachedDump{}, false, nil
+		}
+		changedKeys = append(changedKeys, deps.Changed(prev, iface.Table)...)
+	}
+	entries := make([]cacheEntry, len(sources))
+	docs := make([][]byte, len(sources))
+	dumped := make([]bool, len(sources))
+	var todo []int
+	for i, src := range sources {
+		e, ok := old.Files[src]
+		entries[i] = e
+		if !ok || e.Hash != hashes[i] || !e.Failed && !exists(docPath(dir, src)) || e.Copy != "" && !exists(e.Copy) {
+			todo = append(todo, i)
 		}
 	}
-	m := manifest{Env: old.Env, Files: map[string]cacheEntry{}}
-	d := CachedDump{Docs: make([][]byte, len(sources)), Dumped: len(changed)}
-	if len(changed) > 0 {
-		fresh, err := dump(changed, copies)
+	affected := func(keys []deps.Key) []int {
+		var out []int
+		for i, src := range sources {
+			if dumped[i] || slices.Contains(todo, i) || len(keys) == 0 {
+				continue
+			}
+			if entries[i].Failed || deps.AffectsAny(keys, src, entries[i].Names) {
+				out = append(out, i)
+			}
+		}
+		return out
+	}
+	todo = append(todo, affected(changedKeys)...)
+	n := 0
+	for len(todo) > 0 {
+		slices.Sort(todo)
+		copies := map[int]string{}
+		for i := range sources {
+			if !slices.Contains(todo, i) && entries[i].Copy != "" {
+				copies[i] = entries[i].Copy
+			}
+		}
+		fresh, err := dump(todo, copies)
 		if err != nil {
 			return CachedDump{}, false, err
 		}
-		for k, i := range changed {
-			e := entry(hashes[i], fresh[k])
-			if prev, ok := old.Files[sources[i]]; !ok || prev.Interface != e.Interface || prev.Failed != e.Failed {
-				return CachedDump{}, false, nil
-			}
-			d.Docs[i] = fresh[k].Doc
-			m.Files[sources[i]] = e
+		scanned, err := scanDumps(sources, hashes, todo, fresh)
+		if err != nil {
+			return CachedDump{}, false, err
 		}
+		var keys []deps.Key
+		for k, i := range todo {
+			keys = append(keys, deps.Changed(entriesTable(entries[i].Decls), entriesTable(scanned[k].Decls))...)
+			if entries[i].Failed != scanned[k].Failed {
+				keys = append(keys, deps.All)
+			}
+			entries[i] = scanned[k]
+			docs[i] = fresh[k].Doc
+			dumped[i] = true
+		}
+		n += len(todo)
+		todo = nil
+		todo = affected(keys)
 	}
 	missing := make([]bool, len(sources))
 	parallel(len(sources), func(i int) {
-		if _, ok := m.Files[sources[i]]; ok || old.Files[sources[i]].Failed {
+		if dumped[i] || entries[i].Failed {
 			return
 		}
 		doc, err := os.ReadFile(docPath(dir, sources[i]))
-		d.Docs[i], missing[i] = doc, err != nil
+		docs[i], missing[i] = doc, err != nil
 	})
 	if slices.Contains(missing, true) {
 		return CachedDump{}, false, nil
 	}
+	if CheckIncremental {
+		if err := checkKept(sources, docs, dumped, entries, dump); err != nil {
+			return CachedDump{}, false, err
+		}
+	}
+	m := manifest{Env: old.Env, Imports: importHashes(imports), Files: map[string]cacheEntry{}}
 	for i, src := range sources {
-		if _, ok := m.Files[src]; ok {
-			if err := writeDoc(dir, src, d.Docs[i]); err != nil {
+		if dumped[i] {
+			if err := writeDoc(dir, src, docs[i]); err != nil {
 				return CachedDump{}, false, err
 			}
-			continue
 		}
-		m.Files[src] = old.Files[src]
+		m.Files[src] = entries[i]
 	}
-	if len(changed) > 0 {
+	if n > 0 || !maps.Equal(old.Imports, m.Imports) {
 		if err := writeManifest(dir, m); err != nil {
 			return CachedDump{}, false, err
 		}
 	}
-	d.Interface = interfaceKey(sources, m)
-	return d, true, nil
+	d, err := result(dir, sources, docs, entries)
+	d.Dumped = n
+	return d, true, err
 }
 
-func dumpAll(dir, env string, sources, hashes []string, dump DumpFunc) (CachedDump, error) {
+func dumpAll(dir, env string, sources, hashes []string, imports map[string]*Interface, dump DumpFunc) (CachedDump, error) {
 	all := make([]int, len(sources))
 	for i := range all {
 		all[i] = i
@@ -142,54 +235,160 @@ func dumpAll(dir, env string, sources, hashes []string, dump DumpFunc) (CachedDu
 	if err != nil {
 		return CachedDump{}, err
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	entries, err := scanDumps(sources, hashes, all, fresh)
+	if err != nil {
+		return CachedDump{}, err
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "files")); err != nil {
 		return CachedDump{}, err
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "files"), 0o755); err != nil {
 		return CachedDump{}, err
 	}
-	m := manifest{Env: env, Files: map[string]cacheEntry{}}
-	entries := make([]cacheEntry, len(sources))
-	parallel(len(sources), func(i int) { entries[i] = entry(hashes[i], fresh[i]) })
-	d := CachedDump{Docs: make([][]byte, len(sources)), Dumped: len(sources)}
+	m := manifest{Env: env, Imports: importHashes(imports), Files: map[string]cacheEntry{}}
+	docs := make([][]byte, len(sources))
 	for i, src := range sources {
 		if err := writeDoc(dir, src, fresh[i].Doc); err != nil {
 			return CachedDump{}, err
 		}
 		m.Files[src] = entries[i]
-		d.Docs[i] = fresh[i].Doc
+		docs[i] = fresh[i].Doc
 	}
 	if err := writeManifest(dir, m); err != nil {
 		return CachedDump{}, err
 	}
-	d.Interface = interfaceKey(sources, m)
-	return d, nil
+	d, err := result(dir, sources, docs, entries)
+	d.Dumped = len(sources)
+	return d, err
 }
 
-func entry(hash string, f FileDump) cacheEntry {
-	return cacheEntry{Hash: hash, Interface: Fingerprint(f.Doc), Copy: f.Copy, Failed: f.Doc == nil}
-}
-
-// interfaceKey combines the fingerprints of a target's files. A file the compiler could not dump
-// counts by its content.
-func interfaceKey(sources []string, m manifest) string {
-	h := sha256.New()
-	for _, src := range sources {
-		e := m.Files[src]
+// result assembles the dump and keeps its interface for the targets that import it.
+func result(dir string, sources []string, docs [][]byte, entries []cacheEntry) (CachedDump, error) {
+	d := CachedDump{Docs: docs, Names: make([]deps.Names, len(sources))}
+	table := deps.Table{}
+	for i, src := range sources {
+		e := entries[i]
+		d.Names[i] = e.Names
 		if e.Failed {
-			fmt.Fprintf(h, "%s\x00failed:%s\x00", src, e.Hash)
+			// A file the compiler could not dump counts by its content.
+			table.Add(deps.Key{File: src}, "failed:"+e.Hash)
 			continue
 		}
-		fmt.Fprintf(h, "%s\x00%s\x00", src, e.Interface)
+		for _, te := range e.Decls {
+			table.Add(te.Key, te.Digest)
+		}
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	d.Interface = &Interface{Table: table, Hash: table.Hash(), store: deps.Store(filepath.Join(dir, "tables"))}
+	return d, d.Interface.store.Save(table)
 }
 
-func envKey(env string, sources []string) string {
+func importHashes(imports map[string]*Interface) map[string]string {
+	out := map[string]string{}
+	for name, iface := range imports {
+		out[name] = iface.Hash
+	}
+	return out
+}
+
+// CheckIncremental makes [DumpCached] dump the files it keeps from the cache too, and fail when a
+// fresh document differs from the cached one.
+var CheckIncremental bool
+
+// checkKept dumps the files dumpChanged kept and reports those whose documents differ.
+func checkKept(sources []string, docs [][]byte, dumped []bool, entries []cacheEntry, dump DumpFunc) error {
+	var kept []int
+	copies := map[int]string{}
+	for i := range sources {
+		if !dumped[i] && !entries[i].Failed {
+			kept = append(kept, i)
+		} else if entries[i].Copy != "" {
+			copies[i] = entries[i].Copy
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	fresh, err := dump(kept, copies)
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for k, i := range kept {
+		if !bytes.Equal(fresh[k].Doc, docs[i]) {
+			stale = append(stale, filepath.Base(sources[i]))
+		}
+	}
+	if len(stale) > 0 {
+		return fmt.Errorf("the incremental dump kept %d documents that dumping again changes: %s", len(stale), strings.Join(stale, ", "))
+	}
+	return nil
+}
+
+// newDemangler demangles the symbols of the files [scanDumps] reads.
+var newDemangler = func(syms []string) (func(string) string, error) {
+	d, err := types.NewDemangler(syms)
+	if err != nil {
+		return nil, err
+	}
+	return d.Get, nil
+}
+
+// scanDumps reads the interface and the names of each fresh dump of the sources at the indices in which.
+func scanDumps(sources, hashes []string, which []int, fresh []FileDump) ([]cacheEntry, error) {
+	items := make([][]ast.Node, len(which))
+	syms := make([][]string, len(which))
+	errs := make([]error, len(which))
+	parallel(len(which), func(k int) {
+		if fresh[k].Doc == nil {
+			return
+		}
+		files, err := ast.Load(fresh[k].Doc)
+		if err != nil {
+			errs[k] = fmt.Errorf("%s: %w", sources[which[k]], err)
+			return
+		}
+		for _, f := range files {
+			items[k] = append(items[k], f.Items...)
+		}
+		syms[k] = deps.Symbols(items[k])
+	})
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	demangle, err := newDemangler(slices.Concat(syms...))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]cacheEntry, len(which))
+	parallel(len(which), func(k int) {
+		i := which[k]
+		e := cacheEntry{Hash: hashes[i], Copy: fresh[k].Copy, Failed: fresh[k].Doc == nil}
+		if !e.Failed {
+			src := sources[i]
+			if e.Copy != "" {
+				src = e.Copy
+			}
+			text, err := os.ReadFile(src)
+			if err != nil {
+				errs[k] = err
+				return
+			}
+			table, names := deps.Scan(sources[i], items[k], text, demangle)
+			e.Decls, e.Names = tableEntries(table), names
+		}
+		out[k] = e
+	})
+	return out, errors.Join(errs...)
+}
+
+func envKey(env string, sources []string, imports map[string]*Interface) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00", cacheFormat, env)
 	for _, s := range sources {
 		fmt.Fprintf(h, "%s\x00", s)
+	}
+	for _, name := range slices.Sorted(maps.Keys(imports)) {
+		fmt.Fprintf(h, "import %s\x00", name)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -212,22 +411,14 @@ func writeDoc(dir, src string, doc []byte) error {
 
 func readCacheManifest(dir string) manifest {
 	var m manifest
-	if data, err := os.ReadFile(filepath.Join(dir, "manifest.json")); err == nil {
-		_ = json.Unmarshal(data, &m)
+	if !deps.ReadGob(filepath.Join(dir, "manifest.gob"), &m) {
+		return manifest{}
 	}
 	return m
 }
 
 func writeManifest(dir string, m manifest) error {
-	data, err := json.MarshalIndent(m, "", " ")
-	if err != nil {
-		return err
-	}
-	tmp := filepath.Join(dir, "manifest.json.tmp")
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(dir, "manifest.json"))
+	return deps.WriteGob(filepath.Join(dir, "manifest.gob"), m)
 }
 
 func hashFiles(paths []string) ([]string, error) {
@@ -269,114 +460,11 @@ func parallel(n int, f func(i int)) {
 	wg.Wait()
 }
 
-// bodyKinds are the declarations whose bodies no other file type-checks against.
-var bodyKinds = map[string]bool{
-	"func_decl": true, "constructor_decl": true, "destructor_decl": true, "accessor_decl": true,
-}
-
-// Fingerprint hashes what a file's JSON AST shows other files: every declaration with its types,
-// attributes and conformances, but not the bodies of functions, initializers and accessors, nor
-// the expressions that initialize variables, whose types the AST records with the variable, nor
-// source ranges and the dump's numbering of pointers, which shift when a body is edited. The body
-// or initial value that decides the underlying type of an opaque type (`some P`) counts. A nil
-// document has the empty fingerprint.
-func Fingerprint(doc []byte) string {
-	if doc == nil {
-		return ""
-	}
-	var v any
-	dec := json.NewDecoder(bytes.NewReader(doc))
-	dec.UseNumber()
-	if err := dec.Decode(&v); err != nil {
-		sum := sha256.Sum256(doc)
-		return "raw:" + hex.EncodeToString(sum[:])
-	}
-	h := sha256.New()
-	writeCanonical(h, stripBodies(v))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func stripBodies(v any) any {
-	switch n := v.(type) {
-	case map[string]any:
-		kind, _ := n["_kind"].(string)
-		dropBody := bodyKinds[kind] && !opaqueResult(n)
-		pattern, _ := n["pattern"].(map[string]any)
-		dropInit := kind == "pattern_entry" && !opaqueResult(pattern)
-		out := make(map[string]any, len(n))
-		for k, c := range n {
-			switch {
-			case k == "range" || k == "decl_context":
-			case k == "body" && dropBody:
-			case dropInit && (k == "original_init" || k == "processed_init"):
-				out[k] = "present"
-			case dropInit && k == "init_context":
-			default:
-				out[k] = stripBodies(c)
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, len(n))
-		for i, c := range n {
-			out[i] = stripBodies(c)
-		}
-		return out
-	case string:
-		if strings.HasPrefix(n, "replaced-pointer-") {
-			return "pointer"
-		}
-	}
-	return v
-}
-
-// opaqueResult reports whether a declaration's type mentions an opaque result type. Opaque types
-// mangle as `Qo` (a reference) or `QO`, `QR` and `Qr` (the declaration's own).
-func opaqueResult(n map[string]any) bool {
-	for _, k := range []string{"interface_type", "result", "type"} {
-		if s, ok := n[k].(string); ok {
-			for _, m := range []string{"Qo", "QO", "QR", "Qr"} {
-				if strings.Contains(s, m) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func writeCanonical(w io.Writer, v any) {
-	switch n := v.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(n))
-		for k := range n {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		_, _ = io.WriteString(w, "{")
-		for _, k := range keys {
-			_, _ = fmt.Fprintf(w, "%q:", k)
-			writeCanonical(w, n[k])
-			_, _ = io.WriteString(w, ",")
-		}
-		_, _ = io.WriteString(w, "}")
-	case []any:
-		_, _ = io.WriteString(w, "[")
-		for _, c := range n {
-			writeCanonical(w, c)
-			_, _ = io.WriteString(w, ",")
-		}
-		_, _ = io.WriteString(w, "]")
-	default:
-		data, _ := json.Marshal(n)
-		_, _ = w.Write(data)
-	}
-}
-
-// DependencyKey identifies the interfaces of the modules t imports, directly or not. A module
-// dumped in this run is identified by its [CachedDump.Interface] in ifaces; any other by the
-// modification time of its built module in searchDirs, or of its sources for a C target.
-func DependencyKey(t Target, targets map[string]Target, ifaces map[string]string, searchDirs []string) string {
+// DependencyKey identifies the modules t imports, directly or not, that are not dumped in this run, by
+// the modification time of the built module in searchDirs, or of the sources for a C target. A module
+// dumped in this run, which has an interface in ifaces, counts by name: [DumpCached] follows its
+// declarations.
+func DependencyKey(t Target, targets map[string]Target, ifaces map[string]*Interface, searchDirs []string) string {
 	seen := map[string]bool{}
 	var names []string
 	var visit func(deps []string)
@@ -399,8 +487,8 @@ func DependencyKey(t Target, targets map[string]Target, ifaces map[string]string
 		fmt.Fprintf(&b, "%s=", n)
 		dep, ok := targets[n]
 		switch {
-		case ifaces[n] != "":
-			b.WriteString(ifaces[n])
+		case ifaces[n] != nil:
+			b.WriteString("dumped")
 		case ok && dep.ModuleType != "SwiftTarget":
 			b.WriteString(modTime(filepath.Join(dep.Dir, dep.Path)).String())
 		default:

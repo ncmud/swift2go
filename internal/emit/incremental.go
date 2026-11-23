@@ -17,11 +17,13 @@ import (
 	"strings"
 
 	"github.com/ncmud/swift2go/internal/ast"
+	"github.com/ncmud/swift2go/internal/deps"
+	"github.com/ncmud/swift2go/internal/types"
 )
 
 // emitCacheFormat changes whenever what the emit cache stores, or what an entry's reuse depends on,
 // changes.
-const emitCacheFormat = "swift2go-emit-cache-4"
+const emitCacheFormat = "swift2go-emit-cache-5"
 
 // The kinds of state a file's emission reads that other files decide.
 const (
@@ -39,6 +41,9 @@ const (
 type emitCache struct {
 	Env   string
 	Files map[string]*fileRecord // by Go file name
+	// Tables holds the hash of the emit table (see [Module.emitTable]) of the module and of each
+	// transpiled dependency, by module name, that the files were written against.
+	Tables map[string]string
 }
 
 // fileRecord describes the Go file written for one Swift file: the AST it was written from, what its
@@ -299,8 +304,11 @@ func (m *Module) replay(r *fileRecord, mods map[string]*Module) {
 
 // reusable reports whether the Go file out, written by an earlier run for f as r describes, is what
 // emitting f now would write.
-func (m *Module) reusable(r *fileRecord, f ast.File, out string, mods map[string]*Module) bool {
+func (m *Module) reusable(r *fileRecord, f ast.File, out string, mods map[string]*Module, changed []deps.Key) bool {
 	if r == nil || f.Hash == "" || r.Hash != f.Hash || r.Source != f.Filename {
+		return false
+	}
+	if len(changed) > 0 && (f.Names == nil || deps.AffectsAny(changed, f.Filename, f.Names)) {
 		return false
 	}
 	for modName := range r.Hoists {
@@ -341,10 +349,10 @@ func newRecord(f ast.File) *fileRecord {
 	return &fileRecord{Source: f.Filename, Hash: f.Hash, Obs: map[string]string{}, Hoists: map[string]int{}, own: map[string]bool{}}
 }
 
-// emitEnv identifies everything besides the files' own ASTs and the observations of each file that
-// decides the Go of the module: the transpiler, the options, the declarations of the module and its
-// dependencies, and which of their files overlays replace. It is "" when the module cannot keep Go
-// files between runs.
+// emitEnv identifies everything besides the files' own ASTs, the observations of each file and the
+// declarations of the module and its transpiled dependencies (see [Module.changedKeys]) that decides
+// the Go of the module: the transpiler, the options, the module's files, and its dependencies and
+// which of their files overlays replace. It is "" when the module cannot keep Go files between runs.
 func (m *Module) emitEnv(overlay map[string]bool) string {
 	if m.EmitCache == "" || m.Interface == "" || m.EmitKey == "" {
 		return ""
@@ -361,7 +369,6 @@ func (m *Module) emitEnv(overlay map[string]bool) string {
 	for _, f := range m.Files {
 		fmt.Fprintf(h, "file %s\x00", f.Filename)
 	}
-	fmt.Fprintf(h, "self %s\x00%s\x00", m.Interface, m.declDigest())
 	for _, d := range m.Deps {
 		if d.Interface == "" {
 			return ""
@@ -371,7 +378,11 @@ func (m *Module) emitEnv(overlay map[string]bool) string {
 		if err != nil {
 			return ""
 		}
-		fmt.Fprintf(h, "dep %s\x00%s\x00%s\x00%v\x00%s\x00%s\x00%q\x00", d.Name, d.Pkg, d.ImportPath, d.Mapped, d.Interface, d.declDigest(), slices.Sorted(maps.Keys(depOverlay)))
+		fmt.Fprintf(h, "dep %s\x00%s\x00%s\x00%v\x00%q\x00", d.Name, d.Pkg, d.ImportPath, d.Mapped, slices.Sorted(maps.Keys(depOverlay)))
+		if d.table == nil {
+			// A module without an emit table, such as a mapped one, counts as a whole.
+			fmt.Fprintf(h, "%s\x00%s\x00", d.Interface, d.declDigest())
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -416,6 +427,174 @@ func writeTable[V any](h hash.Hash, name string, t map[string]V) {
 	for _, k := range slices.Sorted(maps.Keys(t)) {
 		fmt.Fprintf(h, "%q=%v\n", k, t[k])
 	}
+}
+
+// emitTable is the module's declarations as the Go of other files depends on them (see [deps]): the
+// Swift declarations as the AST cache read them ([Module.SwiftTable]), what indexing and naming decided
+// for each, and what the module's tables say of each type: its kind, conformances, subclasses, type
+// parameters and protocol requirements, and of a struct or enum the members that make callers take its
+// address and the layout of every type it holds by value, which decides how the Go copies and compares
+// it. A change to a typealias, which the typed AST may resolve away, counts for every file.
+func (m *Module) emitTable() deps.Table {
+	t := deps.Table{}
+	t.Merge(m.SwiftTable)
+	simple := func(q string) string {
+		q, _, _ = strings.Cut(q, "#")
+		return deps.SimpleName(q)
+	}
+	fields := map[string][]string{} // a struct's or enum's stored property and payload types
+	for _, d := range m.sortedDecls() {
+		if d.Node == nil {
+			continue
+		}
+		info := *d
+		info.Node, info.file = nil, ""
+		facts := fmt.Sprintf("%+v overridden=%v", info, m.overridden[d.Node.Str("usr")])
+		owner := simple(d.Owner)
+		switch d.Kind {
+		case "struct_decl", "class_decl", "enum_decl", "protocol":
+			q := m.typeQName(d)
+			t.Add(deps.Key{Owner: simple(q)}, facts)
+			if d.Owner != "" {
+				t.Add(deps.Key{Owner: owner, Name: simple(q)}, facts)
+			}
+			if st := d.Node.Child("inherits").Str("superclass_type"); st != "" {
+				t.Add(deps.Key{Owner: simple(m.demangle(st))}, "subclass "+q)
+			}
+			continue
+		}
+		name := d.Node.Name()
+		if d.Kind == "subscript_decl" {
+			name = "subscript"
+		}
+		key := deps.Key{Owner: owner, Name: name}
+		if a := d.Node.Str("access"); a == "private" || a == "fileprivate" {
+			key.File = d.file
+		}
+		t.Add(key, facts)
+		if owner == "" {
+			continue
+		}
+		switch ownerKind := m.typeKinds[d.Owner]; {
+		case d.Kind == "enum_element_decl":
+			t.Add(deps.Key{Owner: owner}, facts)
+			for _, p := range d.Node.Child("params").List("params") {
+				fields[d.Owner] = append(fields[d.Owner], namedTypes(m.typeOf(p.Str("interface_type")))...)
+			}
+		case ownerKind == "struct_decl" && d.Kind == "var_decl" && !d.Static && !d.Computed:
+			t.Add(deps.Key{Owner: owner}, facts)
+			fields[d.Owner] = append(fields[d.Owner], namedTypes(m.typeOf(d.Node.Str("interface_type")))...)
+		case ownerKind == "protocol" || d.OwnerKind == "protocol_ext":
+			t.Add(deps.Key{Owner: owner}, facts)
+		case (ownerKind == "struct_decl" || ownerKind == "enum_decl") && !d.Static && (d.Mutating || d.Settable || d.Observed):
+			t.Add(deps.Key{Owner: owner}, "mutates "+name)
+		}
+	}
+	for _, q := range slices.Sorted(maps.Keys(m.typeKinds)) {
+		t.Add(deps.Key{Owner: simple(q)}, q+"="+m.typeKinds[q])
+	}
+	for _, p := range slices.Sorted(maps.Keys(m.conformers)) {
+		for _, q := range m.conformers[p] {
+			t.Add(deps.Key{Owner: simple(q)}, "conforms "+p)
+			t.Add(deps.Key{Owner: simple(p)}, "conformer "+q)
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(m.protoParents)) {
+		t.Add(deps.Key{Owner: simple(p)}, fmt.Sprintf("parents %q", m.protoParents[p]))
+	}
+	for _, q := range slices.Sorted(maps.Keys(m.typeParamNames)) {
+		t.Add(deps.Key{Owner: simple(q)}, fmt.Sprintf("typeparams %q", m.typeParamNames[q]))
+	}
+	for _, p := range slices.Sorted(maps.Keys(m.protoReqs)) {
+		t.Add(deps.Key{Owner: simple(p)}, fmt.Sprintf("requirements %d", len(m.protoReqs[p])))
+	}
+	for _, p := range slices.Sorted(maps.Keys(m.classProtos)) {
+		t.Add(deps.Key{Owner: simple(p)}, "class-only")
+	}
+	for _, p := range slices.Sorted(maps.Keys(m.optConforms)) {
+		t.Add(deps.Key{Owner: simple(p)}, "optional conforms")
+	}
+	for _, p := range slices.Sorted(maps.Keys(m.foreignConforms)) {
+		t.Add(deps.Key{Owner: simple(p)}, fmt.Sprintf("foreign conformers %d", len(m.foreignConforms[p])))
+	}
+	for _, a := range slices.Sorted(maps.Keys(m.typeAliases)) {
+		t.Add(deps.All, a+"="+m.typeAliases[a])
+	}
+	// A value type's layout includes the layouts of the value types it holds.
+	shapes := map[string]string{}
+	var deep func(q string, visiting map[string]bool) string
+	deep = func(q string, visiting map[string]bool) string {
+		if s, ok := shapes[q]; ok {
+			return s
+		}
+		if visiting[q] {
+			return ""
+		}
+		visiting[q] = true
+		defer delete(visiting, q)
+		own := t[deps.Key{Owner: simple(q)}]
+		for _, d := range m.Deps {
+			if d.table != nil && d.typeKinds[q] != "" {
+				own = d.table[deps.Key{Owner: simple(q)}]
+			}
+		}
+		parts := []string{own}
+		for _, f := range slices.Sorted(slices.Values(fields[q])) {
+			parts = append(parts, f+"="+deep(f, visiting))
+		}
+		sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+		shapes[q] = hex.EncodeToString(sum[:])
+		return shapes[q]
+	}
+	for _, q := range slices.Sorted(maps.Keys(fields)) {
+		t.Add(deps.Key{Owner: simple(q)}, "holds "+deep(q, map[string]bool{}))
+	}
+	return t
+}
+
+// namedTypes lists the nominal types a type names, its generic arguments' included.
+func namedTypes(t *types.Type) []string {
+	if t == nil {
+		return nil
+	}
+	var out []string
+	if t.Kind == types.Named && t.Name != "" {
+		out = append(out, t.Name)
+	}
+	for _, a := range t.Args {
+		out = append(out, namedTypes(a)...)
+	}
+	return append(out, namedTypes(t.Result)...)
+}
+
+// tableStore keeps the module's recent emit tables beside its emit cache.
+func (m *Module) tableStore() deps.Store {
+	if m.EmitCache == "" {
+		return ""
+	}
+	return deps.Store(filepath.Join(filepath.Dir(m.EmitCache), "emit-tables"))
+}
+
+// changedKeys lists what changed in the declarations of the module and of its transpiled dependencies
+// since the tables the cache records. It reports false when it cannot tell, and every file must be
+// emitted again.
+func (m *Module) changedKeys(cache *emitCache) ([]deps.Key, bool) {
+	var keys []deps.Key
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.table == nil {
+			continue
+		}
+		was := cache.Tables[mod.Name]
+		if was == mod.tableHash {
+			continue
+		}
+		prev, ok := mod.tableStore().Load(was)
+		if !ok {
+			return nil, false
+		}
+		keys = append(keys, deps.Changed(prev, mod.table)...)
+	}
+	return keys, true
 }
 
 // hashNode identifies an AST subtree apart from source offsets, which edits before it move, and the

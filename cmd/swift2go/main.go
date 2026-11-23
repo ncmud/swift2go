@@ -131,6 +131,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			return err
 		}
 	}
+	swiftmod.CheckIncremental = os.Getenv("SWIFT2GO_CHECK_INCREMENTAL") != ""
 	describe := func(dir string) (map[string]swiftmod.Target, error) { return swiftmod.Describe(dir, buildDir) }
 	if incremental {
 		describe = func(dir string) (map[string]swiftmod.Target, error) {
@@ -177,7 +178,7 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 	searchDirs := []string{mods, swiftmod.ModulesDir(buildDir, dest)}
 	modules := &moduleJobs{jobs: map[string]*moduleJob{}}
 	emitted := map[string]bool{}
-	ifaces := map[string]string{}
+	ifaces := map[string]*swiftmod.Interface{}
 	load := func(t swiftmod.Target) ([]ast.File, error) {
 		if err := swiftmod.AddGenerated(&t, buildDir, absPath(filepath.Join(outDir, "derived")), dest); err != nil {
 			return nil, err
@@ -262,7 +263,9 @@ func run(cmd string, names []string, pkgDir, outDir, buildDir, modulesDir string
 			continue
 		}
 		if incremental {
-			m.Interface = ifaces[name]
+			if iface := ifaces[name]; iface != nil {
+				m.Interface, m.SwiftTable = iface.Hash, iface.Table
+			}
 			m.EmitCache = absPath(filepath.Join(outDir, ".cache", name, "emit.gob"))
 			m.EmitKey = transpilerKey()
 			m.CheckEmitCache = os.Getenv("SWIFT2GO_CHECK_INCREMENTAL") != ""
@@ -395,7 +398,7 @@ type cachedLoad struct {
 // load dumps the target's files that changed, reusing the cached ASTs of the others, and emits the
 // target's module when its interface changed since the module was last emitted. ifaces holds the
 // interfaces of the targets loaded earlier in the run; load adds the target's own.
-func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]ast.File, error) {
+func (c cachedLoad) load(ifaces map[string]*swiftmod.Interface, emitted map[string]bool) ([]ast.File, error) {
 	t := c.t
 	start := time.Now()
 	derived := absPath(filepath.Join(c.outDir, "derived"))
@@ -410,6 +413,12 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 	if c.strict {
 		env += "\x00strict"
 	}
+	imports := map[string]*swiftmod.Interface{}
+	for _, dep := range transitiveDeps(t, c.targets) {
+		if iface := ifaces[dep]; iface != nil {
+			imports[dep] = iface
+		}
+	}
 	// The frontend reads the modules of the target's dependencies, which may still be being emitted.
 	var waited sync.Once
 	var waitErr error
@@ -420,7 +429,7 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 		}
 		return d.Dump(primaries, copies)
 	}
-	dump, err := swiftmod.DumpCached(cacheDir, env, d.Sources, dumpFiles)
+	dump, err := swiftmod.DumpCached(cacheDir, env, imports, d.Sources, dumpFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +437,12 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 	fmt.Fprintf(os.Stderr, "swift2go: %s: dumped %d of %d files in %s\n", t.Name, dump.Dumped, len(dump.Docs), time.Since(start).Round(time.Millisecond))
 	if t.Type != "test" {
 		stamp := filepath.Join(cacheDir, "module.stamp")
-		want := env + "\x00" + dump.Interface
+		// A module serializes references to its dependencies' declarations, so it is emitted again
+		// when theirs change too.
+		want := env + "\x00" + dump.Interface.Table.ExportedHash()
+		for _, name := range slices.Sorted(maps.Keys(imports)) {
+			want += "\x00" + name + "=" + imports[name].Table.ExportedHash()
+		}
 		if old, err := os.ReadFile(stamp); err != nil || string(old) != want || !fileExists(filepath.Join(c.mods, t.Name+".swiftmodule")) {
 			_ = os.Remove(stamp)
 			deps := transitiveDeps(t, c.targets)
@@ -459,6 +473,7 @@ func (c cachedLoad) load(ifaces map[string]string, emitted map[string]bool) ([]a
 			sum := sha256.Sum256(doc)
 			for j := range files[i] {
 				files[i][j].Hash = hex.EncodeToString(sum[:])
+				files[i][j].Names = dump.Names[i]
 			}
 		})
 	}
