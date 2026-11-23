@@ -3,6 +3,7 @@ package emit
 import (
 	goast "go/ast"
 	"go/parser"
+	"go/token"
 	"regexp"
 	"strconv"
 	"strings"
@@ -298,4 +299,26 @@ func depNames(m *Module) []string {
 		names[i] = d.Name
 	}
 	return names
+}
+
+// goBinaryOps are the Go binary operators a compound assignment can expand to.
+var goBinaryOps = map[string]token.Token{"+": token.ADD, "-": token.SUB, "*": token.MUL, "/": token.QUO, "%": token.REM,
+	"&": token.AND, "|": token.OR, "^": token.XOR, "<<": token.SHL, ">>": token.SHR}
+
+// rightOperand parenthesizes src, the right operand of the Go operator op, when it is a binary
+// expression that would otherwise bind to op's left operand: `x |= a ^ b` is `x = x | (a ^ b)`, as
+// Go's | and ^ share a precedence and associate to the left.
+func rightOperand(src, op string) string {
+	tok, ok := goBinaryOps[op]
+	if !ok {
+		return src
+	}
+	x, err := parser.ParseExpr(src)
+	if err != nil {
+		return "(" + src + ")"
+	}
+	if b, ok := x.(*goast.BinaryExpr); ok && b.Op.Precedence() <= tok.Precedence() {
+		return "(" + src + ")"
+	}
+	return src
 }
