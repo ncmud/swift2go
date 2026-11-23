@@ -21,7 +21,7 @@ import (
 
 // emitCacheFormat changes whenever what the emit cache stores, or what an entry's reuse depends on,
 // changes.
-const emitCacheFormat = "swift2go-emit-cache-1"
+const emitCacheFormat = "swift2go-emit-cache-2"
 
 // The kinds of state a file's emission reads that other files decide.
 const (
@@ -336,8 +336,9 @@ func newRecord(f ast.File) *fileRecord {
 }
 
 // emitEnv identifies everything besides the files' own ASTs and the observations of each file that
-// decides the Go of the module: the transpiler, the options, and the declarations of the module and
-// its dependencies. It is "" when the module cannot keep Go files between runs.
+// decides the Go of the module: the transpiler, the options, the declarations of the module and its
+// dependencies, and which of their files overlays replace. It is "" when the module cannot keep Go
+// files between runs.
 func (m *Module) emitEnv(overlay map[string]bool) string {
 	if m.EmitCache == "" || m.Interface == "" || m.EmitKey == "" {
 		return ""
@@ -359,7 +360,12 @@ func (m *Module) emitEnv(overlay map[string]bool) string {
 		if d.Interface == "" {
 			return ""
 		}
-		fmt.Fprintf(h, "dep %s\x00%s\x00%s\x00%v\x00%s\x00%s\x00", d.Name, d.Pkg, d.ImportPath, d.Mapped, d.Interface, d.declDigest())
+		// Callers of a function declared in a file the dependency's overlay replaces call its hand-written Go.
+		depOverlay, err := d.overlayFiles()
+		if err != nil {
+			return ""
+		}
+		fmt.Fprintf(h, "dep %s\x00%s\x00%s\x00%v\x00%s\x00%s\x00%q\x00", d.Name, d.Pkg, d.ImportPath, d.Mapped, d.Interface, d.declDigest(), slices.Sorted(maps.Keys(depOverlay)))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
