@@ -863,7 +863,9 @@ func JSONDecoderInit() *JSONDecoder { return &JSONDecoder{} }
 func JSONDecoderDecodeFrom[T any](d *JSONDecoder, _ TypeT[T], data []byte) T {
 	tree, err := parseJSON(data, jsonParseOptions{allowBOM: true})
 	if err != nil {
-		codingFail("The data couldn't be read because it isn't in the correct format: %v", err)
+		panic(Throw(DecodingErrorDataCorrupted{F0: CodingContext{
+			DebugDescription: "The given data was not valid JSON.", UnderlyingError: err,
+		}}))
 	}
 	return DecodeValue[T](tree, nil)
 }
