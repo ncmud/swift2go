@@ -3,6 +3,7 @@ package swiftrt
 import (
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -14,7 +15,7 @@ var swiftClassType = reflect.TypeFor[SwiftClass]()
 // Copy gives v Swift value semantics: structs, arrays, dictionaries and optional structs are copied
 // deeply, while class references keep their identity.
 func Copy[T any](v T) T {
-	p := planFor(reflect.TypeFor[T]())
+	p := planOf(reflect.TypeFor[T]())
 	if p.fix == nil {
 		// Go's assignment already copied every part Swift would.
 		return v
@@ -22,34 +23,81 @@ func Copy[T any](v T) T {
 	return copyWithPlan(v, p)
 }
 
-// copyWithPlan runs p on a copy of v. The fix runs on a reused buffer from p's pool rather than on
-// v itself, which would have to move to the heap because the fix is called indirectly.
+// copyWithPlan runs p on v, a copy already. The fix only writes through the pointer while it runs,
+// so v can stay on the stack although the fix is called indirectly.
 func copyWithPlan[T any](v T, p *copyPlan) T {
-	buf, _ := p.scratch.Get().(*T)
-	if buf == nil {
-		buf = new(T)
-	}
-	*buf = v
-	p.fix(unsafe.Pointer(buf)) //nolint:gosec // the plan writes through field offsets of T's own layout
-	out := *buf
-	var zero T
-	*buf = zero
-	p.scratch.Put(buf)
-	return out
+	p.fix(noescape(unsafe.Pointer(&v))) //nolint:gosec // the plan writes through field offsets of T's own layout
+	return v
 }
 
 // copyPlan unshares the value of one type in place. A nil fix means Go assignment alone copies the
-// value as Swift would: it holds no slice, map, interface or non-class pointer. scratch holds
-// buffers of the type for copyWithPlan.
+// value as Swift would: it holds no slice, map, interface or non-class pointer.
 type copyPlan struct {
-	fix     func(unsafe.Pointer)
-	scratch sync.Pool
+	fix func(unsafe.Pointer)
 }
 
 var (
 	planMu    sync.Mutex
 	planCache sync.Map // reflect.Type -> *copyPlan
+	// plansByWord holds the finished plans by type word, for planOf. It is replaced, never changed,
+	// so readers need no lock.
+	plansByWord atomic.Pointer[map[unsafe.Pointer]*copyPlan]
 )
+
+// planOf is planFor for a lookup on every copy: it finds the plan by t's type word.
+func planOf(t reflect.Type) *copyPlan {
+	w := typeWord(t)
+	if m := plansByWord.Load(); m != nil {
+		if p, ok := (*m)[w]; ok {
+			return p
+		}
+	}
+	p := planFor(t)
+	planMu.Lock()
+	defer planMu.Unlock()
+	next := map[unsafe.Pointer]*copyPlan{w: p}
+	if m := plansByWord.Load(); m != nil {
+		for k, v := range *m {
+			next[k] = v
+		}
+	}
+	plansByWord.Store(&next)
+	return p
+}
+
+// typeWord is the runtime type descriptor behind t: the type word of an interface holding a t.
+func typeWord(t reflect.Type) unsafe.Pointer {
+	return (*[2]unsafe.Pointer)(unsafe.Pointer(&t))[1] //nolint:gosec // an interface is two words, the second the *rtype
+}
+
+// valueAt is reflect.NewAt(t, p).Elem() for ptrWord, the type word of t's pointer type, without
+// NewAt's lookup of that pointer type.
+func valueAt(ptrWord, p unsafe.Pointer) reflect.Value {
+	var i any
+	w := (*[2]unsafe.Pointer)(unsafe.Pointer(&i)) //nolint:gosec // an empty interface is its type word and its data word
+	w[0], w[1] = ptrWord, p
+	return reflect.ValueOf(i).Elem()
+}
+
+// sliceHeader is the layout of a Go slice.
+type sliceHeader struct {
+	data     unsafe.Pointer
+	len, cap int
+}
+
+// The runtime's allocation and typed copies, as package reflect calls them.
+
+//go:linkname unsafeNew reflect.unsafe_New
+func unsafeNew(typ unsafe.Pointer) unsafe.Pointer
+
+//go:linkname unsafeNewArray reflect.unsafe_NewArray
+func unsafeNewArray(typ unsafe.Pointer, n int) unsafe.Pointer
+
+//go:linkname typedmemmove reflect.typedmemmove
+func typedmemmove(typ, dst, src unsafe.Pointer)
+
+//go:linkname typedslicecopy reflect.typedslicecopy
+func typedslicecopy(elemType unsafe.Pointer, dst, src sliceHeader) int
 
 // needsDeepCopy reports whether a value of type t shares storage that Swift would copy: a slice,
 // map, interface or non-class pointer anywhere inside it.
@@ -169,27 +217,31 @@ func arrayFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 
 func sliceFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 	size := t.Elem().Size()
+	elemType := typeWord(t.Elem())
 	return func(ptr unsafe.Pointer) {
-		v := reflect.NewAt(t, ptr).Elem()
-		if v.IsNil() {
+		h := (*sliceHeader)(ptr)
+		if h.data == nil {
 			return
 		}
-		n := v.Len()
-		out := reflect.MakeSlice(t, n, n)
-		reflect.Copy(out, v)
-		if elem.fix != nil && n > 0 {
-			base := out.UnsafePointer()
+		n := h.len
+		data := unsafeNewArray(elemType, n)
+		typedslicecopy(elemType, sliceHeader{data, n, n}, sliceHeader{h.data, n, n})
+		if elem.fix != nil {
 			for i := range n {
-				elem.fix(unsafe.Add(base, uintptr(i)*size))
+				elem.fix(unsafe.Add(data, uintptr(i)*size))
 			}
 		}
-		v.Set(out)
+		*h = sliceHeader{data, n, n}
 	}
 }
 
 func mapFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
+	ptrWord := typeWord(reflect.PointerTo(t))
 	return func(ptr unsafe.Pointer) {
-		v := reflect.NewAt(t, ptr).Elem()
+		if *(*unsafe.Pointer)(ptr) == nil {
+			return
+		}
+		v := valueAt(ptrWord, ptr)
 		if v.IsNil() {
 			return
 		}
@@ -212,28 +264,30 @@ func mapFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
 }
 
 func pointerFix(t reflect.Type, elem *copyPlan) func(unsafe.Pointer) {
+	elemType := typeWord(t.Elem())
 	return func(ptr unsafe.Pointer) {
-		v := reflect.NewAt(t, ptr).Elem()
-		if v.IsNil() {
+		old := *(*unsafe.Pointer)(ptr)
+		if old == nil {
 			return
 		}
-		np := reflect.New(t.Elem())
-		np.Elem().Set(v.Elem())
+		np := unsafeNew(elemType)
+		typedmemmove(elemType, np, old)
 		if elem.fix != nil {
-			elem.fix(np.UnsafePointer())
+			elem.fix(np)
 		}
-		v.Set(np)
+		*(*unsafe.Pointer)(ptr) = np
 	}
 }
 
 func interfaceFix(t reflect.Type) func(unsafe.Pointer) {
+	ptrWord := typeWord(reflect.PointerTo(t))
 	return func(ptr unsafe.Pointer) {
-		v := reflect.NewAt(t, ptr).Elem()
+		v := valueAt(ptrWord, ptr)
 		if v.IsNil() {
 			return
 		}
 		inner := v.Elem()
-		dyn := planFor(inner.Type())
+		dyn := planOf(inner.Type())
 		if dyn.fix == nil {
 			return
 		}

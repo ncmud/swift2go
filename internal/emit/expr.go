@@ -2633,7 +2633,49 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		}
 	}
 	fn := recv + capitalize(sig.base) + e.suffix(sig, kept, false) + refSuffix
+	if xs := e.enumeratedArray(base, fn, as); xs != nil {
+		return "swiftrt.Slice" + fn + "(" + strings.Join(append([]string{e.expr(xs)}, ss...), ", ") + ")"
+	}
 	return "swiftrt." + fn + e.mappedResultTypeArg(fn, dem, n, false) + "(" + strings.Join(append([]string{e.recvArg(base)}, ss...), ", ") + ")"
+}
+
+// enumeratedFused names the Enumerated functions with an array form in swiftrt that takes the array
+// itself instead of its enumerated pairs.
+var enumeratedFused = map[string]bool{
+	"EnumeratedMap": true, "EnumeratedCompactMap": true, "EnumeratedFlatMap": true, "EnumeratedAllSatisfy": true,
+}
+
+// enumeratedArray is the array xs when base is `xs.enumerated()` and the call fn on it has an array
+// form, so the pairs need not be built. It is nil when the call's closures could change xs, which
+// the pairs would otherwise keep as it was.
+func (e *fileEmitter) enumeratedArray(base ast.Node, fn string, as []arg) ast.Node {
+	if !enumeratedFused[fn] {
+		return nil
+	}
+	call := stripConv(base)
+	if call == nil || call.Kind() != "call_expr" || len(call.Child("args").List("args")) != 0 {
+		return nil
+	}
+	dot := stripConv(call.Child("fn"))
+	if dot == nil || dot.Kind() != "dot_syntax_call_expr" || stripConv(dot.Child("fn")).Child("decl").Str("base_name") != "enumerated" {
+		return nil
+	}
+	recvs := dot.Child("args").List("args")
+	if len(recvs) != 1 {
+		return nil
+	}
+	xs := recvs[0].Child("expr")
+	if t := e.m.typeOf(xs.Type()); t == nil || t.Kind != types.Array {
+		return nil
+	}
+	var closures []any
+	for _, a := range as {
+		closures = append(closures, map[string]any(a.node))
+	}
+	if e.snapshotNeeded(xs, closures...) {
+		return nil
+	}
+	return xs
 }
 
 func lastComponent(s string) string {

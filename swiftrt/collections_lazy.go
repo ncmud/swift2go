@@ -555,3 +555,69 @@ func Tupled2V[A, B any](f func(A, B)) func(struct {
 		f(t.F0, t.F1)
 	}
 }
+
+// The array forms of the Enumerated functions take the array itself, so `xs.enumerated()` builds
+// no array of pairs.
+
+// SliceEnumeratedMap is `xs.enumerated().map` on an array.
+func SliceEnumeratedMap[T, U any](xs []T, f func(struct {
+	F0 int
+	F1 T
+}) U) []U {
+	out := make([]U, len(xs))
+	for i, x := range xs {
+		out[i] = f(struct {
+			F0 int
+			F1 T
+		}{i, x})
+	}
+	return out
+}
+
+// SliceEnumeratedCompactMap is `xs.enumerated().compactMap` on an array.
+func SliceEnumeratedCompactMap[T, U any](xs []T, f func(struct {
+	F0 int
+	F1 T
+}) *U) []U {
+	out := []U{}
+	for i, x := range xs {
+		if v := f(struct {
+			F0 int
+			F1 T
+		}{i, x}); v != nil {
+			out = append(out, *v)
+		}
+	}
+	return out
+}
+
+// SliceEnumeratedFlatMap is `xs.enumerated().flatMap` on an array.
+func SliceEnumeratedFlatMap[T, U any](xs []T, f func(struct {
+	F0 int
+	F1 T
+}) []U) []U {
+	out := []U{}
+	for i, x := range xs {
+		out = append(out, f(struct {
+			F0 int
+			F1 T
+		}{i, x})...)
+	}
+	return out
+}
+
+// SliceEnumeratedAllSatisfy is `xs.enumerated().allSatisfy` on an array.
+func SliceEnumeratedAllSatisfy[T any](xs []T, f func(struct {
+	F0 int
+	F1 T
+}) bool) bool {
+	for i, x := range xs {
+		if !f(struct {
+			F0 int
+			F1 T
+		}{i, x}) {
+			return false
+		}
+	}
+	return true
+}
