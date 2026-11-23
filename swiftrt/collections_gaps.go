@@ -928,3 +928,8 @@ func Tupled5[A, B, C, D, E, R any](f func(A, B, C, D, E) R) func(struct {
 
 // FlattenSequenceAllSatisfy is `allSatisfy(_:)` on a `joined()` sequence.
 func FlattenSequenceAllSatisfy[T any](xs []T, f func(T) bool) bool { return SliceAllSatisfy(xs, f) }
+
+// FlattenSequenceContainsWhere is `contains(where:)` on a `joined()` sequence.
+func FlattenSequenceContainsWhere[T any](xs []T, f func(T) bool) bool {
+	return SliceContainsWhere(xs, f)
+}

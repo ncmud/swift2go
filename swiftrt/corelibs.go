@@ -44,8 +44,15 @@ var (
 	NSJSONWritingOptionsWithoutEscapingSlashes = NSJSONWritingOptionsCENSJSONWritingOptionsNSJSONWritingWithoutEscapingSlashes
 )
 
-// NSFileAttributeKeyPosixPermissions is `FileAttributeKey.posixPermissions` as Linux declares it.
-var NSFileAttributeKeyPosixPermissions = NSFileAttributeKeyCNSFilePosixPermissions
+// FileAttributeKey's statics as Linux declares them.
+const (
+	NSFileAttributeKeyPosixPermissions = NSFileAttributeKeyCNSFilePosixPermissions
+	NSFileAttributeKeyModificationDate = NSFileAttributeKeyCNSFileModificationDate
+	NSFileAttributeKeySize             = NSFileAttributeKeyCNSFileSize
+)
+
+// NSTemporaryDirectory is Foundation `NSTemporaryDirectory()` as Linux declares it, a Swift function.
+func NSTemporaryDirectory() string { return CFNSTemporaryDirectory() }
 
 // NSStringAppendingPathComponentString is `appendingPathComponent(_:)` on a String as Linux declares it.
 func NSStringAppendingPathComponentString(path, component string) string {

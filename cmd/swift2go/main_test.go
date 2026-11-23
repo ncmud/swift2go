@@ -153,8 +153,8 @@ func TestExecutable(t *testing.T) {
 }
 
 // TestSwiftSDK transpiles testdata/platform/swift for the host and for an installed Linux Swift SDK, and
-// checks that each Go program takes the `#if os(...)` and `canImport` branches of its platform and finds its
-// resources in the bundle SwiftPM names on that platform.
+// checks that each Go program takes the `#if os(...)` and `canImport` branches of its platform, finds its
+// resources in the bundle SwiftPM names on that platform, and calls the Foundation names that platform declares.
 func TestSwiftSDK(t *testing.T) {
 	if testing.Short() {
 		t.Skip("transpiles a Swift package")
@@ -202,7 +202,7 @@ func TestSwiftSDK(t *testing.T) {
 			t.Fatal(err)
 		}
 		check := filepath.Join(outDir, "check")
-		main := "package main\n\nimport \"github.com/ncmud/swift2go/out/platformtest/platform\"\n\nfunc main() { print(platform.PlatformName(), \" \", platform.Motd()) }\n"
+		main := "package main\n\nimport \"github.com/ncmud/swift2go/out/platformtest/platform\"\n\nfunc main() { print(platform.PlatformName(), \" \", platform.Motd(), \" \", platform.FileAttributes()) }\n"
 		if err := os.MkdirAll(check, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -224,8 +224,8 @@ func TestSwiftSDK(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", exe, err, out)
 		}
-		if got, want := strings.TrimSpace(string(out)), c.want+" welcome"; got != want {
-			t.Errorf("for %q: PlatformName(), Motd() = %q, want %q", c.dest.Triple, got, want)
+		if got, want := strings.TrimSpace(string(out)), c.want+" welcome 1000000 5"; got != want {
+			t.Errorf("for %q: PlatformName(), Motd(), FileAttributes() = %q, want %q", c.dest.Triple, got, want)
 		}
 	}
 }
