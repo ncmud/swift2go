@@ -1,6 +1,7 @@
 package swiftrt
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -111,6 +112,21 @@ func witnessAs[P any](v any) (P, bool) {
 		}
 	}
 	return zero, false
+}
+
+// Witnessed is a carrier of a conformance that RegisterWitness wraps a value in; it unwraps to the value.
+type Witnessed interface{ SwiftWitnessed() any }
+
+// Conforming is v as the protocol P: v itself, or the registered carrier of its conformance to P.
+func Conforming[P any](v any) P {
+	if p, ok := v.(P); ok {
+		return p
+	}
+	if p, ok := witnessAs[P](v); ok {
+		return p
+	}
+	Trap(fmt.Sprintf("value of type %T does not conform to %v", v, reflect.TypeFor[P]()))
+	panic("unreachable")
 }
 
 // StaticWitness is a value of protocol P that carries T's static requirements: T's registered carrier that

@@ -588,7 +588,14 @@ func cast[T any](v any) (T, bool) {
 	if t, ok := bridgeAs[T](v); ok {
 		return t, true
 	}
-	return collectionAs[T](v)
+	if t, ok := collectionAs[T](v); ok {
+		return t, true
+	}
+	if w, ok := v.(Witnessed); ok {
+		// A conformance's carrier casts as the value it carries.
+		return cast[T](w.SwiftWitnessed())
+	}
+	return witnessAs[T](v)
 }
 
 // Max is Swift's max(_:_:).

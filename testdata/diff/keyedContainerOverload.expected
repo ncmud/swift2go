@@ -1,0 +1,6 @@
+{"id":1}
+1 0  []
+{"hits":3,"id":2,"name":"x","tags":["a"]}
+2 3 x ["a"]
+true false true false
+[true, false, true, false, true]
