@@ -2,6 +2,7 @@ package swiftrt
 
 import (
 	"reflect"
+	"runtime"
 	"unsafe"
 	"weak"
 )
@@ -48,3 +49,7 @@ func (w *Weak[T]) Set(v T) {
 	w.typ = rv.Type()
 	w.ptr = weak.Make((*byte)(rv.UnsafePointer()))
 }
+
+// KeepAlive keeps x reachable until this call, as a Swift local stays alive to the end of its scope
+// while a weak reference to it can still be read there.
+func KeepAlive(x any) { runtime.KeepAlive(x) }

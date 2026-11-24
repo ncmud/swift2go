@@ -83,6 +83,8 @@ type fileEmitter struct {
 	keptParams  map[string]bool     // type parameters callers name though no parameter or result does
 	witnessOf   map[string]string   // type parameter → the witnessed protocol it conforms to, its Go bound being any
 	registered  map[string]bool     // carriers of generic foreign types this file registers, by Go type and carrier
+	keep        []keepFrame         // the open scopes of the function being emitted, innermost last
+	keepBound   []ast.Node          // the patterns an if or while condition bound for the block emitted next
 }
 
 // blankStringLiterals is Go source with the contents of its string and rune literals and its
@@ -1927,7 +1929,7 @@ func (e *fileEmitter) body(fn ast.Node, res string) {
 		e.topLevel[nodeKey(st)] = true
 	}
 	defer func() { e.topLevel = saveTop }()
-	e.stmts(b.List("elements"))
+	e.withKeepBoundary(func() { e.stmts(b.List("elements")) })
 	if res != "" && !endsWithReturn(b) {
 		e.w("panic(\"unreachable\")\n")
 	}

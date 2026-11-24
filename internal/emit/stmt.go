@@ -31,6 +31,7 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 		return
 	}
 	defer e.scopeLocalGetters(list)()
+	e.openKeepFrame(list)
 	forward := e.capturedLater(list)
 	opened := 0
 	for i, s := range list {
@@ -65,7 +66,9 @@ func (e *fileEmitter) stmts(list []ast.Node) {
 			e.w("%s\n", p)
 		}
 		e.post = savePost
+		e.keepDeclared(s, list[i+1:])
 	}
+	e.closeKeepFrame(list)
 	for ; opened > 0; opened-- {
 		e.w("}\n")
 	}
@@ -158,6 +161,12 @@ func (e *fileEmitter) stmt(n ast.Node) {
 			e.loopDepth++
 			defer func() { e.loopDepth-- }()
 		}
+		jump := keepLoop
+		if n.Kind() == "switch_stmt" {
+			jump = keepSwitch
+		}
+		e.keep = append(e.keep, keepFrame{jump: jump, label: e.stmtLabel(n)})
+		defer func() { e.keep = e.keep[:len(e.keep)-1] }()
 		if label := e.stmtLabel(n); label != "" && e.labelUsed(n, label) {
 			if e.doRet != nil {
 				e.doRet.inner[label] = true
@@ -279,7 +288,16 @@ func (e *fileEmitter) stmtUnlabeled(n ast.Node) {
 		}
 		e.w("_ = %s\n", e.expr(n))
 	case "throw_stmt":
-		e.w("panic(swiftrt.Throw(%s))\n", e.expr(n.Child("sub_expr")))
+		thrown := e.expr(n.Child("sub_expr"))
+		if kept := e.keptToReturn(); kept != "" {
+			if e.mayObserveRelease([]ast.Node{n.Child("sub_expr")}) {
+				tmp := e.newTmp("thrown")
+				e.w("%s := %s\n", tmp, thrown)
+				thrown = tmp
+			}
+			e.w("%s", kept)
+		}
+		e.w("panic(swiftrt.Throw(%s))\n", thrown)
 	case "do_stmt":
 		e.block(n.Child("body"))
 		e.w("\n")
@@ -433,6 +451,7 @@ func (e *fileEmitter) localGetter(n ast.Node) {
 
 func (e *fileEmitter) returnStmt(n ast.Node) {
 	r := n.Child("result")
+	kept := e.keptToReturn()
 	if e.doRet != nil {
 		if r != nil && e.resultType != "" && !e.inInit {
 			savePost := e.post
@@ -445,11 +464,11 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 		} else if r != nil && !e.inInit {
 			e.stmt(r)
 		}
-		e.w("%s = true\nreturn\n", e.doRet.flag)
+		e.w("%s%s = true\nreturn\n", kept, e.doRet.flag)
 		return
 	}
 	if e.inInit {
-		e.w("return %s\n", e.initRet)
+		e.w("%sreturn %s\n", kept, e.initRet)
 		return
 	}
 	if r == nil || e.resultType == "" {
@@ -462,14 +481,15 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 			}
 			e.post = savePost
 		}
-		e.w("return\n")
+		e.w("%sreturn\n", kept)
 		return
 	}
 	savePost := e.post
 	e.post = nil
 	v := e.owned(r, sinkReturn)
-	if len(e.post) > 0 {
-		// Write-backs must run before leaving the function.
+	if len(e.post) > 0 || kept != "" && e.mayObserveRelease([]ast.Node{r}) {
+		// Write-backs must run before leaving the function, and the locals stay alive until the
+		// result is made.
 		tmp := e.newTmp("res")
 		e.w("%s := %s\n", tmp, v)
 		for _, p := range e.post {
@@ -478,7 +498,7 @@ func (e *fileEmitter) returnStmt(n ast.Node) {
 		v = tmp
 	}
 	e.post = savePost
-	e.w("return %s\n", e.returned(v))
+	e.w("%sreturn %s\n", kept, e.returned(v))
 }
 
 // returned converts v, a value of the function's Swift result type, to the Go result type: an
@@ -890,13 +910,17 @@ func (e *fileEmitter) ifStmt(n ast.Node) {
 		return
 	}
 	if els == nil {
-		e.conds(cs, func() { e.stmts(n.Child("then_stmt").List("elements")) })
+		e.conds(cs, func() {
+			e.keepBound = condPatterns(cs)
+			e.stmts(n.Child("then_stmt").List("elements"))
+		})
 		return
 	}
 	flag := e.newTmp("matched")
 	e.w("%s := false\n", flag)
 	e.conds(cs, func() {
 		e.w("%s = true\n", flag)
+		e.keepBound = condPatterns(cs)
 		e.stmts(n.Child("then_stmt").List("elements"))
 	})
 	e.w("if !%s ", flag)
@@ -1046,6 +1070,7 @@ func (e *fileEmitter) whileStmt(n ast.Node) {
 	e.w("for {\n%s := false\n", flag)
 	e.conds(cs, func() {
 		e.w("%s = true\n", flag)
+		e.keepBound = condPatterns(cs)
 		e.stmts(n.Child("body").List("elements"))
 	})
 	e.w("if !%s { break }\n}\n", flag)
@@ -1823,6 +1848,7 @@ func (e *fileEmitter) implicitlyUnwrappedForeign(member ast.Node) bool {
 // jump writes a break or continue. Inside a block that runs as a Go closure, one that leaves the
 // block sets the block's flag for it and returns, and the code after the closure repeats it.
 func (e *fileEmitter) jump(kind, label string) {
+	e.w("%s", e.keptToJump(kind, label))
 	text := kind
 	if label != "" {
 		text += " " + label

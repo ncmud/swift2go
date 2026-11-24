@@ -1894,7 +1894,7 @@ func (e *fileEmitter) closure(n ast.Node) string {
 		e.topLevel[nodeKey(st)] = true
 	}
 	defer func() { e.topLevel = saveTop }()
-	e.stmts(body.List("elements"))
+	e.withKeepBoundary(func() { e.stmts(body.List("elements")) })
 	if res != "" && !endsWithReturn(body) {
 		e.w("panic(\"unreachable\")\n")
 	}
