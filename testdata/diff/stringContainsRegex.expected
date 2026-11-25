@@ -1,0 +1,8 @@
+false true true false
+true false true false
+false false false false
+false true true false
+false false false true
+["hit [12] for 4"]
+false
+true false
