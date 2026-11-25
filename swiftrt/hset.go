@@ -225,3 +225,164 @@ func HSetContainsWhere[T any](s HSet[T], f func(T) bool) bool {
 	}
 	return false
 }
+
+// hsetKeys is the set of keys of other, a hashed Set or any sequence of T.
+func hsetKeys[T any](other any) map[string]struct{} {
+	if o, ok := other.(HSet[T]); ok {
+		keys := make(map[string]struct{}, len(o.M))
+		for k := range o.M {
+			keys[k] = struct{}{}
+		}
+		return keys
+	}
+	keys := map[string]struct{}{}
+	for _, x := range Iterate[T](other) {
+		keys[hkey(x)] = struct{}{}
+	}
+	return keys
+}
+
+// HSetUnion is `Set.union(_:)`: a new set of the elements of s and other. Where both hold equal
+// elements, the result holds s's.
+func HSetUnion[T any](s HSet[T], other any) HSet[T] {
+	out := Copy(s)
+	if out.M == nil {
+		out.M = map[string]T{}
+	}
+	HSetFormUnion(&out, other)
+	return out
+}
+
+// HSetIntersection is `Set.intersection(_:)`: a new set of s's elements that other also holds.
+func HSetIntersection[T any](s HSet[T], other any) HSet[T] {
+	keys := hsetKeys[T](other)
+	out := HSet[T]{M: map[string]T{}}
+	for k, v := range s.M {
+		if _, ok := keys[k]; ok {
+			out.M[k] = Copy(v)
+		}
+	}
+	return out
+}
+
+// HSetIntersectionHSet is `Set.intersection(_:)` with a Set argument.
+func HSetIntersectionHSet[T any](s, other HSet[T]) HSet[T] { return HSetIntersection(s, other) }
+
+// HSetFormIntersection is `Set.formIntersection(_:)`: s keeps only the elements other also holds.
+func HSetFormIntersection[T any](s *HSet[T], other any) {
+	keys := hsetKeys[T](other)
+	for k := range s.M {
+		if _, ok := keys[k]; !ok {
+			delete(s.M, k)
+		}
+	}
+}
+
+// HSetSubtracting is `Set.subtracting(_:)`: a new set of s's elements that other does not hold.
+func HSetSubtracting[T any](s HSet[T], other any) HSet[T] {
+	out := Copy(s)
+	HSetSubtract(&out, other)
+	if out.M == nil {
+		out.M = map[string]T{}
+	}
+	return out
+}
+
+// HSetSubtractingHSet is `Set.subtracting(_:)` with a Set argument.
+func HSetSubtractingHSet[T any](s, other HSet[T]) HSet[T] { return HSetSubtracting(s, other) }
+
+// HSetSubtract is `Set.subtract(_:)`: it removes other's elements from s.
+func HSetSubtract[T any](s *HSet[T], other any) {
+	for k := range hsetKeys[T](other) {
+		delete(s.M, k)
+	}
+}
+
+// HSetSubtractHSet is `Set.subtract(_:)` with a Set argument.
+func HSetSubtractHSet[T any](s *HSet[T], other HSet[T]) { HSetSubtract(s, other) }
+
+// HSetSymmetricDifference is `Set.symmetricDifference(_:)`: a new set of the elements in exactly one
+// of s and other. An element other repeats counts once.
+func HSetSymmetricDifference[T any](s HSet[T], other any) HSet[T] {
+	out := Copy(s)
+	HSetFormSymmetricDifference(&out, other)
+	return out
+}
+
+// HSetFormSymmetricDifference is `Set.formSymmetricDifference(_:)`: s keeps the elements in exactly
+// one of s and other.
+func HSetFormSymmetricDifference[T any](s *HSet[T], other any) {
+	o, ok := other.(HSet[T])
+	if !ok {
+		o = HSetInitSlice(Iterate[T](other))
+	}
+	if s.M == nil {
+		s.M = map[string]T{}
+	}
+	for k, v := range o.M {
+		if _, both := s.M[k]; both {
+			delete(s.M, k)
+		} else {
+			s.M[k] = Copy(v)
+		}
+	}
+}
+
+// HSetFormSymmetricDifferenceHSet is `Set.formSymmetricDifference(_:)` with a Set argument.
+func HSetFormSymmetricDifferenceHSet[T any](s *HSet[T], other HSet[T]) {
+	HSetFormSymmetricDifference(s, other)
+}
+
+// HSetIsSubsetOf is `Set.isSubset(of:)`: whether other holds every element of s.
+func HSetIsSubsetOf[T any](s HSet[T], other any) bool {
+	keys := hsetKeys[T](other)
+	for k := range s.M {
+		if _, ok := keys[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// HSetIsStrictSubsetOf is `Set.isStrictSubset(of:)`: whether s is a subset of other and other holds
+// an element s does not.
+func HSetIsStrictSubsetOf[T any](s HSet[T], other any) bool {
+	return HSetIsSubsetOf(s, other) && len(hsetKeys[T](other)) > len(s.M)
+}
+
+// HSetIsSupersetOf is `Set.isSuperset(of:)`: whether s holds every element of other.
+func HSetIsSupersetOf[T any](s HSet[T], other any) bool {
+	for k := range hsetKeys[T](other) {
+		if _, ok := s.M[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// HSetIsStrictSupersetOf is `Set.isStrictSuperset(of:)`: whether s is a superset of other and holds
+// an element other does not.
+func HSetIsStrictSupersetOf[T any](s HSet[T], other any) bool {
+	return HSetIsSupersetOf(s, other) && len(s.M) > len(hsetKeys[T](other))
+}
+
+// HSetIsDisjointWith is `Set.isDisjoint(with:)`: whether s and other share no element.
+func HSetIsDisjointWith[T any](s HSet[T], other any) bool {
+	for k := range hsetKeys[T](other) {
+		if _, ok := s.M[k]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+// HSetMap is `map` on a hashed Set: an array of f applied to each element.
+func HSetMap[T, U any](s HSet[T], f func(T) U) []U { return SliceMap(s.Elements(), f) }
+
+// HSetSorted is `Set.sorted()`, ordered by the element type's own `<`.
+func HSetSorted[T any](s HSet[T]) []T { return SliceSortedBy(s.Elements(), Less[T]) }
+
+// HSetSortedBy is `Set.sorted(by:)`.
+func HSetSortedBy[T any](s HSet[T], less func(T, T) bool) []T {
+	return SliceSortedBy(s.Elements(), less)
+}

@@ -1,0 +1,25 @@
+union a b c d
+union array a b c d
+union chained a b/right c d
+intersection b
+subtracting a c
+symmetric a c d
+subset true false
+superset true false
+disjoint true false
+intersection array b
+subtracting array a c
+symmetric array b c d
+strict subset true false true
+strict superset true false true
+formUnion a b c d
+formUnion array a b c d e
+formIntersection b c
+formIntersection set b
+subtract b c
+subtract set c
+formSymmetricDifference a c d
+formSymmetricDifference array a d e
+map [0, 1, 2]
+sorted ["a", "b", "c"] ["c", "b", "a"]
+unchanged a b c b/right d
