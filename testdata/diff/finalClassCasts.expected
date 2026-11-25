@@ -1,0 +1,23 @@
+isPlayer=true isGuard=false player=ash guard=-
+isPlayer=false isGuard=true player=- guard=sentry
+isPlayer=false isGuard=false player=- guard=-
+isPlayer=false isGuard=false player=- guard=-
+isPlayer=false isGuard=false player=- guard=-
+isPlayer=false isGuard=false player=- guard=-
+npc casts 4000
+true ash ash
+false - warden
+false false
+false true
+isPlayer=true isLoner=false player=ash loner=- player ash
+isPlayer=false isLoner=false player=- loner=- guard
+isPlayer=false isLoner=false player=- loner=- other
+isPlayer=false isLoner=true player=- loner=7 loner 7
+isPlayer=false isLoner=false player=- loner=- other
+isPlayer=false isLoner=false player=- loner=- other
+isPlayer=false isLoner=false player=- loner=- other
+ash 7
+sword true sword true
+rock false - false
+dust false - false
+sword

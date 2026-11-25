@@ -574,6 +574,48 @@ func MustAs[T any](v any) T {
 	return t
 }
 
+// IsFinal is Swift's `is` to the final class C.
+func IsFinal[C any](v any) bool {
+	_, ok := finalCast[C](v)
+	return ok
+}
+
+// AsFinal is Swift's `as?` to the final class C, as an optional of the reference.
+func AsFinal[C any](v any) **C {
+	if p, ok := finalCast[C](v); ok {
+		return &p
+	}
+	return nil
+}
+
+// AsRefFinal is Swift's `as?` to the final class C: the reference, or nil.
+func AsRefFinal[C any](v any) *C {
+	p, _ := finalCast[C](v)
+	return p
+}
+
+// MustAsFinal is Swift's `as!` to the final class C.
+func MustAsFinal[C any](v any) *C {
+	p, ok := finalCast[C](v)
+	if !ok {
+		Trap(fmt.Sprintf("could not cast value of type %T", v))
+	}
+	return p
+}
+
+// finalCast is [cast] to the final class C. No subclass extends C, so only a most-derived object that
+// is a C matches, without the walk of superclass parts that [classAs] makes.
+func finalCast[C any](v any) (*C, bool) {
+	if p, ok := v.(*C); ok {
+		return p, p != nil
+	}
+	if c, ok := v.(interface{ SwiftDynamic() any }); ok {
+		p, ok := c.SwiftDynamic().(*C)
+		return p, ok && p != nil
+	}
+	return cast[*C](v)
+}
+
 // cast is the dynamic cast of v to T that `is`, `as?` and `as!` share.
 func cast[T any](v any) (T, bool) {
 	if t, ok := v.(T); ok {

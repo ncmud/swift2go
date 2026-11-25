@@ -1502,10 +1502,10 @@ func (e *fileEmitter) patternTest(p ast.Node, subj string, st *types.Type) strin
 		}
 		return e.m.Unsup("pattern_expr-shape", e.where, "bool")
 	case "pattern_is":
-		target := e.m.GoType(e.m.typeOf(p.Str("cast_to")), e.generics)
-		test := "swiftrt.Is[" + target + "](" + subj + ")"
+		to := e.m.typeOf(p.Str("cast_to"))
+		test := e.castCall("Is", to) + "(" + subj + ")"
 		if sub := p.Child("sub_pattern"); sub != nil {
-			if t := e.patternTest(unwrapPattern(sub), "swiftrt.MustAs["+target+"]("+subj+")", e.m.typeOf(p.Str("cast_to"))); t != "true" {
+			if t := e.patternTest(unwrapPattern(sub), e.castCall("MustAs", to)+"("+subj+")", to); t != "true" {
 				test = andJoin([]string{test, t})
 			}
 		}
@@ -1675,8 +1675,7 @@ func (e *fileEmitter) patternBind(p ast.Node, subj string) {
 		}
 	case "pattern_is":
 		if sub := p.Child("sub_pattern"); sub != nil && patternBinds(sub) {
-			target := e.m.GoType(e.m.typeOf(p.Str("cast_to")), e.generics)
-			e.patternBind(unwrapPattern(sub), "swiftrt.MustAs["+target+"]("+subj+")")
+			e.patternBind(unwrapPattern(sub), e.castCall("MustAs", e.m.typeOf(p.Str("cast_to")))+"("+subj+")")
 		}
 	case "pattern_enum_element":
 		if inner, val, ok := e.optionalUnwrap(p, subj); ok {

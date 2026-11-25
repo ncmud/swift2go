@@ -662,13 +662,16 @@ func TestCastAllocations(t *testing.T) {
 		t.Fatal("a nil class reference cast to a subclass")
 	}
 	for name, cast := range map[string]func(){
-		"AsRef to the dynamic class":  func() { _ = AsRef[*castLeaf](root) },
-		"AsRef to a middle class":     func() { _ = AsRef[*castMid](root) },
-		"AsRef to an unrelated class": func() { _ = AsRef[*castOther](root) },
-		"As to an unrelated class":    func() { _ = As[*castOther](root) },
-		"Is to an unrelated class":    func() { _ = Is[*castLeaf](otherRoot) },
-		"Is from a plain root object": func() { _ = Is[*castLeaf](plainRoot) },
-		"MustAs to the dynamic class": func() { _ = MustAs[*castLeaf](root) },
+		"AsRef to the dynamic class":       func() { _ = AsRef[*castLeaf](root) },
+		"AsRef to a middle class":          func() { _ = AsRef[*castMid](root) },
+		"AsRef to an unrelated class":      func() { _ = AsRef[*castOther](root) },
+		"As to an unrelated class":         func() { _ = As[*castOther](root) },
+		"Is to an unrelated class":         func() { _ = Is[*castLeaf](otherRoot) },
+		"Is from a plain root object":      func() { _ = Is[*castLeaf](plainRoot) },
+		"MustAs to the dynamic class":      func() { _ = MustAs[*castLeaf](root) },
+		"IsFinal to an unrelated class":    func() { _ = IsFinal[castOther](root) },
+		"AsRefFinal to the dynamic class":  func() { _ = AsRefFinal[castLeaf](root) },
+		"MustAsFinal to the dynamic class": func() { _ = MustAsFinal[castLeaf](root) },
 	} {
 		if n := testing.AllocsPerRun(1000, cast); n != 0 {
 			t.Errorf("%s: %v allocations, want 0", name, n)
@@ -754,17 +757,28 @@ func TestCastFailureCost(t *testing.T) {
 }
 
 // BenchmarkClassCast measures the casts the game server runs most: isPC on an NPC, which fails
-// on a plain root object, and on a player, which succeeds.
+// on a plain root object, and on a player, which succeeds. The final cases cast as to a final class,
+// which matches the most-derived object alone.
 func BenchmarkClassCast(b *testing.B) {
 	root, otherRoot, plainRoot := castFixtures()
 	for _, c := range []struct {
 		name string
 		v    any
-	}{{"success", root}, {"plain-root-failure", plainRoot}, {"sibling-failure", otherRoot}} {
+		is   func(any) bool
+	}{
+		{"success", root, Is[*castLeaf]},
+		{"plain-root-failure", plainRoot, Is[*castLeaf]},
+		{"sibling-failure", otherRoot, Is[*castLeaf]},
+		{"leaf-to-sibling-failure", root, Is[*castOther]},
+		{"final-success", root, IsFinal[castLeaf]},
+		{"final-plain-root-failure", plainRoot, IsFinal[castLeaf]},
+		{"final-sibling-failure", otherRoot, IsFinal[castLeaf]},
+		{"final-leaf-to-sibling-failure", root, IsFinal[castOther]},
+	} {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				_ = Is[*castLeaf](c.v)
+				_ = c.is(c.v)
 			}
 		})
 	}

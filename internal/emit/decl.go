@@ -518,7 +518,9 @@ func (e *fileEmitter) typeDecl(n ast.Node) {
 	} else if e.conformsToCodable(n) {
 		e.w("// SwiftRawCodable codes %s as its raw value, as Swift codes a RawRepresentable type.\nfunc (%s) SwiftRawCodable() {}\n\n", info.GoName, recvT)
 	}
-	if n.Kind() == "class_decl" && e.m.HasSubclass(info.GoName) && e.m.Superclass(info.GoName) == "" {
+	if n.Kind() == "class_decl" && e.m.inHierarchy(info.GoName) {
+		// A subclass declares its own rather than promote its superclass's, which a nil reference
+		// to the subclass could not call.
 		e.w("// SwiftDynamic returns the most-derived object, for downcasts and identity.\nfunc (self *%s) SwiftDynamic() any {\n\tif self != nil && self.SwiftSub != nil {\n\t\treturn self.SwiftSub\n\t}\n\treturn self\n}\n\n", recvT)
 	}
 	for _, sup := range e.m.ancestors(info.GoName) {

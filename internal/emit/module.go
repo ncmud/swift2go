@@ -303,6 +303,17 @@ func (m *Module) IsOptionSet(q string) bool {
 	return false
 }
 
+// IsFinalClass reports whether the qualified Swift type is a class declared final, in this module or a
+// dependency.
+func (m *Module) IsFinalClass(q string) bool {
+	for _, mod := range append([]*Module{m}, m.Deps...) {
+		if mod.typeKinds[q+"#final"] != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // Superclass returns the Go name of a local class's superclass, or "".
 func (m *Module) Superclass(goName string) string {
 	m.classTree()
@@ -713,6 +724,9 @@ func (m *Module) index(items []ast.Node, owner, ownerKind string) {
 				if c.Str("protocol") == "s:s9OptionSetP" {
 					m.typeKinds[q+"#OptionSet"] = "yes"
 				}
+			}
+			if n.Kind() == "class_decl" && n.Bool("final") {
+				m.typeKinds[q+"#final"] = "yes"
 			}
 			m.decls[declKey(n)] = &DeclInfo{Node: n, Kind: n.Kind(), Owner: owner, OwnerKind: ownerKind, file: m.indexing, QName: q}
 			m.sorted = nil
