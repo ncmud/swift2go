@@ -146,6 +146,17 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 				return e.expr(sub)
 			}
 			gt := e.m.GoType(st.Args[0], e.generics)
+			if e.m.GoType(nt, e.generics) == "swiftrt.Type" {
+				// Stored as `Any.Type`, which has no static requirements: the metatype value itself. Only a
+				// literal `T.self` is its static type; `type(of: x)` or a `B.Type` holding a subclass is
+				// the type it holds at run time.
+				if k := stripLoads(sub).Kind(); k == "dot_self_expr" || k == "type_expr" {
+					return "swiftrt.TypeOf[" + gt + "]()"
+				}
+				if e.exprGoType(sub) == "swiftrt.Type" {
+					return e.expr(sub)
+				}
+			}
 			if e.m.HasMutatingMethods(st.Args[0].Name) {
 				return "new(" + gt + ")"
 			}
@@ -3339,6 +3350,11 @@ func (e *fileEmitter) optionalEqual(lt, rt *types.Type) (string, bool) {
 	return "", false
 }
 
+// isOptionalMeta reports whether t is an Optional metatype, such as `Any.Type?`.
+func isOptionalMeta(t *types.Type) bool {
+	return t != nil && t.Kind == types.Optional && len(t.Args) == 1 && t.Args[0] != nil && t.Args[0].Kind == types.Meta
+}
+
 // unboundedTypeParam reports whether t is one of the function's type parameters with no Go constraint that
 // allows == or <, such as a parameter that is only Equatable or Comparable.
 func (e *fileEmitter) unboundedTypeParam(t *types.Type) bool {
@@ -3425,6 +3441,14 @@ func (e *fileEmitter) binaryWith(n ast.Node, d ast.Node, as []arg) string {
 		}
 		if rt := e.m.typeOf(r.Type()); lt.Kind == types.Named && rt != nil && rt.Kind == types.Named && isIntegerName(lt.Name) && isIntegerName(rt.Name) && lt.Name != rt.Name {
 			return "swiftrt.IntCompare(" + e.expr(l) + ", " + e.expr(r) + ") " + op + " 0"
+		}
+		if rt := e.m.typeOf(r.Type()); isOptionalMeta(lt) && isOptionalMeta(rt) {
+			// The standard library's == on metatypes takes two Optionals and compares the types.
+			s := "swiftrt.MetatypeEqual(" + e.expr(l) + ", " + e.expr(r) + ")"
+			if op == "!=" {
+				return "!" + s
+			}
+			return s
 		}
 		if eq, ok := e.optionalEqual(lt, e.m.typeOf(r.Type())); ok {
 			// Both sides are pointers to a value Go's == compares as Swift does: no reflection, and

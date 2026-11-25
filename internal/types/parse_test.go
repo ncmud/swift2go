@@ -19,6 +19,10 @@ func TestParse(t *testing.T) {
 		"(Swift.Int, Swift.Int) throws -> ()":       "(Swift.Int, Swift.Int) -> ()",
 		"Swift.String.Index":                        "Swift.String.Index",
 		"Swift.Dictionary<Swift.String, Swift.Int>": "Swift.Dictionary<Swift.String, Swift.Int>",
+		"any Any<Self: ~Swift.Copyable, Self: ~Swift.Escapable>.Type?": "any Any.Type?",
+		"t.Box<Self.Type>":                                  "t.Box<Self.Type>",
+		"Swift.Result<Self.Type, Swift.Error>":              "Swift.Result<Self.Type, Swift.Error>",
+		"[any Swift.Collection<Self.Element == Swift.Int>]": "[any Swift.Collection]",
 	}
 	for in, want := range cases {
 		if got := Parse(in).String(); got != want {

@@ -79,6 +79,14 @@ func eachClosed[T Integer](r ClosedRange[T], f func(T) bool) {
 	}
 }
 
+// ClosedRangeLazy is `(lo...hi).lazy`; Go evaluates eagerly, so a lazy chain over it runs its
+// closures for every element, where Swift's stops at the first an operation such as `first` needs.
+func ClosedRangeLazy[T Integer](r ClosedRange[T]) []T {
+	out := []T{}
+	eachClosed(r, func(i T) bool { out = append(out, i); return true })
+	return out
+}
+
 // ClosedRangeReduce is `(lo...hi).reduce(_:_:)`.
 func ClosedRangeReduce[A any, T Integer](r ClosedRange[T], init A, f func(A, T) A) A {
 	eachClosed(r, func(i T) bool { init = f(init, i); return true })

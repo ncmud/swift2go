@@ -138,3 +138,57 @@ func StaticWitness[T any, P any]() P {
 	}
 	return any(z).(P) //nolint:forcetypeassert // generated code calls this for a T constrained by P
 }
+
+// MetatypeEqual is Swift's `==` on two optional metatypes, such as `type(of: a) == type(of: b)`:
+// two types are equal when they are the same type, and both nil when both are nil.
+func MetatypeEqual(a, b *Type) bool {
+	if a == nil || b == nil || *a == nil || *b == nil {
+		return (a == nil || *a == nil) == (b == nil || *b == nil)
+	}
+	return sameType((*a).Reflect(), (*b).Reflect())
+}
+
+// sameType reports whether Go types x and y are the same Swift type. Each case of an enum with
+// payloads is its own Go type, and is the enum's Swift type, as the enum's Go interface is.
+func sameType(x, y reflect.Type) bool {
+	if x == y {
+		return true
+	}
+	if x == nil || y == nil {
+		return false
+	}
+	xi, yi := enumInterface(x), enumInterface(y)
+	switch {
+	case xi && yi:
+		return false
+	case xi:
+		return isEnumCase(y) && y.Implements(x) && typeArgs(x) == typeArgs(y)
+	case yi:
+		return isEnumCase(x) && x.Implements(y) && typeArgs(x) == typeArgs(y)
+	}
+	if !isEnumCase(x) || !isEnumCase(y) || x.PkgPath() != y.PkgPath() || typeArgs(x) != typeArgs(y) {
+		return false
+	}
+	xn, _ := reflect.Zero(x).Interface().(SwiftNamed)
+	yn, _ := reflect.Zero(y).Interface().(SwiftNamed)
+	return xn != nil && yn != nil && xn.SwiftTypeName() == yn.SwiftTypeName()
+}
+
+// enumInterface reports whether t is the Go interface of an enum with payloads, whose one method is
+// the marker is<Enum>.
+func enumInterface(t reflect.Type) bool {
+	return t.Kind() == reflect.Interface && t.NumMethod() == 1 && t.Method(0).Name == "is"+strings.SplitN(t.Name(), "[", 2)[0]
+}
+
+// isEnumCase reports whether t is the Go type of one case of an enum with payloads.
+func isEnumCase(t reflect.Type) bool {
+	return t.Kind() == reflect.Struct && t.Implements(reflect.TypeFor[SwiftCase]()) && t.Implements(reflect.TypeFor[SwiftNamed]())
+}
+
+// typeArgs is the bracketed type arguments of a generic Go type's name, or "".
+func typeArgs(t reflect.Type) string {
+	if i := strings.IndexByte(t.Name(), '['); i >= 0 {
+		return t.Name()[i:]
+	}
+	return ""
+}

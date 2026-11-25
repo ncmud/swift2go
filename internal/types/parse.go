@@ -77,6 +77,9 @@ func (t *Type) String() string {
 type parser struct {
 	s   string
 	pos int
+	// existential is set while parsing the type an `any` names, whose `<...>` may be a constrained
+	// existential's requirements rather than type arguments.
+	existential bool
 }
 
 // Parse parses a demangled type string.
@@ -126,6 +129,7 @@ func (p *parser) parseType() *Type {
 	var t *Type
 	switch {
 	case p.eat("some "), p.eat("any "):
+		p.existential = true
 		inner := p.parsePrimary()
 		if inner.Kind == Generic {
 			inner.Kind = Named
@@ -155,6 +159,8 @@ func (p *parser) parseType() *Type {
 }
 
 func (p *parser) parsePrimary() *Type {
+	existential := p.existential
+	p.existential = false
 	p.skipSpace()
 	switch p.peek() {
 	case '[':
@@ -220,7 +226,7 @@ func (p *parser) parsePrimary() *Type {
 		}
 		return &Type{Kind: Tuple, Args: args, Labels: labels}
 	}
-	name, gargs := p.qualifiedName()
+	name, gargs := p.qualifiedName(existential)
 	t := &Type{Kind: Named, Name: name, Args: gargs}
 	if isGenericParamName(name) {
 		t.Kind = Generic
@@ -257,7 +263,9 @@ func (p *parser) ident() string {
 	return p.s[start:p.pos]
 }
 
-func (p *parser) qualifiedName() (string, []*Type) {
+// qualifiedName parses a dotted name and its type arguments. For the type an `any` or `some` names,
+// existential is set.
+func (p *parser) qualifiedName(existential bool) (string, []*Type) {
 	var parts []string
 	var args []*Type
 	for {
@@ -265,7 +273,11 @@ func (p *parser) qualifiedName() (string, []*Type) {
 		if id == "" {
 			break
 		}
-		if strings.HasPrefix(p.rest(), "<") {
+		if existential && (strings.HasPrefix(p.rest(), "<Self:") || strings.HasPrefix(p.rest(), "<Self.")) {
+			// A constrained existential's requirements, as the standard library's
+			// `any Any<Self: ~Swift.Copyable, Self: ~Swift.Escapable>`, name no type arguments.
+			p.skipAngles()
+		} else if strings.HasPrefix(p.rest(), "<") {
 			p.pos++
 			for !p.eat(">") {
 				if p.pos >= len(p.s) {
@@ -291,6 +303,26 @@ func (p *parser) qualifiedName() (string, []*Type) {
 		break
 	}
 	return strings.Join(parts, "."), args
+}
+
+// skipAngles moves past the `<...>` at the input's position, with any nested in it.
+func (p *parser) skipAngles() {
+	depth := 0
+	for ; p.pos < len(p.s); p.pos++ {
+		switch p.s[p.pos] {
+		case '<':
+			depth++
+		case '>':
+			if p.pos > 0 && p.s[p.pos-1] == '-' {
+				continue // the arrow of a function type
+			}
+			depth--
+			if depth == 0 {
+				p.pos++
+				return
+			}
+		}
+	}
 }
 
 // metaSuffix reports whether the input continues with the metatype suffix word, ".Type" or
