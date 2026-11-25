@@ -192,6 +192,36 @@ func StringFirstMatchOf[O any](s string, r SwiftRegex[O]) *RegexMatch[O] {
 	return &m
 }
 
+// SubstringFirstMatchOf is `Substring.firstMatch(of:)`. The substring's bounds are the subject's, as
+// anchors see them, and the match's range and captures index the base string, as Swift's do.
+func SubstringFirstMatchOf[O any](s Substring, r SwiftRegex[O]) *RegexMatch[O] {
+	text := s.String()
+	var bounds map[int]bool
+	if r.trailingB {
+		// A word may run on past the substring's end, so its boundaries come from the base string's
+		// text from the substring's start; the substring's end is a boundary as well.
+		bounds = map[int]bool{len(text): true}
+		for at := range wordBoundaries(s.Base[s.Lo:]) {
+			if at <= len(text) {
+				bounds[at] = true
+			}
+		}
+	}
+	loc := r.find(text, 0, bounds)
+	if loc == nil {
+		return nil
+	}
+	shifted := make([]int, len(loc))
+	for i, v := range loc {
+		shifted[i] = v
+		if v >= 0 {
+			shifted[i] = v + s.Lo
+		}
+	}
+	m := regexMatchAt[O](s.Base, shifted)
+	return &m
+}
+
 // StringWholeMatchOf is `String.wholeMatch(of:)`: a match of the entire string.
 func StringWholeMatchOf[O any](s string, r SwiftRegex[O]) *RegexMatch[O] {
 	// The end of the string is always a word boundary, so a trailing \b adds nothing here.
