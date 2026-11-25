@@ -2754,6 +2754,10 @@ func (e *fileEmitter) methodCallForeign(n ast.Node, d ast.Node, base ast.Node, a
 		}
 	}
 	if d.Str("base_name") == "contains" && len(as) == 1 && as[0].label == "" && base != nil {
+		// `s.contains(/regex/)`: whether the regex matches anywhere in the string.
+		if e.m.Recv(e.m.typeOf(base.Type())) == "String" && strings.HasPrefix(e.exprGoType(as[0].node), "swiftrt.SwiftRegex[") {
+			return "swiftrt.StringContainsRegex(" + e.expr(base) + ", " + e.expr(as[0].node) + ")"
+		}
 		// `contains(_ other: some Collection)`, as on `s.utf8.contains(t.utf8)`: a subsequence, not an element.
 		if bg := e.exprGoType(base); strings.HasPrefix(bg, "[]") && bg == e.exprGoType(as[0].node) {
 			return "swiftrt.SliceContainsSubsequence(" + e.expr(base) + ", " + e.expr(as[0].node) + ")"
