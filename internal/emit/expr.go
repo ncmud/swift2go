@@ -112,6 +112,9 @@ func (e *fileEmitter) expr(n ast.Node) string {
 			if n.Kind() == "conditional_checked_cast_expr" && strings.HasPrefix(out, "swiftrt.As[") {
 				return "swiftrt.AsRef[" + strings.TrimPrefix(out, "swiftrt.As[")
 			}
+			if n.Kind() == "conditional_checked_cast_expr" && strings.HasPrefix(out, "swiftrt.AsFinal[") {
+				return "swiftrt.AsRefFinal[" + strings.TrimPrefix(out, "swiftrt.AsFinal[")
+			}
 			return "swiftrt.Flat(" + out + ")"
 		}
 	}
@@ -527,11 +530,11 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 		if to == "" {
 			to = n.Str("written_type")
 		}
-		return "swiftrt.Is[" + e.m.GoType(e.m.typeOf(to), e.generics) + "](" + e.expr(n.Child("sub_expr")) + ")"
+		return e.castCall("Is", e.m.typeOf(to)) + "(" + e.expr(n.Child("sub_expr")) + ")"
 	case "conditional_checked_cast_expr":
-		return "swiftrt.As[" + e.castTarget(n) + "](" + e.expr(n.Child("sub_expr")) + ")"
+		return e.castCall("As", e.castTargetType(n)) + "(" + e.expr(n.Child("sub_expr")) + ")"
 	case "forced_checked_cast_expr":
-		return "swiftrt.MustAs[" + e.castTarget(n) + "](" + e.expr(n.Child("sub_expr")) + ")"
+		return e.castCall("MustAs", e.castTargetType(n)) + "(" + e.expr(n.Child("sub_expr")) + ")"
 	case "type_expr":
 		if t := e.m.typeOf(n.Type()); t != nil && t.Kind == types.Meta && len(t.Args) == 1 {
 			inner := e.m.GoType(t.Args[0], e.generics)
@@ -597,12 +600,22 @@ func (e *fileEmitter) exprRaw(n ast.Node) string {
 	return e.m.Unsup("expr:"+n.Kind(), e.where, e.exprGoType(n))
 }
 
-func (e *fileEmitter) castTarget(n ast.Node) string {
+func (e *fileEmitter) castTargetType(n ast.Node) *types.Type {
 	t := e.m.typeOf(n.Type())
 	if t.Kind == types.Optional {
 		t = t.Args[0]
 	}
-	return e.m.GoType(t, e.generics)
+	return t
+}
+
+// castCall names the runtime's cast op (Is, As or MustAs) to t, instantiated. A final class, which no
+// subclass extends, casts with the op's Final form, which matches the most-derived object alone.
+func (e *fileEmitter) castCall(op string, t *types.Type) string {
+	g := e.m.GoType(t, e.generics)
+	if t.Kind == types.Named && e.m.IsFinalClass(t.Name) && strings.HasPrefix(g, "*") {
+		return "swiftrt." + op + "Final[" + g[1:] + "]"
+	}
+	return "swiftrt." + op + "[" + g + "]"
 }
 
 // stripConv removes implicit conversions wrapped around a function reference.
